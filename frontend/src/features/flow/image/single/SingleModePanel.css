@@ -114,27 +114,27 @@
   opacity: 0.85;
 }
 
-.aspect-16-9 {
+.aspect-wireframe--16-9 {
   width: 22px;
   height: 12px;
 }
 
-.aspect-4-3 {
+.aspect-wireframe--4-3 {
   width: 20px;
   height: 15px;
 }
 
-.aspect-1-1 {
+.aspect-wireframe--1-1 {
   width: 16px;
   height: 16px;
 }
 
-.aspect-3-4 {
+.aspect-wireframe--3-4 {
   width: 15px;
   height: 20px;
 }
 
-.aspect-9-16 {
+.aspect-wireframe--9-16 {
   width: 12px;
   height: 22px;
 }
@@ -175,6 +175,89 @@
   color: var(--primary);
   font-weight: var(--font-weight-semibold);
   box-shadow: var(--shadow-sm);
+}
+
+/* Reference Image Dropzone */
+.reference-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-6) var(--space-4);
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-md);
+  background-color: var(--bg-tertiary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  text-align: center;
+}
+
+.reference-dropzone:hover {
+  border-color: var(--primary);
+  background-color: var(--bg-secondary);
+}
+
+.reference-dropzone-icon {
+  color: var(--text-muted);
+}
+
+.reference-dropzone-text {
+  font-size: var(--font-size-caption);
+  color: var(--text-secondary);
+}
+
+.reference-preview-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background-color: var(--bg-tertiary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.reference-preview-thumb {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+}
+
+.reference-preview-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.reference-preview-name {
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.reference-remove-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.reference-remove-btn:hover {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: var(--danger);
 }
 
 /* Rotation status badge */

@@ -4,7 +4,10 @@ import './FlowImageWorkspace.css';
 import { api } from '../../../../services/api';
 import { useAppStore } from '../../../../stores';
 import { useFlowImageStore } from '../store/flowImageStore';
-import type { GeneratedImageItem } from '../store/flowImageStore';
+import type { AspectRatio, GeneratedImageItem } from '../store/flowImageStore';
+
+/** '16:9' → '16 / 9' for the CSS `aspect-ratio` property. */
+const cssAspectRatio = (ratio: AspectRatio) => ratio.replace(':', ' / ');
 
 export const FlowImageWorkspace: React.FC = () => {
   const prompt = useFlowImageStore((s) => s.prompt);
@@ -12,6 +15,7 @@ export const FlowImageWorkspace: React.FC = () => {
   const selectedModel = useFlowImageStore((s) => s.selectedModel);
   const aspectRatio = useFlowImageStore((s) => s.aspectRatio);
   const quantity = useFlowImageStore((s) => s.quantity);
+  const referenceImage = useFlowImageStore((s) => s.referenceImage);
   const isGenerating = useFlowImageStore((s) => s.isGenerating);
   const setIsGenerating = useFlowImageStore((s) => s.setIsGenerating);
   const images = useFlowImageStore((s) => s.images);
@@ -33,6 +37,9 @@ export const FlowImageWorkspace: React.FC = () => {
         modelId: selectedModel || 'NARWHAL',
         aspectRatio,
         count: quantity,
+        referenceImageBase64: referenceImage?.base64,
+        referenceMimeType: referenceImage?.mimeType,
+        referenceFileName: referenceImage?.name,
       });
 
       if (res.success && res.data && res.data.length > 0) {
@@ -64,6 +71,7 @@ export const FlowImageWorkspace: React.FC = () => {
     selectedModel,
     aspectRatio,
     quantity,
+    referenceImage,
     setIsGenerating,
     addImages,
     addToast,
@@ -97,7 +105,6 @@ export const FlowImageWorkspace: React.FC = () => {
   };
 
   const isEmpty = images.length === 0;
-  const currentRatioClass = `aspect-${aspectRatio.replace(':', '-')}`;
 
   return (
     <div className="flow-workspace-container">
@@ -119,7 +126,8 @@ export const FlowImageWorkspace: React.FC = () => {
               Array.from({ length: quantity }).map((_, idx) => (
                 <div
                   key={`skeleton-${idx}`}
-                  className={`flow-image-card skeleton ${currentRatioClass}`}
+                  className="flow-image-card skeleton"
+                  style={{ aspectRatio: cssAspectRatio(aspectRatio) }}
                 >
                   <div className="skeleton-content">
                     <RefreshCw size={20} className="skeleton-spinner" />
@@ -132,9 +140,12 @@ export const FlowImageWorkspace: React.FC = () => {
 
             {/* Rendered Generated Images */}
             {images.map((img) => {
-              const cardRatioClass = `aspect-${img.aspectRatio.replace(':', '-')}`;
               return (
-                <div key={img.id} className={`flow-image-card ${cardRatioClass}`}>
+                <div
+                  key={img.id}
+                  className="flow-image-card"
+                  style={{ aspectRatio: cssAspectRatio(img.aspectRatio) }}
+                >
                   <img src={img.url} alt={img.prompt} loading="lazy" />
                   <div className="flow-image-overlay">
                     <span className="flow-image-model-badge">{img.model}</span>

@@ -2,6 +2,13 @@ import { create } from 'zustand';
 
 export type AspectRatio = '16:9' | '4:3' | '1:1' | '3:4' | '9:16';
 
+export interface ReferenceImage {
+  base64: string;
+  name: string;
+  mimeType: string;
+  previewUrl: string;
+}
+
 export interface GeneratedImageItem {
   id: string;
   url: string;
@@ -18,6 +25,8 @@ export interface FlowImageState {
   setAspectRatio: (ratio: AspectRatio) => void;
   quantity: number;
   setQuantity: (qty: number) => void;
+  referenceImage: ReferenceImage | null;
+  setReferenceImage: (image: ReferenceImage | null) => void;
   prompt: string;
   setPrompt: (prompt: string) => void;
   isGenerating: boolean;
@@ -35,6 +44,8 @@ export const useFlowImageStore = create<FlowImageState>((set) => ({
   setAspectRatio: (aspectRatio) => set({ aspectRatio }),
   quantity: 1,
   setQuantity: (quantity) => set({ quantity }),
+  referenceImage: null,
+  setReferenceImage: (referenceImage) => set({ referenceImage }),
   prompt: '',
   setPrompt: (prompt) => set({ prompt }),
   isGenerating: false,

@@ -12,7 +12,22 @@ describe('useFlowImageStore', () => {
       isGenerating: false,
       images: [],
       previewImage: null,
+      referenceImage: null,
     });
+  });
+
+  it('manages reference image state', () => {
+    const ref = {
+      base64: 'data:image/png;base64,abc',
+      name: 'ref.png',
+      mimeType: 'image/png',
+      previewUrl: 'blob:http://localhost/123',
+    };
+    useFlowImageStore.getState().setReferenceImage(ref);
+    expect(useFlowImageStore.getState().referenceImage).toEqual(ref);
+
+    useFlowImageStore.getState().setReferenceImage(null);
+    expect(useFlowImageStore.getState().referenceImage).toBeNull();
   });
 
   it('updates selected model', () => {

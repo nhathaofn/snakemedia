@@ -615,6 +615,9 @@ export namespace services {
 	    modelId: string;
 	    aspectRatio: string;
 	    count: number;
+	    referenceImageBase64?: string;
+	    referenceMimeType?: string;
+	    referenceFileName?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new GenerateImageRequest(source);
@@ -626,6 +629,9 @@ export namespace services {
 	        this.modelId = source["modelId"];
 	        this.aspectRatio = source["aspectRatio"];
 	        this.count = source["count"];
+	        this.referenceImageBase64 = source["referenceImageBase64"];
+	        this.referenceMimeType = source["referenceMimeType"];
+	        this.referenceFileName = source["referenceFileName"];
 	    }
 	}
 	export class GeneratedImageItem {

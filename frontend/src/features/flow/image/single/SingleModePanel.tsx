@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { AlertCircle, ChevronDown, RefreshCw } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { AlertCircle, ChevronDown, ImagePlus, RefreshCw, X } from 'lucide-react';
 import './SingleModePanel.css';
 import { api } from '../../../../services/api';
 import type { FlowModel } from '../../../../types';
@@ -13,11 +13,11 @@ interface AspectOption {
 }
 
 const ASPECT_OPTIONS: readonly AspectOption[] = [
-  { value: '16:9', label: '16:9', wireframeClass: 'aspect-16-9' },
-  { value: '4:3', label: '4:3', wireframeClass: 'aspect-4-3' },
-  { value: '1:1', label: '1:1', wireframeClass: 'aspect-1-1' },
-  { value: '3:4', label: '3:4', wireframeClass: 'aspect-3-4' },
-  { value: '9:16', label: '9:16', wireframeClass: 'aspect-9-16' },
+  { value: '16:9', label: '16:9', wireframeClass: 'aspect-wireframe--16-9' },
+  { value: '4:3', label: '4:3', wireframeClass: 'aspect-wireframe--4-3' },
+  { value: '1:1', label: '1:1', wireframeClass: 'aspect-wireframe--1-1' },
+  { value: '3:4', label: '3:4', wireframeClass: 'aspect-wireframe--3-4' },
+  { value: '9:16', label: '9:16', wireframeClass: 'aspect-wireframe--9-16' },
 ];
 
 const QUANTITY_OPTIONS = [1, 2, 3, 4] as const;
@@ -35,9 +35,38 @@ export const SingleModePanel: React.FC = () => {
   const setAspectRatio = useFlowImageStore((s) => s.setAspectRatio);
   const quantity = useFlowImageStore((s) => s.quantity);
   const setQuantity = useFlowImageStore((s) => s.setQuantity);
+  const referenceImage = useFlowImageStore((s) => s.referenceImage);
+  const setReferenceImage = useFlowImageStore((s) => s.setReferenceImage);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [activeAccountsCount, setActiveAccountsCount] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      alert('Vui lòng chọn tệp hình ảnh (PNG, JPEG, WebP)');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      alert('Kích thước ảnh tối đa là 10MB');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const base64 = result.includes(',') ? result.split(',')[1] : result;
+      setReferenceImage({
+        base64,
+        name: file.name,
+        mimeType: file.type || 'image/png',
+        previewUrl: URL.createObjectURL(file),
+      });
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
 
   useEffect(() => {
     let active = true;
@@ -175,7 +204,54 @@ export const SingleModePanel: React.FC = () => {
         </div>
       </div>
 
-      {/* 4. Round-Robin Account Pool Status */}
+      {/* 4. Reference Image (Image-to-Image) */}
+      <div className="flow-field-group">
+        <label className="flow-field-label">
+          <span>Ảnh tham chiếu</span>
+          <span className="flow-field-badge">{referenceImage ? '1 ảnh' : 'Tùy chọn'}</span>
+        </label>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          style={{ display: 'none' }}
+          onChange={handleFileChange}
+        />
+        {referenceImage ? (
+          <div className="reference-preview-card">
+            <img
+              src={referenceImage.previewUrl}
+              alt={referenceImage.name}
+              className="reference-preview-thumb"
+            />
+            <div className="reference-preview-meta">
+              <span className="reference-preview-name" title={referenceImage.name}>
+                {referenceImage.name}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="reference-remove-btn"
+              onClick={() => setReferenceImage(null)}
+              title="Xóa ảnh tham chiếu"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="reference-dropzone"
+            onClick={() => fileInputRef.current?.click()}
+            title="Nhấn để tải lên ảnh tham chiếu (tối đa 10MB)"
+          >
+            <ImagePlus size={20} className="reference-dropzone-icon" />
+            <span className="reference-dropzone-text">Tải ảnh tham chiếu (Image-to-Image)</span>
+          </button>
+        )}
+      </div>
+
+      {/* 5. Round-Robin Account Pool Status */}
       <div
         className={`rotation-status-badge ${activeAccountsCount > 0 ? 'has-accounts' : 'no-accounts'}`}
         title="Tự động luân phiên tài khoản để chia đều luồng tạo"
