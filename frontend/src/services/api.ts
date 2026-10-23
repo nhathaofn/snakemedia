@@ -1,6 +1,14 @@
 import * as Backend from '../../wailsjs/go/main/App';
 import { ResponseCode } from '../types';
-import type { ApiResponse, AppConfig, AppInfo, SystemInfo } from '../types';
+import type {
+  AccountProfile,
+  ApiResponse,
+  AppConfig,
+  AppInfo,
+  LoginProcessInfo,
+  LoginStatusInfo,
+  SystemInfo,
+} from '../types';
 import { errorMessage } from '../utils';
 import { isWailsRuntime } from './runtime';
 
@@ -56,4 +64,16 @@ export const api = {
   getConfig: () => invoke<AppConfig>('GetConfig', Backend.GetConfig),
   updateConfig: (cfg: AppConfig) =>
     invoke<AppConfig>('UpdateConfig', () => Backend.UpdateConfig(cfg)),
+  launchLoginBrowser: (sessionID: string) =>
+    invoke<LoginProcessInfo>('LaunchLoginBrowser', () => Backend.LaunchLoginBrowser(sessionID)),
+  checkLoginStatus: (sessionID: string) =>
+    invoke<LoginStatusInfo>('CheckLoginStatus', () => Backend.CheckLoginStatus(sessionID)),
+  cancelLogin: (sessionID: string) =>
+    invoke<boolean>('CancelLogin', () => Backend.CancelLogin(sessionID)),
+  getAccounts: () => invoke<AccountProfile[]>('GetAccounts', Backend.GetAccounts),
+  removeAccount: (id: string) => invoke<boolean>('RemoveAccount', () => Backend.RemoveAccount(id)),
+  refreshAccount: (id: string) =>
+    invoke<AccountProfile>('RefreshAccount', () => Backend.RefreshAccount(id)),
+  openAccountBrowser: (id: string) =>
+    invoke<LoginProcessInfo>('OpenAccountBrowser', () => Backend.OpenAccountBrowser(id)),
 };

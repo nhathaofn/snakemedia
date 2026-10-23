@@ -27,7 +27,7 @@ var AllCodes = []struct {
 // Response represents a standardized API result envelope for frontend communication.
 type Response[T any] struct {
 	Success bool   `json:"success"`
-	Data    T      `json:"data,omitempty"`
+	Data    T      `json:"data"`
 	Error   string `json:"error,omitempty"`
 	Code    Code   `json:"code"`
 }

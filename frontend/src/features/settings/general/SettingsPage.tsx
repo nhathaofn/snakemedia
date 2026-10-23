@@ -1,9 +1,9 @@
 import React from 'react';
 import './SettingsPage.css';
-import { Card, SegmentedControl } from '../../components/ui';
-import { THEME_OPTIONS } from '../../constants';
-import { useConfigUpdate } from '../../hooks';
-import { useAppStore } from '../../stores';
+import { Card, SegmentedControl } from '../../../components/ui';
+import { THEME_OPTIONS } from '../../../constants';
+import { useConfigUpdate } from '../../../hooks';
+import { useAppStore } from '../../../stores';
 
 /**
  * SettingsPage - user preferences backed by the Go config (internal/config).

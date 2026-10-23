@@ -1,14 +1,23 @@
 import { Navigate } from 'react-router-dom';
 import type { RouteObject } from 'react-router-dom';
 import { AppLayout } from '../components/layout';
-import { FEATURE_ROUTES } from './registry';
-import type { FeatureRoute } from './registry';
+import { APP_SECTIONS, DEFAULT_PATH, defaultFeaturePath } from './registry';
+import type { AppSection } from '../types';
 
-function toRouteObject(route: FeatureRoute): RouteObject {
-  if (route.path === '/') {
-    return { index: true, element: route.element };
-  }
-  return { path: route.path.replace(/^\//, ''), element: route.element };
+/**
+ * '/home' → { path: 'home', children: [index → first feature, 'overview', 'accounts', …] }.
+ * Case-sensitive so '/Home/...' falls through to the fallback instead of rendering a
+ * page whose section the header and sidebar cannot resolve.
+ */
+function toRouteObject(section: AppSection): RouteObject {
+  return {
+    path: section.path.replace(/^\//, ''),
+    caseSensitive: true,
+    children: [
+      { index: true, element: <Navigate to={defaultFeaturePath(section)} replace /> },
+      ...section.features.map((f) => ({ path: f.path, caseSensitive: true, element: f.element })),
+    ],
+  };
 }
 
 export const routes: RouteObject[] = [
@@ -16,8 +25,9 @@ export const routes: RouteObject[] = [
     path: '/',
     element: <AppLayout />,
     children: [
-      ...FEATURE_ROUTES.map(toRouteObject),
-      { path: '*', element: <Navigate to="/" replace /> },
+      { index: true, element: <Navigate to={DEFAULT_PATH} replace /> },
+      ...APP_SECTIONS.map(toRouteObject),
+      { path: '*', element: <Navigate to={DEFAULT_PATH} replace /> },
     ],
   },
 ];

@@ -1,8 +1,19 @@
 import { createHashRouter, RouterProvider } from 'react-router-dom';
 import { routes } from './routes.config';
 
-export { FEATURE_ROUTES, NAVIGATION_ITEMS } from './registry';
-export type { FeatureRoute } from './registry';
+export {
+  APP_SECTIONS,
+  DEFAULT_PATH,
+  HEADER_TABS,
+  ROUTES,
+  SECTION_NAVIGATION,
+  SIDEBAR_PINNED,
+  defaultFeaturePath,
+  featurePath,
+  findSection,
+} from './registry';
+export type { RouteMap } from './registry';
+export { useActiveSection } from './useActiveSection';
 
 const router = createHashRouter(routes);
 

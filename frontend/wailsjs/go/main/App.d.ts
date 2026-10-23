@@ -3,10 +3,24 @@
 import {models} from '../models';
 import {config} from '../models';
 
+export function CancelLogin(arg1:string):Promise<models.Response_bool_>;
+
+export function CheckLoginStatus(arg1:string):Promise<models.Response_SnakeMedia_internal_services_LoginStatusInfo_>;
+
+export function GetAccounts():Promise<models.Response___SnakeMedia_internal_services_AccountProfile_>;
+
 export function GetAppInfo():Promise<models.Response_SnakeMedia_internal_buildinfo_Info_>;
 
 export function GetConfig():Promise<models.Response_SnakeMedia_internal_config_AppConfig_>;
 
 export function GetSystemInfo():Promise<models.Response_SnakeMedia_internal_services_SystemInfo_>;
+
+export function LaunchLoginBrowser(arg1:string):Promise<models.Response_SnakeMedia_internal_services_LoginProcessInfo_>;
+
+export function OpenAccountBrowser(arg1:string):Promise<models.Response_SnakeMedia_internal_services_LoginProcessInfo_>;
+
+export function RefreshAccount(arg1:string):Promise<models.Response_SnakeMedia_internal_services_AccountProfile_>;
+
+export function RemoveAccount(arg1:string):Promise<models.Response_bool_>;
 
 export function UpdateConfig(arg1:config.AppConfig):Promise<models.Response_SnakeMedia_internal_config_AppConfig_>;

@@ -1,0 +1,184 @@
+.accounts-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-10);
+}
+
+.accounts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+}
+
+.accounts-title {
+  font-size: var(--font-size-page-title);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+}
+
+.accounts-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.accounts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--account-card-min-width)), 1fr));
+  gap: var(--space-8);
+}
+
+.account-profile-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-7);
+  background-color: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: var(--space-8);
+  transition: border-color var(--transition-fast);
+}
+
+.account-profile-card:hover {
+  border-color: var(--border-subtle);
+}
+
+.account-profile-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-6);
+}
+
+.account-profile-avatar {
+  width: var(--account-avatar-size);
+  height: var(--account-avatar-size);
+  border-radius: var(--radius-full);
+  background-color: var(--bg-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: var(--border-width) solid var(--border-color);
+}
+
+.account-profile-meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.account-profile-email {
+  font-size: var(--font-size-label);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: var(--account-email-max-width);
+}
+
+.account-profile-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--font-size-caption);
+  color: var(--text-muted);
+}
+
+.account-status-dot {
+  width: var(--space-3);
+  height: var(--space-3);
+  border-radius: var(--radius-full);
+  background-color: currentColor;
+}
+
+.account-credits-badge {
+  margin-left: auto;
+  padding: var(--space-2) var(--space-5);
+  background-color: var(--feedback-primary-bg);
+  border: var(--border-width) solid var(--feedback-primary-border);
+  border-radius: var(--radius-full);
+  color: var(--primary);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+  white-space: nowrap;
+}
+
+.account-profile-details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-6);
+  background-color: var(--bg-primary);
+  border-radius: var(--radius-md);
+  border: var(--border-width) solid var(--border-subtle);
+  font-size: var(--font-size-caption);
+}
+
+.account-detail-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-5);
+}
+
+.account-detail-label {
+  color: var(--text-muted);
+}
+
+.account-detail-value {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: var(--account-detail-max-width);
+}
+
+.account-profile-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-4);
+  margin-top: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.account-status-connected {
+  color: var(--success);
+}
+.account-status-expired {
+  color: var(--warning);
+}
+.account-status-error,
+.accounts-error {
+  color: var(--danger);
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(var(--rotation-full));
+  }
+}
+
+.spin {
+  animation: spin var(--animation-spin-duration) linear infinite;
+}
+
+.accounts-empty-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: var(--border-width) dashed var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: var(--space-11) var(--space-10);
+  background-color: var(--empty-state-bg);
+  color: var(--text-muted);
+  font-size: var(--font-size-body);
+  min-height: var(--empty-state-min-height);
+}

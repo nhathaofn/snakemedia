@@ -1,0 +1,184 @@
+.login-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: var(--dialog-backdrop);
+  backdrop-filter: blur(var(--dialog-blur));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: var(--z-dialog);
+  animation: modal-fade-in var(--transition-fast);
+}
+
+@keyframes modal-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.login-modal-container {
+  background-color: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-lg);
+  width: var(--dialog-width);
+  max-width: var(--dialog-max-width);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.login-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-8) var(--space-9);
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.login-modal-title {
+  font-size: var(--font-size-dialog-title);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.login-modal-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--transition-fast);
+}
+
+.login-modal-close-btn:hover {
+  color: var(--text-primary);
+}
+
+.login-modal-body {
+  padding: var(--space-9);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.login-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.login-step-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-6);
+  padding: var(--space-6) var(--space-7);
+  background-color: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  border: var(--border-width) solid var(--border-subtle);
+}
+
+.login-step-icon {
+  margin-top: var(--space-1);
+  flex-shrink: 0;
+}
+
+.login-step-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.login-step-title {
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+}
+
+.login-step-desc {
+  font-size: var(--font-size-small);
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.login-info-card {
+  background-color: var(--bg-primary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: var(--space-6) var(--space-7);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  font-size: var(--font-size-small);
+}
+
+.login-info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.login-info-label {
+  color: var(--text-muted);
+}
+
+.login-info-value {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-weight: var(--font-weight-medium);
+  word-break: break-all;
+  text-align: right;
+}
+
+.login-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-5);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+}
+
+.login-status-badge.connected {
+  background-color: var(--feedback-success-bg);
+  color: var(--success);
+  border: var(--border-width) solid var(--feedback-success-border);
+}
+
+.login-status-badge.waiting {
+  background-color: var(--feedback-warning-bg);
+  color: var(--warning);
+  border: var(--border-width) solid var(--feedback-warning-border);
+}
+
+.login-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-5);
+  padding: var(--space-7) var(--space-9);
+  border-top: var(--border-width) solid var(--border-color);
+  background-color: var(--bg-elevated);
+}
+
+.login-error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.login-complete {
+  border-color: var(--feedback-success-border);
+  background-color: var(--feedback-success-bg);
+}

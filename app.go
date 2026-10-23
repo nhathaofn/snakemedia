@@ -25,6 +25,7 @@ type App struct {
 	cfg        *config.Manager
 	system     *services.SystemService
 	settings   *services.SettingsService
+	account    *services.AccountService
 	dispatcher *events.Dispatcher
 }
 
@@ -53,6 +54,7 @@ func NewApp(info buildinfo.Info) (*App, error) {
 		cfg:      cfgManager,
 		system:   services.NewSystemService(info),
 		settings: services.NewSettingsService(cfgManager),
+		account:  services.NewAccountService(p, cfgManager),
 	}, nil
 }
 
@@ -97,6 +99,7 @@ func (a *App) showMainWindow(ctx context.Context) {
 }
 
 func (a *App) shutdown(_ context.Context) {
+	a.account.Close()
 	logger.Get().Info("shutting down")
 	_ = logger.Close()
 }
@@ -133,4 +136,38 @@ func (a *App) UpdateConfig(newCfg config.AppConfig) models.Response[config.AppCo
 		a.dispatcher.Emit(events.EventConfigUpdated, res.Data)
 	}
 	return res
+}
+
+// LaunchLoginBrowser launches a dedicated Chrome instance for Google sign-in.
+func (a *App) LaunchLoginBrowser(sessionID string) models.Response[services.LoginProcessInfo] {
+	return a.account.LaunchLoginBrowser(a.ctx, sessionID)
+}
+
+// OpenAccountBrowser launches Chrome with a specific account's saved profile directory.
+func (a *App) OpenAccountBrowser(id string) models.Response[services.LoginProcessInfo] {
+	return a.account.OpenAccountBrowser(a.ctx, id)
+}
+
+// CheckLoginStatus queries the Chrome CDP port to report browser connection and page status.
+func (a *App) CheckLoginStatus(sessionID string) models.Response[services.LoginStatusInfo] {
+	return a.account.CheckLoginStatus(a.ctx, sessionID)
+}
+
+func (a *App) CancelLogin(sessionID string) models.Response[bool] {
+	return a.account.CancelLogin(sessionID)
+}
+
+// GetAccounts returns the list of saved accounts.
+func (a *App) GetAccounts() models.Response[[]services.AccountProfile] {
+	return a.account.GetAccounts(a.ctx)
+}
+
+// RemoveAccount deletes an account by id.
+func (a *App) RemoveAccount(id string) models.Response[bool] {
+	return a.account.RemoveAccount(a.ctx, id)
+}
+
+// RefreshAccount queries latest credits and cookies from the active Flow tab.
+func (a *App) RefreshAccount(id string) models.Response[services.AccountProfile] {
+	return a.account.RefreshAccount(a.ctx, id)
 }

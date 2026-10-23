@@ -41,6 +41,8 @@
 
   /* Desktop Shell Heights */
   --titlebar-height: 34px;
+  --header-height: 44px;
+  --header-indicator-height: 2px;
   --sidebar-width: 240px;
   --sidebar-collapsed-width: 68px;
 
@@ -65,6 +67,47 @@
 
   /* Stacking */
   --z-toast: 1000;
+
+  /* Shared account/dialog spacing, sizing and feedback surfaces. */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 10px;
+  --space-6: 12px;
+  --space-7: 14px;
+  --space-8: 16px;
+  --space-9: 20px;
+  --space-10: 24px;
+  --space-11: 48px;
+  --border-width: 1px;
+  --font-size-caption: 0.75rem;
+  --font-size-small: 0.8125rem;
+  --font-size-body: 0.875rem;
+  --font-size-label: 0.9375rem;
+  --font-size-dialog-title: 1.125rem;
+  --font-size-page-title: 1.375rem;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --account-card-min-width: 360px;
+  --account-avatar-size: 40px;
+  --account-email-max-width: 170px;
+  --account-detail-max-width: 220px;
+  --empty-state-min-height: 160px;
+  --dialog-max-width: 560px;
+  --dialog-width: 90%;
+  --dialog-backdrop: rgba(0, 0, 0, 0.7);
+  --dialog-blur: 4px;
+  --z-dialog: 900;
+  --feedback-primary-bg: rgb(from var(--primary) r g b / 15%);
+  --feedback-primary-border: rgb(from var(--primary) r g b / 30%);
+  --feedback-success-bg: rgb(from var(--success) r g b / 15%);
+  --feedback-success-border: rgb(from var(--success) r g b / 30%);
+  --feedback-warning-bg: rgb(from var(--warning) r g b / 15%);
+  --feedback-warning-border: rgb(from var(--warning) r g b / 30%);
+  --empty-state-bg: var(--bg-secondary);
+  --animation-spin-duration: 1s;
+  --rotation-full: 360deg;
 }
 
 [data-theme='light'] {

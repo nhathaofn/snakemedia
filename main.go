@@ -13,6 +13,8 @@ import (
 	"SnakeMedia/internal/events"
 	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/models"
+	"SnakeMedia/internal/services"
+	"SnakeMedia/internal/services/chrome"
 )
 
 //go:embed all:frontend/dist
@@ -75,6 +77,8 @@ func run() error {
 			config.AllLogLevels,
 			events.AllEvents,
 			models.AllCodes,
+			services.AllAccountStatuses,
+			chrome.AllTiers,
 		},
 	})
 }

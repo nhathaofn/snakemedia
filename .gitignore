@@ -19,3 +19,6 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Local reference material (separate repos, not part of this app)
+references/

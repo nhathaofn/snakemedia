@@ -61,6 +61,11 @@ const (
 	MinWindowHeight = 600
 	MinWindowScale  = 0.3
 	MaxWindowScale  = 1.0
+
+	// DefaultCdpPort is the default port used to attach to Chrome for CDP automation.
+	DefaultCdpPort = 0 // Let Chrome/OS assign an isolated port for each profile.
+	MinPort        = 1024
+	MaxPort        = 65535
 )
 
 // ErrInvalidConfig marks configuration that fails validation or cannot be decoded.
@@ -73,6 +78,10 @@ type AppConfig struct {
 	// WindowScale is the fraction (MinWindowScale..MaxWindowScale) of the primary
 	// screen's width and height used for the window at startup.
 	WindowScale float64 `json:"windowScale"`
+	// CdpPort is an optional preferred debug port; zero uses Chrome's OS-assigned
+	// port. Other managed profiles always receive their own independent port.
+	CdpPort  int           `json:"cdpPort"`
+	Accounts AccountConfig `json:"accounts"`
 }
 
 // DefaultConfig provides the fallback settings used on first run or when the file is unusable.
@@ -81,6 +90,8 @@ func DefaultConfig() AppConfig {
 		Theme:       ThemeDark,
 		LogLevel:    LogLevelInfo,
 		WindowScale: 0.7,
+		CdpPort:     DefaultCdpPort,
+		Accounts:    DefaultAccountConfig(),
 	}
 }
 
@@ -96,6 +107,12 @@ func (c AppConfig) Validate() error {
 	// Written as a positive range check so NaN is rejected too.
 	if !(c.WindowScale >= MinWindowScale && c.WindowScale <= MaxWindowScale) {
 		errs = append(errs, fmt.Errorf("windowScale %v must be between %v and %v", c.WindowScale, MinWindowScale, MaxWindowScale))
+	}
+	if c.CdpPort != 0 && (c.CdpPort < MinPort || c.CdpPort > MaxPort) {
+		errs = append(errs, fmt.Errorf("cdpPort %d must be between %d and %d", c.CdpPort, MinPort, MaxPort))
+	}
+	if err := c.Accounts.Validate(); err != nil {
+		errs = append(errs, err)
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("%w: %w", ErrInvalidConfig, errors.Join(errs...))
@@ -132,6 +149,9 @@ func (m *Manager) Get() AppConfig {
 
 // Update validates cfg, persists it atomically, and only then makes it current.
 func (m *Manager) Update(cfg AppConfig) (AppConfig, error) {
+	if cfg.CdpPort == 0 {
+		cfg.CdpPort = DefaultCdpPort
+	}
 	if err := cfg.Validate(); err != nil {
 		return m.Get(), err
 	}

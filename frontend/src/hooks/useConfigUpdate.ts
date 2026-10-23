@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import { api } from '../services';
 import { useAppStore } from '../stores';
-import type { AppConfig } from '../types';
+import { AppConfig } from '../types';
 
 /**
  * Persists a partial configuration change through the backend and updates the
@@ -18,7 +18,7 @@ export function useConfigUpdate() {
       if (!current) return false;
 
       setSaving(true);
-      const res = await api.updateConfig({ ...current, ...patch });
+      const res = await api.updateConfig(AppConfig.createFrom({ ...current, ...patch }));
       setSaving(false);
 
       if (res.success && res.data) {
