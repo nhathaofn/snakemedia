@@ -538,6 +538,12 @@ func (s *AccountService) rateLimited(err error, id string, l *loginSession) bool
 	return true
 }
 
+// EnsureAccountHeadlessBrowser returns an active browser instance for the stored account,
+// starting a background headless Chrome instance if not already running.
+func (s *AccountService) EnsureAccountHeadlessBrowser(ctx context.Context, acc storedAccount) (*chrome.Browser, error) {
+	return s.browser(ctx, acc.ProfileDir, true)
+}
+
 // Close cancels in-flight login work before waiting for the bounded operation.
 func (s *AccountService) Close() {
 	s.mu.Lock()

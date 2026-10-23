@@ -80,6 +80,45 @@ func TestAccountZeroBalanceAndPublicView(t *testing.T) {
 	}
 }
 
+func TestEnsureAccountHeadlessBrowser(t *testing.T) {
+	s := testAccountService(t)
+	accProfile := seedAccount(t, s, "headless@example.invalid")
+	stored := storedAccount{AccountProfile: accProfile}
+
+	started := false
+	s.start = func(ctx context.Context, opts chrome.LaunchOptions, policy config.AccountConfig) (*chrome.Browser, error) {
+		started = true
+		if !opts.Headless {
+			t.Fatal("expected headless to be true")
+		}
+		return &chrome.Browser{Port: 9222, ProfileDir: opts.ProfileDir, Headless: opts.Headless}, nil
+	}
+
+	b, err := s.EnsureAccountHeadlessBrowser(context.Background(), stored)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !started {
+		t.Fatal("expected browser to be started")
+	}
+	if b == nil || !b.Headless {
+		t.Fatal("expected headless browser")
+	}
+
+	// second call should reuse
+	started = false
+	b2, err := s.EnsureAccountHeadlessBrowser(context.Background(), stored)
+	if err != nil {
+		t.Fatalf("unexpected error on second call: %v", err)
+	}
+	if started {
+		t.Fatal("expected browser to be reused without starting again")
+	}
+	if b2 != b {
+		t.Fatal("expected same browser instance to be returned")
+	}
+}
+
 func TestCorruptStoreQuarantinedAndBlocksWrites(t *testing.T) {
 	s := testAccountService(t)
 	if err := os.WriteFile(s.accountsFilePath(), []byte("{broken"), 0600); err != nil {
