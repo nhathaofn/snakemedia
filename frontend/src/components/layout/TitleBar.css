@@ -1,0 +1,56 @@
+.titlebar {
+  height: var(--titlebar-height);
+  background-color: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  /* Left inset matches the sidebar icon column (8px gutter + 12px inset). */
+  padding: 0 8px 0 20px;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.titlebar-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.titlebar-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.titlebar-btn {
+  width: 28px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.75rem;
+  transition: all var(--transition-fast);
+}
+
+.titlebar-btn:hover {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.titlebar-btn-close:hover {
+  background-color: var(--danger);
+  color: var(--text-on-danger);
+}
+
+.titlebar-logo {
+  color: var(--primary);
+}

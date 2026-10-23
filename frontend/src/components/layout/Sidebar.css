@@ -1,0 +1,123 @@
+/*
+ * Horizontal rhythm: nav and footer share an 8px outer gutter and a 12px inner
+ * inset, so icons, the version label and the toggle line up on the same columns.
+ */
+.sidebar {
+  --sidebar-gutter: 8px;
+  --sidebar-inset: 12px;
+
+  width: var(--sidebar-width);
+  background-color: var(--bg-secondary);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  transition: width var(--transition-normal);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.sidebar.collapsed {
+  width: var(--sidebar-collapsed-width);
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px var(--sidebar-gutter);
+  flex: 1;
+}
+
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 40px;
+  padding: 0 var(--sidebar-inset);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all var(--transition-fast);
+}
+
+.sidebar.collapsed .sidebar-link {
+  justify-content: center;
+  padding: 0;
+}
+
+.sidebar-link:hover {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.sidebar-link.active {
+  background-color: rgba(var(--primary-rgb), 0.15);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.sidebar-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 44px;
+  padding: 0 var(--sidebar-gutter) 0 calc(var(--sidebar-gutter) + var(--sidebar-inset));
+  border-top: 1px solid var(--border-color);
+}
+
+.sidebar.collapsed .sidebar-footer {
+  justify-content: center;
+  padding: 0;
+}
+
+.sidebar-version {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: text;
+}
+
+.sidebar-toggle {
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.sidebar.collapsed .sidebar-toggle {
+  margin-left: 0;
+}
+
+.sidebar-toggle:hover {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.sidebar-toggle-icon {
+  transition: transform var(--transition-normal);
+}
+
+.sidebar.collapsed .sidebar-toggle-icon {
+  transform: rotate(180deg);
+}

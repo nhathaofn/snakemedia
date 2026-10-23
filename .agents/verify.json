@@ -1,0 +1,12 @@
+{
+  "commands": [
+    "npm --prefix frontend run build",
+    "npm --prefix frontend run lint",
+    "npm --prefix frontend run format:check",
+    "npm --prefix frontend run test",
+    "go run ./tools/gofmtcheck",
+    "go vet ./...",
+    "go test ./...",
+    "go build ./..."
+  ]
+}

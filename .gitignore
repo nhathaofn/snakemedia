@@ -1,0 +1,21 @@
+# Build output
+build/bin/
+frontend/dist/
+*.exe
+
+# Dependencies
+node_modules/
+
+# Wails generated cache
+frontend/package.json.md5
+
+# Tooling output
+coverage/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

@@ -1,0 +1,62 @@
+@import './tokens.css';
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root,
+#App {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  user-select: none;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Wails Desktop Window Drag Area Support */
+.wails-drag {
+  --wails-draggable: drag;
+}
+
+.wails-no-drag {
+  --wails-draggable: no-drag;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Every feature page renders inside a centred column of bounded width. */
+.page-shell {
+  width: 100%;
+  max-width: var(--content-max-width);
+  margin: 0 auto;
+}

@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  validate:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci
+
+      # Must run before any Go step: main.go embeds frontend/dist via //go:embed.
+      - name: Build frontend
+        run: npm --prefix frontend run build
+
+      - name: Lint & format check (frontend)
+        run: |
+          npm --prefix frontend run lint
+          npm --prefix frontend run format:check
+
+      - name: Test (frontend)
+        run: npm --prefix frontend run test
+
+      - name: Format check (Go)
+        run: go run ./tools/gofmtcheck
+
+      - name: Vet & test (Go)
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Build (Go)
+        run: go build ./...

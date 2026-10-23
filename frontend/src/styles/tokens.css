@@ -1,0 +1,92 @@
+:root {
+  /* Color Palette - Dark Theme Default */
+  --bg-primary: #0f172a;
+  --bg-secondary: #1e293b;
+  --bg-tertiary: #334155;
+  --bg-elevated: #1e293b;
+
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+
+  --primary: #38bdf8;
+  --primary-hover: #0ea5e9;
+  --primary-rgb: 56, 189, 248;
+
+  --accent: #818cf8;
+  --accent-hover: #6366f1;
+
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --danger-hover: #dc2626;
+
+  /* Foreground on solid fills */
+  --text-on-primary: #0f172a;
+  --text-on-danger: #ffffff;
+
+  --border-color: #334155;
+  --border-subtle: #1e293b;
+
+  /* Sizing & Radius */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+
+  /* Typography */
+  /* System font stack: no bundled web font to ship or license. */
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* Desktop Shell Heights */
+  --titlebar-height: 34px;
+  --sidebar-width: 240px;
+  --sidebar-collapsed-width: 68px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 2px 4px -2px rgba(0, 0, 0, 0.2);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -4px rgba(0, 0, 0, 0.3);
+
+  /* Transitions */
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Icons (monochrome, inherit currentColor) */
+  --icon-size-sm: 14px;
+  --icon-size-md: 16px;
+  --icon-size-lg: 18px;
+  --icon-stroke: 1.75;
+
+  /* Page content column, centred in the content area */
+  --content-max-width: 880px;
+  --content-padding: 24px;
+
+  /* Stacking */
+  --z-toast: 1000;
+}
+
+[data-theme='light'] {
+  --bg-primary: #f8fafc;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #f1f5f9;
+  --bg-elevated: #ffffff;
+
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+
+  --primary: #0284c7;
+  --primary-hover: #0369a1;
+  --primary-rgb: 2, 132, 199;
+
+  --text-on-primary: #ffffff;
+
+  --border-color: #e2e8f0;
+  --border-subtle: #f1f5f9;
+
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+}
