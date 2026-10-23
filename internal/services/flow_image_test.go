@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -228,4 +229,155 @@ func TestFlowImageServiceGenerateImages(t *testing.T) {
 			t.Fatalf("expected prompt match, got %s", items[0].Prompt)
 		}
 	})
+}
+
+func TestBuildImageBatchRequest(t *testing.T) {
+	data, err := BuildImageBatchRequest("cyberpunk city", "proj-test", "16:9", "GEM_PIX_2", 2, "test_token")
+	if err != nil {
+		t.Fatalf("unexpected error building payload: %v", err)
+	}
+
+	var outer []any
+	if err := json.Unmarshal(data, &outer); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if len(outer) != 5 {
+		t.Fatalf("expected outer array length 5, got %d", len(outer))
+	}
+	if outer[0] != nil {
+		t.Fatalf("expected outer[0] to be nil, got %v", outer[0])
+	}
+	if outer[2] != float64(1) {
+		t.Fatalf("expected outer[2] to be 1, got %v", outer[2])
+	}
+
+	items, ok := outer[1].([]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("expected 2 generation items, got %v", outer[1])
+	}
+
+	item0, ok := items[0].([]any)
+	if !ok || len(item0) != 14 {
+		t.Fatalf("expected item0 to have 14 elements, got %d", len(item0))
+	}
+
+	// Index 4: aspectRatio 16:9 should be 3
+	if item0[4] != float64(3) {
+		t.Fatalf("expected aspect ratio 3 for 16:9, got %v", item0[4])
+	}
+
+	// Index 5: modelID
+	if item0[5] != "GEM_PIX_2" {
+		t.Fatalf("expected model GEM_PIX_2, got %v", item0[5])
+	}
+
+	// Index 7: context
+	ctxObj, ok := item0[7].([]any)
+	if !ok || len(ctxObj) != 11 {
+		t.Fatalf("expected context to have 11 elements, got %v", item0[7])
+	}
+	if ctxObj[1] != float64(22) {
+		t.Fatalf("expected SURFACE_ID 22, got %v", ctxObj[1])
+	}
+	if ctxObj[5] != "proj-test" {
+		t.Fatalf("expected project ID proj-test, got %v", ctxObj[5])
+	}
+
+	// Index 8: prompt wrapped in 3-level array [[[prompt]]]
+	promptL1, ok := item0[8].([]any)
+	if !ok || len(promptL1) != 1 {
+		t.Fatalf("invalid prompt wrapping level 1: %v", item0[8])
+	}
+	promptL2, ok := promptL1[0].([]any)
+	if !ok || len(promptL2) != 1 {
+		t.Fatalf("invalid prompt wrapping level 2: %v", promptL1)
+	}
+	promptL3, ok := promptL2[0].([]any)
+	if !ok || len(promptL3) != 1 || promptL3[0] != "cyberpunk city" {
+		t.Fatalf("expected prompt 'cyberpunk city', got %v", promptL2)
+	}
+}
+
+func TestParseGeneratedImages(t *testing.T) {
+	sampleResp := []byte(`)]}'
+123
+[["wrb.fr","ogiZ0b","[\"https://flow-content.google/image/img-123?sig=abc\",\"https://flow-content.google/image/img-123?sig=abc_thumb\",\"https://flow-content.google/image/img-456\"]",null,null,null,"generic"]]`)
+
+	items := ParseGeneratedImages(sampleResp, "cat", "NARWHAL", "1:1")
+	if len(items) != 2 {
+		t.Fatalf("expected 2 unique images, got %d", len(items))
+	}
+	if items[0].ID != "img-123" {
+		t.Errorf("expected img-123, got %s", items[0].ID)
+	}
+	if items[1].ID != "img-456" {
+		t.Errorf("expected img-456, got %s", items[1].ID)
+	}
+}
+
+func TestBuildImageBatchRequestWithReferences(t *testing.T) {
+	data, err := BuildImageBatchRequest("styled girl", "proj-1", "1:1", "GEM_PIX_2", 1, "token123", []string{"media-ref-abc"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var outer []any
+	if err := json.Unmarshal(data, &outer); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	items := outer[1].([]any)
+	item0 := items[0].([]any)
+	refs, ok := item0[2].([]any)
+	if !ok || len(refs) != 1 {
+		t.Fatalf("expected 1 reference image, got %v", item0[2])
+	}
+	ref0, ok := refs[0].([]any)
+	if !ok || len(ref0) != 5 {
+		t.Fatalf("expected ref0 length 5, got %v", refs[0])
+	}
+	if ref0[0] != "media-ref-abc" {
+		t.Errorf("expected media-ref-abc, got %v", ref0[0])
+	}
+	if ref0[4] != float64(1) {
+		t.Errorf("expected refType 1 (IMAGE), got %v", ref0[4])
+	}
+}
+
+func TestBuildImageUploadRequest(t *testing.T) {
+	data, err := BuildImageUploadRequest("base64data", "image/png", "sample.png", "proj-99", "token-xyz")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var outer []any
+	if err := json.Unmarshal(data, &outer); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if len(outer) != 12 {
+		t.Fatalf("expected 12 fields in upload request, got %d", len(outer))
+	}
+	if outer[1] != "base64data" {
+		t.Errorf("expected base64data, got %v", outer[1])
+	}
+	if outer[2] != "image/png" {
+		t.Errorf("expected image/png, got %v", outer[2])
+	}
+	if outer[8] != "sample.png" {
+		t.Errorf("expected sample.png, got %v", outer[8])
+	}
+}
+
+func TestParseUploadedMediaID(t *testing.T) {
+	sampleResp := []byte(`)]}'
+55
+[["wrb.fr","maseQ","[[\"b3b12345-6789-4abc-def0-123456789abc\"]]",null,null,null,"generic"]]`)
+	mediaID, err := ParseUploadedMediaID(sampleResp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mediaID != "b3b12345-6789-4abc-def0-123456789abc" {
+		t.Errorf("expected media ID match, got %s", mediaID)
+	}
 }

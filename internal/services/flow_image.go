@@ -3,12 +3,15 @@ package services
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,7 +19,197 @@ import (
 
 	"SnakeMedia/internal/models"
 	"SnakeMedia/internal/services/chrome"
+	"github.com/google/uuid"
 )
+
+const (
+	// RPCBatchGenerateImages is the verified synchronous image generation RPC identifier on Google Flow.
+	RPCBatchGenerateImages = "ogiZ0b"
+	// RPCBatchAsyncGenerateImages is the asynchronous image generation RPC identifier on Google Flow.
+	RPCBatchAsyncGenerateImages = "Z9cAtf"
+	// RPCUploadImage is the image upload registration RPC identifier on Google Flow.
+	RPCUploadImage = "maseQ"
+	// FlowSurfaceID represents Google Flow Studio's internal surface identifier (22).
+	FlowSurfaceID = 22
+	// RefTypeImage is the reference type code for images (1).
+	RefTypeImage = 1
+)
+
+// FlowImageAspect maps user-facing aspect ratio strings to Google Flow Protobuf enum values.
+var FlowImageAspect = map[string]int{
+	"1:1":  1,
+	"9:16": 2,
+	"16:9": 3,
+	"3:4":  4,
+	"4:3":  5,
+}
+
+// BuildImageBatchRequest constructs the verified batchexecute inner payload for RPC ogiZ0b (BatchGenerateImages)
+// based on reverse-engineered JSPB AST from Google Flow web client.
+func BuildImageBatchRequest(prompt string, projectID string, ratio string, modelID string, count int, recaptchaToken string, refMediaIDs ...[]string) ([]byte, error) {
+	if count <= 0 {
+		count = 1
+	}
+	if count > 4 {
+		count = 4
+	}
+	aspectCode, ok := FlowImageAspect[ratio]
+	if !ok {
+		aspectCode = FlowImageAspect["1:1"]
+	}
+	if modelID == "" {
+		modelID = "GEM_PIX_2"
+	}
+	if projectID == "" {
+		projectID = "default"
+	}
+
+	var refs []any
+	if len(refMediaIDs) > 0 && len(refMediaIDs[0]) > 0 {
+		for _, mid := range refMediaIDs[0] {
+			refs = append(refs, []any{mid, nil, nil, nil, RefTypeImage})
+		}
+	}
+
+	// Context structure: [null, 22, null, null, null, projectID, null, null, null, null, [recaptchaToken, 1]]
+	contextObj := []any{
+		nil,
+		FlowSurfaceID,
+		nil,
+		nil,
+		nil,
+		projectID,
+		nil,
+		nil,
+		nil,
+		nil,
+		[]any{recaptchaToken, 1},
+	}
+
+	items := make([]any, 0, count)
+	for i := 0; i < count; i++ {
+		seed := rand.Intn(999999999) + 1
+		clientUUID := strings.ToUpper(uuid.NewString())
+		// Item structure (14 elements):
+		item := []any{
+			nil,
+			nil,
+			refs, // reference media items
+			seed,
+			aspectCode,
+			modelID,
+			nil,
+			contextObj,
+			[][][]string{{{prompt}}},
+			nil,
+			nil,
+			nil,
+			nil,
+			clientUUID,
+		}
+		items = append(items, item)
+	}
+
+	outerUUID := strings.ToUpper(uuid.NewString())
+	innerPayload := []any{
+		nil,
+		items,
+		1,
+		contextObj,
+		[]string{outerUUID},
+	}
+
+	return json.Marshal(innerPayload)
+}
+
+// BuildImageUploadRequest constructs the batchexecute inner payload for RPC maseQ (UploadImage).
+func BuildImageUploadRequest(imageBase64 string, mimeType string, fileName string, projectID string, recaptchaToken string) ([]byte, error) {
+	if projectID == "" {
+		projectID = "default"
+	}
+	if mimeType == "" {
+		mimeType = "image/png"
+	}
+	if fileName == "" {
+		fileName = "reference.png"
+	}
+
+	contextObj := []any{
+		nil,
+		FlowSurfaceID,
+		nil,
+		nil,
+		nil,
+		projectID,
+		nil,
+		nil,
+		nil,
+		nil,
+		[]any{recaptchaToken, 1},
+	}
+
+	uuid1 := strings.ToUpper(uuid.NewString())
+	uuid2 := strings.ToUpper(uuid.NewString())
+
+	innerPayload := []any{
+		contextObj,
+		imageBase64,
+		mimeType,
+		1,
+		nil,
+		nil,
+		nil,
+		nil,
+		fileName,
+		nil,
+		uuid1,
+		uuid2,
+	}
+
+	return json.Marshal(innerPayload)
+}
+
+var mediaIDRegex = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
+
+// ParseUploadedMediaID extracts the uploaded media ID from maseQ response.
+func ParseUploadedMediaID(raw []byte) (string, error) {
+	m := mediaIDRegex.Find(raw)
+	if len(m) > 0 {
+		return string(m), nil
+	}
+	return "", errors.New("không tìm thấy media ID trong phản hồi tải ảnh lên")
+}
+
+var mediaURLRegex = regexp.MustCompile(`https://(?:flow-content\.google|ai-sandbox-videofx)/image/([0-9a-zA-Z\-_]+)(?:\?[^"'\s\\]*)?`)
+
+// ParseGeneratedImages extracts generated image URLs and media IDs from batchexecute response data.
+func ParseGeneratedImages(raw []byte, prompt string, modelID string, ratio string) []GeneratedImageItem {
+	matches := mediaURLRegex.FindAllSubmatch(raw, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var items []GeneratedImageItem
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	for _, m := range matches {
+		fullURL := string(m[0])
+		mediaID := string(m[1])
+		if seen[mediaID] {
+			continue
+		}
+		seen[mediaID] = true
+		items = append(items, GeneratedImageItem{
+			ID:          mediaID,
+			URL:         fullURL,
+			Prompt:      prompt,
+			Model:       modelID,
+			AspectRatio: ratio,
+			CreatedAt:   now,
+		})
+	}
+	return items
+}
 
 // FlowModel represents an image generation model available in Google Flow.
 type FlowModel struct {
@@ -29,10 +222,13 @@ type FlowModel struct {
 
 // GenerateImageRequest represents the payload for generating images.
 type GenerateImageRequest struct {
-	Prompt      string `json:"prompt"`
-	ModelID     string `json:"modelId"`
-	AspectRatio string `json:"aspectRatio"`
-	Count       int    `json:"count"`
+	Prompt               string `json:"prompt"`
+	ModelID              string `json:"modelId"`
+	AspectRatio          string `json:"aspectRatio"`
+	Count                int    `json:"count"`
+	ReferenceImageBase64 string `json:"referenceImageBase64,omitempty"`
+	ReferenceMimeType    string `json:"referenceMimeType,omitempty"`
+	ReferenceFileName    string `json:"referenceFileName,omitempty"`
 }
 
 // GeneratedImageItem represents an image returned from generation.
@@ -308,6 +504,53 @@ func (s *FlowImageService) GenerateImages(ctx context.Context, req GenerateImage
 	return models.SuccessResponse(images)
 }
 
+// UploadReferenceImage registers a local image to Google Flow via RPC maseQ.
+func (s *FlowImageService) UploadReferenceImage(ctx context.Context, client *http.Client, acc storedAccount, imageBase64 string, mimeType string, fileName string, token string) (string, error) {
+	inner, err := BuildImageUploadRequest(imageBase64, mimeType, fileName, "default", token)
+	if err != nil {
+		return "", fmt.Errorf("không đóng gói được payload maseQ: %w", err)
+	}
+
+	rpcID := RPCUploadImage
+	reqURL := fmt.Sprintf("%s/_/AiSandboxAngularFrontend/data/batchexecute?rpcids=%s&source-path=%s&bl=%s&hl=en&_reqid=100004&rt=c",
+		chrome.FlowURL, rpcID, url.QueryEscape("/"), url.QueryEscape(acc.Credentials.BuildLabel))
+
+	fReq := fmt.Sprintf(`[[["%s",%s,null,"generic"]]]`, rpcID, string(inner))
+	val := url.Values{}
+	val.Set("f.req", fReq)
+	if acc.Credentials.AtToken != "" {
+		val.Set("at", acc.Credentials.AtToken)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", reqURL, strings.NewReader(val.Encode()))
+	if err != nil {
+		return "", err
+	}
+	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
+	httpReq.Header.Set("X-Same-Domain", "1")
+	if acc.Credentials.UserAgent != "" {
+		httpReq.Header.Set("User-Agent", acc.Credentials.UserAgent)
+	}
+	httpReq.Header.Set("Referer", chrome.FlowURL+"/")
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("lỗi kết nối khi gọi maseQ: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	if bytes.Contains(body, []byte("PUBLIC_ERROR_UNUSUAL_ACTIVITY")) {
+		return "", errors.New("Google Flow từ chối tải ảnh lên do token bảo mật không hợp lệ")
+	}
+
+	return ParseUploadedMediaID(body)
+}
+
 // generateImagesFromAccount executes generation against Google Flow using the selected account.
 func (s *FlowImageService) generateImagesFromAccount(ctx context.Context, acc storedAccount, req GenerateImageRequest) ([]GeneratedImageItem, error) {
 	jar, err := cookiejar.New(nil)
@@ -376,19 +619,57 @@ func (s *FlowImageService) generateImagesFromAccount(ctx context.Context, acc st
 		return nil, errors.New("phiên đăng nhập hoặc cookie không hợp lệ trên Google Flow")
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
-	items := make([]GeneratedImageItem, 0, req.Count)
-	for i := 0; i < req.Count; i++ {
-		imgID := fmt.Sprintf("flow-img-%d-%d", time.Now().UnixNano(), i+1)
-		items = append(items, GeneratedImageItem{
-			ID:          imgID,
-			URL:         fmt.Sprintf("https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80&sig=%d", i),
-			Prompt:      req.Prompt,
-			Model:       req.ModelID,
-			AspectRatio: req.AspectRatio,
-			CreatedAt:   now,
-		})
+	// Dispatch verified image generation RPC ogiZ0b (BatchGenerateImages)
+	innerPayload, err := BuildImageBatchRequest(req.Prompt, "default", req.AspectRatio, req.ModelID, req.Count, "")
+	if err != nil {
+		return nil, fmt.Errorf("không đóng gói được payload tạo ảnh: %w", err)
 	}
 
-	return items, nil
+	rpcID := RPCBatchGenerateImages
+	genURL := fmt.Sprintf("%s/_/AiSandboxAngularFrontend/data/batchexecute?rpcids=%s&source-path=%s&bl=%s&hl=en&_reqid=100003&rt=c",
+		chrome.FlowURL, rpcID, url.QueryEscape("/"), url.QueryEscape(acc.Credentials.BuildLabel))
+
+	genFReq := fmt.Sprintf(`[[["%s",%s,null,"generic"]]]`, rpcID, string(innerPayload))
+	genVal := url.Values{}
+	genVal.Set("f.req", genFReq)
+	if acc.Credentials.AtToken != "" {
+		genVal.Set("at", acc.Credentials.AtToken)
+	}
+
+	genReq, err := http.NewRequestWithContext(ctx, "POST", genURL, strings.NewReader(genVal.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	genReq.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
+	genReq.Header.Set("X-Same-Domain", "1")
+	if acc.Credentials.UserAgent != "" {
+		genReq.Header.Set("User-Agent", acc.Credentials.UserAgent)
+	}
+	genReq.Header.Set("Referer", chrome.FlowURL+"/")
+
+	genResp, err := client.Do(genReq)
+	if err != nil {
+		return nil, fmt.Errorf("lỗi kết nối máy chủ Google Flow khi gọi %s: %w", rpcID, err)
+	}
+	defer genResp.Body.Close()
+
+	genBody, err := io.ReadAll(genResp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if bytes.Contains(genBody, []byte("PUBLIC_ERROR_UNUSUAL_ACTIVITY")) {
+		return nil, errors.New("Google Flow yêu cầu xác thực reCAPTCHA Enterprise token (action: IMAGE_GENERATION). Phiên cần được cấp token qua trình duyệt trước khi tạo ảnh.")
+	}
+
+	images := ParseGeneratedImages(genBody, req.Prompt, req.ModelID, req.AspectRatio)
+	if len(images) > 0 {
+		return images, nil
+	}
+
+	limit := len(genBody)
+	if limit > 200 {
+		limit = 200
+	}
+	return nil, fmt.Errorf("Google Flow chưa trả về ảnh hợp lệ (phản hồi: %s)", string(genBody[:limit]))
 }
