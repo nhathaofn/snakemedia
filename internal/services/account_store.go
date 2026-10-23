@@ -119,6 +119,22 @@ func (s *AccountService) GetAccounts(_ context.Context) models.Response[[]Accoun
 	return models.SuccessResponse(views)
 }
 
+func (s *AccountService) GetConnectedStoredAccounts() ([]storedAccount, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	accounts, err := s.loadAccountsUnsafe()
+	if err != nil {
+		return nil, err
+	}
+	var connected []storedAccount
+	for _, acc := range accounts {
+		if acc.Status == AccountConnected {
+			connected = append(connected, acc)
+		}
+	}
+	return connected, nil
+}
+
 func (s *AccountService) findAccount(id string) (storedAccount, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

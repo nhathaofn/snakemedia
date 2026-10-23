@@ -9,9 +9,13 @@ export function CheckLoginStatus(arg1:string):Promise<models.Response_SnakeMedia
 
 export function GetAccounts():Promise<models.Response___SnakeMedia_internal_services_AccountProfile_>;
 
+export function GetActiveRotationCount():Promise<models.Response_int_>;
+
 export function GetAppInfo():Promise<models.Response_SnakeMedia_internal_buildinfo_Info_>;
 
 export function GetConfig():Promise<models.Response_SnakeMedia_internal_config_AppConfig_>;
+
+export function GetImageModels():Promise<models.Response___SnakeMedia_internal_services_FlowModel_>;
 
 export function GetSystemInfo():Promise<models.Response_SnakeMedia_internal_services_SystemInfo_>;
 

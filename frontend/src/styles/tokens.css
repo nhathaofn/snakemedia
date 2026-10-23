@@ -43,6 +43,8 @@
   --titlebar-height: 34px;
   --header-height: 44px;
   --header-indicator-height: 2px;
+  --tabs-height: 40px;
+  --tabs-indicator-height: 2px;
   --sidebar-width: 240px;
   --sidebar-collapsed-width: 68px;
 
@@ -90,6 +92,7 @@
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --account-card-min-width: 360px;
+  --flow-image-panel-width: 240px;
   --account-avatar-size: 40px;
   --account-email-max-width: 170px;
   --account-detail-max-width: 220px;

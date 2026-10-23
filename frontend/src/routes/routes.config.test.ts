@@ -53,6 +53,11 @@ describe('ROUTES', () => {
     // Compile-time checks: these fail `tsc` if a feature is renamed or moved.
     const accounts: '/home/accounts' = ROUTES.home.accounts;
     const flow: '/flow/overview' = ROUTES.flow.overview;
-    expect([accounts, flow]).toEqual(['/home/accounts', '/flow/overview']);
+    const flowImage: '/flow/image' = ROUTES.flow.image;
+    expect([accounts, flow, flowImage]).toEqual([
+      '/home/accounts',
+      '/flow/overview',
+      '/flow/image',
+    ]);
   });
 });

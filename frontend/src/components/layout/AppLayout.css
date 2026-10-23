@@ -18,3 +18,11 @@
   overflow-y: auto;
   padding: var(--content-padding);
 }
+
+/* Features with `layout: 'full'` own the whole area: no padding, no outer scroll. */
+.app-content.app-content-full {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}

@@ -1,0 +1,77 @@
+/* Fills its container: the strip stays fixed, the active panel takes the remaining height. */
+.tabs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tabs-list {
+  display: flex;
+  flex-shrink: 0;
+  height: var(--tabs-height);
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+/* Tabs share the strip width equally. */
+.tabs-tab {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-6);
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+
+.tabs-tab::after {
+  content: '';
+  position: absolute;
+  left: var(--space-6);
+  right: var(--space-6);
+  bottom: calc(-1 * var(--border-width));
+  height: var(--tabs-indicator-height);
+  border-radius: var(--radius-full);
+  background-color: transparent;
+  transition: background-color var(--transition-fast);
+}
+
+.tabs-tab:hover {
+  color: var(--text-primary);
+}
+
+.tabs-tab:focus-visible {
+  outline: var(--tabs-indicator-height) solid var(--feedback-primary-border);
+  outline-offset: calc(-1 * var(--tabs-indicator-height));
+}
+
+.tabs-tab.active {
+  color: var(--primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.tabs-tab.active::after {
+  background-color: var(--primary);
+}
+
+.tabs-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* `display: flex` above would otherwise override the hidden attribute. */
+.tabs-panel[hidden] {
+  display: none;
+}

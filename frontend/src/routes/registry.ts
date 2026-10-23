@@ -31,9 +31,19 @@ export function defaultFeaturePath(section: AppSection): string {
   return featurePath(section, feature);
 }
 
-/** Section owning a URL, matched on whole path segments. */
+/** True when `pathname` is `base` or below it, matched on whole path segments. */
+const isWithin = (pathname: string, base: string) =>
+  pathname === base || pathname.startsWith(`${base}/`);
+
+/** Section owning a URL. */
 export function findSection(pathname: string): AppSection | undefined {
-  return APP_SECTIONS.find((s) => pathname === s.path || pathname.startsWith(`${s.path}/`));
+  return APP_SECTIONS.find((s) => isWithin(pathname, s.path));
+}
+
+/** Feature owning a URL, or undefined for a bare section path or an unknown URL. */
+export function findFeature(pathname: string): FeatureRoute | undefined {
+  const section = findSection(pathname);
+  return section?.features.find((f) => isWithin(pathname, featurePath(section, f)));
 }
 
 /** Where '/' and unknown URLs land: the first section. */

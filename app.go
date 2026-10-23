@@ -26,6 +26,7 @@ type App struct {
 	system     *services.SystemService
 	settings   *services.SettingsService
 	account    *services.AccountService
+	flowImage  *services.FlowImageService
 	dispatcher *events.Dispatcher
 }
 
@@ -49,12 +50,14 @@ func NewApp(info buildinfo.Info) (*App, error) {
 	log.Info("starting application",
 		"name", info.Name, "version", info.Version, "commit", info.Commit, "dataDir", p.DataDir)
 
+	accountSvc := services.NewAccountService(p, cfgManager)
 	return &App{
-		info:     info,
-		cfg:      cfgManager,
-		system:   services.NewSystemService(info),
-		settings: services.NewSettingsService(cfgManager),
-		account:  services.NewAccountService(p, cfgManager),
+		info:      info,
+		cfg:       cfgManager,
+		system:    services.NewSystemService(info),
+		settings:  services.NewSettingsService(cfgManager),
+		account:   accountSvc,
+		flowImage: services.NewFlowImageService(accountSvc),
 	}, nil
 }
 
@@ -170,4 +173,14 @@ func (a *App) RemoveAccount(id string) models.Response[bool] {
 // RefreshAccount queries latest credits and cookies from the active Flow tab.
 func (a *App) RefreshAccount(id string) models.Response[services.AccountProfile] {
 	return a.account.RefreshAccount(a.ctx, id)
+}
+
+// GetImageModels queries available image generation models from Google Flow using the rotated account pool.
+func (a *App) GetImageModels() models.Response[[]services.FlowModel] {
+	return a.flowImage.GetImageModels(a.ctx)
+}
+
+// GetActiveRotationCount returns the number of connected accounts with valid cookies available for rotation.
+func (a *App) GetActiveRotationCount() models.Response[int] {
+	return a.flowImage.GetActiveRotationCount(a.ctx)
 }

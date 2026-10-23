@@ -14,12 +14,20 @@ export function GetAccounts() {
   return window['go']['main']['App']['GetAccounts']();
 }
 
+export function GetActiveRotationCount() {
+  return window['go']['main']['App']['GetActiveRotationCount']();
+}
+
 export function GetAppInfo() {
   return window['go']['main']['App']['GetAppInfo']();
 }
 
 export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
+}
+
+export function GetImageModels() {
+  return window['go']['main']['App']['GetImageModels']();
 }
 
 export function GetSystemInfo() {

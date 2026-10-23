@@ -7,6 +7,7 @@ import {
   SIDEBAR_PINNED,
   defaultFeaturePath,
   featurePath,
+  findFeature,
   findSection,
 } from './registry';
 
@@ -77,5 +78,23 @@ describe('findSection', () => {
   it('matches whole segments only', () => {
     expect(findSection(`${first.path}extra`)).toBeUndefined();
     expect(findSection('/')).toBeUndefined();
+  });
+});
+
+describe('findFeature', () => {
+  it('matches every feature URL and the URLs below it', () => {
+    for (const s of APP_SECTIONS) {
+      for (const f of s.features) {
+        expect(findFeature(featurePath(s, f))).toBe(f);
+        expect(findFeature(`${featurePath(s, f)}/detail`)).toBe(f);
+      }
+    }
+  });
+
+  it('returns undefined for bare section paths and unknown URLs', () => {
+    const [first] = APP_SECTIONS;
+    expect(findFeature(first.path)).toBeUndefined();
+    expect(findFeature(`${first.path}/nope`)).toBeUndefined();
+    expect(findFeature('/nope')).toBeUndefined();
   });
 });

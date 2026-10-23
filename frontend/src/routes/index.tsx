@@ -10,10 +10,11 @@ export {
   SIDEBAR_PINNED,
   defaultFeaturePath,
   featurePath,
+  findFeature,
   findSection,
 } from './registry';
 export type { RouteMap } from './registry';
-export { useActiveSection } from './useActiveSection';
+export { useActiveFeature, useActiveSection } from './useActiveSection';
 
 const router = createHashRouter(routes);
 

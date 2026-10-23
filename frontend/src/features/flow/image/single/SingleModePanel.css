@@ -1,0 +1,229 @@
+.single-mode-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  padding: var(--space-6);
+  overflow-y: auto;
+}
+
+.flow-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.flow-field-label {
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.flow-field-badge {
+  font-size: var(--font-size-caption);
+  color: var(--primary);
+  font-weight: var(--font-weight-normal);
+}
+
+/* Custom styled Select for Models */
+.flow-select-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.flow-select {
+  width: 100%;
+  height: 38px;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 0 var(--space-6);
+  font-family: inherit;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  appearance: none;
+  transition: border-color var(--transition-fast);
+}
+
+.flow-select:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.flow-select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.flow-select-arrow {
+  position: absolute;
+  right: var(--space-6);
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--text-muted);
+}
+
+/* Aspect Ratio Grid */
+.aspect-ratio-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-3);
+}
+
+.aspect-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: 52px;
+  background-color: var(--bg-primary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.aspect-btn:hover {
+  border-color: var(--border-subtle);
+  color: var(--text-primary);
+}
+
+.aspect-btn.active {
+  background-color: rgba(var(--primary-rgb), 0.1);
+  border-color: var(--primary);
+  color: var(--primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* Miniature wireframe box representing aspect ratios */
+.aspect-wireframe {
+  display: block;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+  opacity: 0.85;
+}
+
+.aspect-16-9 {
+  width: 22px;
+  height: 12px;
+}
+
+.aspect-4-3 {
+  width: 20px;
+  height: 15px;
+}
+
+.aspect-1-1 {
+  width: 16px;
+  height: 16px;
+}
+
+.aspect-3-4 {
+  width: 15px;
+  height: 20px;
+}
+
+.aspect-9-16 {
+  width: 12px;
+  height: 22px;
+}
+
+/* Quantity Grid (x1 to x4) */
+.quantity-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-2);
+  background-color: var(--bg-primary);
+  padding: 3px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.quantity-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.quantity-btn:hover {
+  color: var(--text-primary);
+}
+
+.quantity-btn.active {
+  background-color: var(--bg-secondary);
+  color: var(--primary);
+  font-weight: var(--font-weight-semibold);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Rotation status badge */
+.rotation-status-badge {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
+  background-color: var(--bg-primary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-caption);
+  color: var(--text-secondary);
+}
+
+.rotation-status-badge.has-accounts {
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+.rotation-status-badge.no-accounts {
+  border-color: rgba(239, 68, 68, 0.3);
+  color: var(--danger);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+}
+
+.status-dot.active {
+  background-color: var(--success);
+  box-shadow: 0 0 6px var(--success);
+}
+
+.status-dot.inactive {
+  background-color: var(--danger);
+}
+
+/* Error state banner */
+.flow-error-banner {
+  padding: var(--space-4) var(--space-6);
+  background-color: rgba(239, 68, 68, 0.1);
+  border: var(--border-width) solid rgba(239, 68, 68, 0.3);
+  border-radius: var(--radius-md);
+  color: var(--danger);
+  font-size: var(--font-size-caption);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}

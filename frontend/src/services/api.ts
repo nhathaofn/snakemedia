@@ -5,6 +5,7 @@ import type {
   ApiResponse,
   AppConfig,
   AppInfo,
+  FlowModel,
   LoginProcessInfo,
   LoginStatusInfo,
   SystemInfo,
@@ -76,4 +77,7 @@ export const api = {
     invoke<AccountProfile>('RefreshAccount', () => Backend.RefreshAccount(id)),
   openAccountBrowser: (id: string) =>
     invoke<LoginProcessInfo>('OpenAccountBrowser', () => Backend.OpenAccountBrowser(id)),
+  getImageModels: () => invoke<FlowModel[]>('GetImageModels', Backend.GetImageModels),
+  getActiveRotationCount: () =>
+    invoke<number>('GetActiveRotationCount', Backend.GetActiveRotationCount),
 };

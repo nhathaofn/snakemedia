@@ -2,6 +2,13 @@
 import type { ReactNode } from 'react';
 import type { IconComponent } from './app';
 
+/**
+ * How the content area hosts a feature: 'padded' is the scrolling, padded page column;
+ * 'full' hands the page the whole area (no padding, no outer scroll) to lay out its own
+ * panels and scrolling.
+ */
+export type FeatureLayout = 'padded' | 'full';
+
 /** One screen inside a section, listed in the sidebar while its section is active. */
 export interface FeatureRoute {
   id: string;
@@ -12,6 +19,8 @@ export interface FeatureRoute {
   element: ReactNode;
   /** Defaults to true. Hidden features stay routable but are left out of the sidebar. */
   showInNav?: boolean;
+  /** Defaults to 'padded'. */
+  layout?: FeatureLayout;
 }
 
 /**
