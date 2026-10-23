@@ -184,3 +184,8 @@ func (a *App) GetImageModels() models.Response[[]services.FlowModel] {
 func (a *App) GetActiveRotationCount() models.Response[int] {
 	return a.flowImage.GetActiveRotationCount(a.ctx)
 }
+
+// GenerateImages dispatches image generation using a rotated account.
+func (a *App) GenerateImages(req services.GenerateImageRequest) models.Response[[]services.GeneratedImageItem] {
+	return a.flowImage.GenerateImages(a.ctx, req)
+}

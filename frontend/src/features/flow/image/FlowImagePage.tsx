@@ -3,6 +3,7 @@ import './FlowImagePage.css';
 import { Tabs } from '../../../components/ui';
 import { DEFAULT_IMAGE_MODE, IMAGE_MODES } from './modes';
 import type { ImageMode } from './modes';
+import { FlowImageWorkspace } from './workspace/FlowImageWorkspace';
 
 /**
  * FlowImagePage - Two-column workspace layout.
@@ -19,7 +20,7 @@ export const FlowImagePage: React.FC = () => {
         <Tabs aria-label="Image mode" items={IMAGE_MODES} value={mode} onChange={setMode} />
       </aside>
       <section className="flow-image-content" aria-label="Image workspace">
-        <div className="flow-image-panel-inner">{/* Main content area */}</div>
+        <FlowImageWorkspace />
       </section>
     </div>
   );

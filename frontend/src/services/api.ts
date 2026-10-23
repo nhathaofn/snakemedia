@@ -6,6 +6,8 @@ import type {
   AppConfig,
   AppInfo,
   FlowModel,
+  GenerateImageRequest,
+  GeneratedImageItem,
   LoginProcessInfo,
   LoginStatusInfo,
   SystemInfo,
@@ -80,4 +82,6 @@ export const api = {
   getImageModels: () => invoke<FlowModel[]>('GetImageModels', Backend.GetImageModels),
   getActiveRotationCount: () =>
     invoke<number>('GetActiveRotationCount', Backend.GetActiveRotationCount),
+  generateImages: (req: GenerateImageRequest) =>
+    invoke<GeneratedImageItem[]>('GenerateImages', () => Backend.GenerateImages(req)),
 };

@@ -10,6 +10,10 @@ export function CheckLoginStatus(arg1) {
   return window['go']['main']['App']['CheckLoginStatus'](arg1);
 }
 
+export function GenerateImages(arg1) {
+  return window['go']['main']['App']['GenerateImages'](arg1);
+}
+
 export function GetAccounts() {
   return window['go']['main']['App']['GetAccounts']();
 }

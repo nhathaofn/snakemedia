@@ -3,8 +3,8 @@ import { AlertCircle, ChevronDown, RefreshCw } from 'lucide-react';
 import './SingleModePanel.css';
 import { api } from '../../../../services/api';
 import type { FlowModel } from '../../../../types';
-
-export type AspectRatio = '16:9' | '4:3' | '1:1' | '3:4' | '9:16';
+import { useFlowImageStore } from '../store/flowImageStore';
+import type { AspectRatio } from '../store/flowImageStore';
 
 interface AspectOption {
   value: AspectRatio;
@@ -29,9 +29,12 @@ const QUANTITY_OPTIONS = [1, 2, 3, 4] as const;
  */
 export const SingleModePanel: React.FC = () => {
   const [models, setModels] = useState<FlowModel[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string>('');
-  const [aspectRatio, setAspectRatio] = useState<AspectRatio>('1:1');
-  const [quantity, setQuantity] = useState<number>(1);
+  const selectedModel = useFlowImageStore((s) => s.selectedModel);
+  const setSelectedModel = useFlowImageStore((s) => s.setSelectedModel);
+  const aspectRatio = useFlowImageStore((s) => s.aspectRatio);
+  const setAspectRatio = useFlowImageStore((s) => s.setAspectRatio);
+  const quantity = useFlowImageStore((s) => s.quantity);
+  const setQuantity = useFlowImageStore((s) => s.setQuantity);
   const [activeAccountsCount, setActiveAccountsCount] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +72,7 @@ export const SingleModePanel: React.FC = () => {
     return () => {
       active = false;
     };
-  }, []);
+  }, [setSelectedModel]);
 
   return (
     <div className="single-mode-panel">
