@@ -44,6 +44,40 @@ var FlowImageAspect = map[string]int{
 	"4:3":  5,
 }
 
+// BuildBatchEnvelope constructs the standard Google Boq batchexecute outer envelope:
+// [[[rpcID, JSON_STRING(inner), nil, "generic"]]]
+func BuildBatchEnvelope(rpcID string, inner any) (string, error) {
+	var innerJSON string
+	switch v := inner.(type) {
+	case string:
+		innerJSON = v
+	case []byte:
+		innerJSON = string(v)
+	default:
+		b, err := json.Marshal(inner)
+		if err != nil {
+			return "", err
+		}
+		innerJSON = string(b)
+	}
+
+	outer := []any{
+		[]any{
+			[]any{
+				rpcID,
+				innerJSON,
+				nil,
+				"generic",
+			},
+		},
+	}
+	outerBytes, err := json.Marshal(outer)
+	if err != nil {
+		return "", err
+	}
+	return string(outerBytes), nil
+}
+
 // BuildImageBatchRequest constructs the verified batchexecute inner payload for RPC ogiZ0b (BatchGenerateImages)
 // based on reverse-engineered JSPB AST from Google Flow web client.
 func BuildImageBatchRequest(prompt string, projectID string, ratio string, modelID string, count int, recaptchaToken string, refMediaIDs ...[]string) ([]byte, error) {
@@ -60,8 +94,10 @@ func BuildImageBatchRequest(prompt string, projectID string, ratio string, model
 	if modelID == "" {
 		modelID = "GEM_PIX_2"
 	}
-	if projectID == "" {
-		projectID = "default"
+
+	var projVal any
+	if projectID != "" && projectID != "default" {
+		projVal = projectID
 	}
 
 	var refs []any
@@ -78,7 +114,7 @@ func BuildImageBatchRequest(prompt string, projectID string, ratio string, model
 		nil,
 		nil,
 		nil,
-		projectID,
+		projVal,
 		nil,
 		nil,
 		nil,
@@ -124,14 +160,16 @@ func BuildImageBatchRequest(prompt string, projectID string, ratio string, model
 
 // BuildImageUploadRequest constructs the batchexecute inner payload for RPC maseQ (UploadImage).
 func BuildImageUploadRequest(imageBase64 string, mimeType string, fileName string, projectID string, recaptchaToken string) ([]byte, error) {
-	if projectID == "" {
-		projectID = "default"
-	}
 	if mimeType == "" {
 		mimeType = "image/png"
 	}
 	if fileName == "" {
 		fileName = "reference.png"
+	}
+
+	var projVal any
+	if projectID != "" && projectID != "default" {
+		projVal = projectID
 	}
 
 	contextObj := []any{
@@ -140,7 +178,7 @@ func BuildImageUploadRequest(imageBase64 string, mimeType string, fileName strin
 		nil,
 		nil,
 		nil,
-		projectID,
+		projVal,
 		nil,
 		nil,
 		nil,
@@ -229,6 +267,7 @@ type GenerateImageRequest struct {
 	ReferenceImageBase64 string `json:"referenceImageBase64,omitempty"`
 	ReferenceMimeType    string `json:"referenceMimeType,omitempty"`
 	ReferenceFileName    string `json:"referenceFileName,omitempty"`
+	ProjectID            string `json:"projectId,omitempty"`
 }
 
 // GeneratedImageItem represents an image returned from generation.
@@ -505,8 +544,12 @@ func (s *FlowImageService) GenerateImages(ctx context.Context, req GenerateImage
 }
 
 // UploadReferenceImage registers a local image to Google Flow via RPC maseQ.
-func (s *FlowImageService) UploadReferenceImage(ctx context.Context, client *http.Client, acc storedAccount, imageBase64 string, mimeType string, fileName string, token string) (string, error) {
-	inner, err := BuildImageUploadRequest(imageBase64, mimeType, fileName, "default", token)
+func (s *FlowImageService) UploadReferenceImage(ctx context.Context, client *http.Client, acc storedAccount, imageBase64 string, mimeType string, fileName string, token string, projectID ...string) (string, error) {
+	proj := ""
+	if len(projectID) > 0 {
+		proj = projectID[0]
+	}
+	inner, err := BuildImageUploadRequest(imageBase64, mimeType, fileName, proj, token)
 	if err != nil {
 		return "", fmt.Errorf("không đóng gói được payload maseQ: %w", err)
 	}
@@ -515,7 +558,10 @@ func (s *FlowImageService) UploadReferenceImage(ctx context.Context, client *htt
 	reqURL := fmt.Sprintf("%s/_/AiSandboxAngularFrontend/data/batchexecute?rpcids=%s&source-path=%s&bl=%s&hl=en&_reqid=100004&rt=c",
 		chrome.FlowURL, rpcID, url.QueryEscape("/"), url.QueryEscape(acc.Credentials.BuildLabel))
 
-	fReq := fmt.Sprintf(`[[["%s",%s,null,"generic"]]]`, rpcID, string(inner))
+	fReq, err := BuildBatchEnvelope(rpcID, inner)
+	if err != nil {
+		return "", fmt.Errorf("không đóng gói được envelope maseQ: %w", err)
+	}
 	val := url.Values{}
 	val.Set("f.req", fReq)
 	if acc.Credentials.AtToken != "" {
@@ -549,6 +595,61 @@ func (s *FlowImageService) UploadReferenceImage(ctx context.Context, client *htt
 	}
 
 	return ParseUploadedMediaID(body)
+}
+
+var projectIDRegex = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
+
+// FetchAccountProjects queries RPC UpteDb (/FlowService.GetProjects) to obtain project UUIDs for the account.
+func (s *FlowImageService) FetchAccountProjects(ctx context.Context, client *http.Client, acc storedAccount) ([]string, error) {
+	rpcID := "UpteDb"
+	reqURL := fmt.Sprintf("%s/_/AiSandboxAngularFrontend/data/batchexecute?rpcids=%s&source-path=%s&bl=%s&hl=en&_reqid=100002&rt=c",
+		chrome.FlowURL, rpcID, url.QueryEscape("/"), url.QueryEscape(acc.Credentials.BuildLabel))
+
+	innerPayload := []any{"projects/*", 21, nil, nil, nil, nil, []any{1}}
+	fReq, err := BuildBatchEnvelope(rpcID, innerPayload)
+	if err != nil {
+		return nil, err
+	}
+
+	val := url.Values{}
+	val.Set("f.req", fReq)
+	if acc.Credentials.AtToken != "" {
+		val.Set("at", acc.Credentials.AtToken)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", reqURL, strings.NewReader(val.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
+	httpReq.Header.Set("X-Same-Domain", "1")
+	if acc.Credentials.UserAgent != "" {
+		httpReq.Header.Set("User-Agent", acc.Credentials.UserAgent)
+	}
+	httpReq.Header.Set("Referer", chrome.FlowURL+"/")
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	matches := projectIDRegex.FindAll(body, -1)
+	var projects []string
+	seen := make(map[string]bool)
+	for _, m := range matches {
+		id := string(m)
+		if !seen[id] {
+			seen[id] = true
+			projects = append(projects, id)
+		}
+	}
+	return projects, nil
 }
 
 // generateImagesFromAccount executes generation against Google Flow using the selected account.
@@ -622,32 +723,52 @@ func (s *FlowImageService) generateImagesFromAccount(ctx context.Context, acc st
 	// 1. Ensure headless browser and mint reCAPTCHA Enterprise token
 	var recaptchaToken string
 	var refMediaIDs []string
-	if s.accounts != nil {
-		browser, bErr := s.accounts.EnsureAccountHeadlessBrowser(ctx, acc)
-		if bErr == nil && browser != nil {
-			policy := s.accounts.cfgManager.Get().Accounts
-			tok, tErr := chrome.MintRecaptchaToken(ctx, browser.Port, policy, chrome.ActionImageGeneration)
-			if tErr == nil {
-				recaptchaToken = tok
-			}
+	if s.accounts == nil {
+		return nil, errors.New("dịch vụ tài khoản chưa được liên kết để cấp token reCAPTCHA")
+	}
 
-			// 2. If a reference image is supplied, upload it via RPC maseQ
-			if req.ReferenceImageBase64 != "" {
-				uploadToken := recaptchaToken
-				if tok2, err2 := chrome.MintRecaptchaToken(ctx, browser.Port, policy, chrome.ActionImageGeneration); err2 == nil && tok2 != "" {
-					uploadToken = tok2
-				}
-				mediaID, uErr := s.UploadReferenceImage(ctx, client, acc, req.ReferenceImageBase64, req.ReferenceMimeType, req.ReferenceFileName, uploadToken)
-				if uErr != nil {
-					return nil, fmt.Errorf("không tải ảnh tham chiếu lên được: %w", uErr)
-				}
-				refMediaIDs = append(refMediaIDs, mediaID)
-			}
+	browser, bErr := s.accounts.EnsureAccountHeadlessBrowser(ctx, acc)
+	if bErr != nil {
+		return nil, fmt.Errorf("không khởi động được trình duyệt Chrome để cấp bảo mật: %w", bErr)
+	}
+	if browser == nil {
+		return nil, errors.New("trình duyệt Chrome chưa được khởi tạo")
+	}
+
+	policy := s.accounts.cfgManager.Get().Accounts
+	tok, tErr := chrome.MintRecaptchaToken(ctx, browser.Port, policy, chrome.ActionImageGeneration)
+	if tErr != nil {
+		return nil, fmt.Errorf("lỗi cấp token reCAPTCHA Enterprise từ trình duyệt: %w", tErr)
+	}
+	if tok == "" {
+		return nil, errors.New("token reCAPTCHA Enterprise trả về rỗng")
+	}
+	recaptchaToken = tok
+
+	// 2. Resolve real project ID from account
+	projectID := req.ProjectID
+	if projectID == "" {
+		projects, pErr := s.FetchAccountProjects(ctx, client, acc)
+		if pErr == nil && len(projects) > 0 {
+			projectID = projects[0]
 		}
 	}
 
-	// 3. Dispatch verified image generation RPC ogiZ0b (BatchGenerateImages)
-	innerPayload, err := BuildImageBatchRequest(req.Prompt, "default", req.AspectRatio, req.ModelID, req.Count, recaptchaToken, refMediaIDs)
+	// 3. If a reference image is supplied, upload it via RPC maseQ
+	if req.ReferenceImageBase64 != "" {
+		uploadToken, uErrToken := chrome.MintRecaptchaToken(ctx, browser.Port, policy, chrome.ActionImageGeneration)
+		if uErrToken != nil || uploadToken == "" {
+			uploadToken = recaptchaToken
+		}
+		mediaID, uErr := s.UploadReferenceImage(ctx, client, acc, req.ReferenceImageBase64, req.ReferenceMimeType, req.ReferenceFileName, uploadToken, projectID)
+		if uErr != nil {
+			return nil, fmt.Errorf("không tải ảnh tham chiếu lên được: %w", uErr)
+		}
+		refMediaIDs = append(refMediaIDs, mediaID)
+	}
+
+	// 4. Dispatch verified image generation RPC ogiZ0b (BatchGenerateImages)
+	innerPayload, err := BuildImageBatchRequest(req.Prompt, projectID, req.AspectRatio, req.ModelID, req.Count, recaptchaToken, refMediaIDs)
 	if err != nil {
 		return nil, fmt.Errorf("không đóng gói được payload tạo ảnh: %w", err)
 	}
@@ -656,7 +777,10 @@ func (s *FlowImageService) generateImagesFromAccount(ctx context.Context, acc st
 	genURL := fmt.Sprintf("%s/_/AiSandboxAngularFrontend/data/batchexecute?rpcids=%s&source-path=%s&bl=%s&hl=en&_reqid=100003&rt=c",
 		chrome.FlowURL, rpcID, url.QueryEscape("/"), url.QueryEscape(acc.Credentials.BuildLabel))
 
-	genFReq := fmt.Sprintf(`[[["%s",%s,null,"generic"]]]`, rpcID, string(innerPayload))
+	genFReq, err := BuildBatchEnvelope(rpcID, innerPayload)
+	if err != nil {
+		return nil, fmt.Errorf("không đóng gói được envelope tạo ảnh: %w", err)
+	}
 	genVal := url.Values{}
 	genVal.Set("f.req", genFReq)
 	if acc.Credentials.AtToken != "" {

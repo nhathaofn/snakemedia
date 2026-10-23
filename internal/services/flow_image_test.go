@@ -381,3 +381,42 @@ func TestParseUploadedMediaID(t *testing.T) {
 		t.Errorf("expected media ID match, got %s", mediaID)
 	}
 }
+
+func TestBuildBatchEnvelope(t *testing.T) {
+	inner := []any{"projects/*", 21, nil, nil, nil, nil, []any{1}}
+	envelope, err := BuildBatchEnvelope("UpteDb", inner)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed []any
+	if err := json.Unmarshal([]byte(envelope), &parsed); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if len(parsed) != 1 {
+		t.Fatalf("expected outer length 1, got %d", len(parsed))
+	}
+	l1 := parsed[0].([]any)
+	l2 := l1[0].([]any)
+	if len(l2) != 4 {
+		t.Fatalf("expected l2 length 4, got %d", len(l2))
+	}
+	if l2[0] != "UpteDb" {
+		t.Errorf("expected UpteDb, got %v", l2[0])
+	}
+	// The second element MUST be a JSON string, not a slice/map
+	innerStr, ok := l2[1].(string)
+	if !ok {
+		t.Fatalf("expected string at index 1, got %T: %v", l2[1], l2[1])
+	}
+	if innerStr != `["projects/*",21,null,null,null,null,[1]]` {
+		t.Errorf("unexpected inner string: %s", innerStr)
+	}
+	if l2[2] != nil {
+		t.Errorf("expected nil at index 2, got %v", l2[2])
+	}
+	if l2[3] != "generic" {
+		t.Errorf("expected generic at index 3, got %v", l2[3])
+	}
+}

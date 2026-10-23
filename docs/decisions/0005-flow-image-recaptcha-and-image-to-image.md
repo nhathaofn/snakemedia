@@ -15,7 +15,7 @@ Two major engineering challenges existed:
 ## Decision
 1. **Hybrid Go HTTP + Chrome CDP Architecture:**
    - Go native HTTP client manages all batchexecute RPC communication (`ogiZ0b`, `maseQ`), cookie handling, and response decoding.
-   - Chrome Headless is launched per account profile with `--remote-debugging-port` to maintain an authenticated Flow session (`https://labs.google/fx/tools/flow`).
+   - Chrome Headless is launched per account profile with `--remote-debugging-port` to maintain an authenticated Flow session (`https://flow.google.com`).
    - Token minting communicates via WebSocket Chrome DevTools Protocol (`Runtime.evaluate`), executing a de-trapped JavaScript snippet directly inside the active Flow tab.
 2. **Anti-Tamper Trap Bypass:**
    - The injection script hooks `Object.assign` temporarily during token generation to prevent `x2a` from mutating the action to `extension_hijack_detected`.

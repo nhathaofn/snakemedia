@@ -618,6 +618,7 @@ export namespace services {
 	    referenceImageBase64?: string;
 	    referenceMimeType?: string;
 	    referenceFileName?: string;
+	    projectId?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new GenerateImageRequest(source);
@@ -632,6 +633,7 @@ export namespace services {
 	        this.referenceImageBase64 = source["referenceImageBase64"];
 	        this.referenceMimeType = source["referenceMimeType"];
 	        this.referenceFileName = source["referenceFileName"];
+	        this.projectId = source["projectId"];
 	    }
 	}
 	export class GeneratedImageItem {
