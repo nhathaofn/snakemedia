@@ -619,8 +619,35 @@ func (s *FlowImageService) generateImagesFromAccount(ctx context.Context, acc st
 		return nil, errors.New("phiên đăng nhập hoặc cookie không hợp lệ trên Google Flow")
 	}
 
-	// Dispatch verified image generation RPC ogiZ0b (BatchGenerateImages)
-	innerPayload, err := BuildImageBatchRequest(req.Prompt, "default", req.AspectRatio, req.ModelID, req.Count, "")
+	// 1. Ensure headless browser and mint reCAPTCHA Enterprise token
+	var recaptchaToken string
+	var refMediaIDs []string
+	if s.accounts != nil {
+		browser, bErr := s.accounts.EnsureAccountHeadlessBrowser(ctx, acc)
+		if bErr == nil && browser != nil {
+			policy := s.accounts.cfgManager.Get().Accounts
+			tok, tErr := chrome.MintRecaptchaToken(ctx, browser.Port, policy, chrome.ActionImageGeneration)
+			if tErr == nil {
+				recaptchaToken = tok
+			}
+
+			// 2. If a reference image is supplied, upload it via RPC maseQ
+			if req.ReferenceImageBase64 != "" {
+				uploadToken := recaptchaToken
+				if tok2, err2 := chrome.MintRecaptchaToken(ctx, browser.Port, policy, chrome.ActionImageGeneration); err2 == nil && tok2 != "" {
+					uploadToken = tok2
+				}
+				mediaID, uErr := s.UploadReferenceImage(ctx, client, acc, req.ReferenceImageBase64, req.ReferenceMimeType, req.ReferenceFileName, uploadToken)
+				if uErr != nil {
+					return nil, fmt.Errorf("không tải ảnh tham chiếu lên được: %w", uErr)
+				}
+				refMediaIDs = append(refMediaIDs, mediaID)
+			}
+		}
+	}
+
+	// 3. Dispatch verified image generation RPC ogiZ0b (BatchGenerateImages)
+	innerPayload, err := BuildImageBatchRequest(req.Prompt, "default", req.AspectRatio, req.ModelID, req.Count, recaptchaToken, refMediaIDs)
 	if err != nil {
 		return nil, fmt.Errorf("không đóng gói được payload tạo ảnh: %w", err)
 	}
