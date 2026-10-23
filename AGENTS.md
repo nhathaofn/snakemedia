@@ -72,6 +72,7 @@ Production desktop application scaffold built with Go and Wails v2, using Vite +
 - 0002 Production Modular Architecture and Dynamic Full Scaffolding → docs/decisions/0002-production-modular-architecture.md
 - 0003 Single Source of Truth and Production Hardening → docs/decisions/0003-single-source-of-truth-and-hardening.md
 - 0004 Sectioned Navigation: Header Tabs Own the Sidebar → docs/decisions/0004-sectioned-navigation.md
+- 0005 Flow Image reCAPTCHA Enterprise Token Minting and Image-to-Image Pipeline → docs/decisions/0005-flow-image-recaptcha-and-image-to-image.md
 
 ## Deeper docs
 - Decisions: `docs/decisions/README.md`

@@ -6,3 +6,4 @@
 | [0002](0002-production-modular-architecture.md) | Production Modular Architecture and Dynamic Full Scaffolding | Accepted | 2026-10-20 |
 | [0003](0003-single-source-of-truth-and-hardening.md) | Single Source of Truth and Production Hardening | Accepted | 2026-10-23 |
 | [0004](0004-sectioned-navigation.md) | Sectioned Navigation: Header Tabs Own the Sidebar | Accepted | 2026-10-23 |
+| [0005](0005-flow-image-recaptcha-and-image-to-image.md) | Flow Image reCAPTCHA Enterprise Token Minting and Image-to-Image Pipeline | Accepted | 2026-10-23 |
