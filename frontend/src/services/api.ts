@@ -5,12 +5,22 @@ import type {
   ApiResponse,
   AppConfig,
   AppInfo,
+  EditVideoRequest,
+  FlowEditModel,
   FlowModel,
+  FlowVideoModel,
   GenerateImageRequest,
+  GenerateVideoRequest,
   GeneratedImageItem,
+  GeneratedVideoItem,
+  ImportVideoResult,
   LoginProcessInfo,
   LoginStatusInfo,
+  NodeSpec,
+  SaveMediaResult,
+  StudioConfig,
   SystemInfo,
+  UploadedSourceVideo,
 } from '../types';
 import { errorMessage } from '../utils';
 import { isWailsRuntime } from './runtime';
@@ -84,4 +94,18 @@ export const api = {
     invoke<number>('GetActiveRotationCount', Backend.GetActiveRotationCount),
   generateImages: (req: GenerateImageRequest) =>
     invoke<GeneratedImageItem[]>('GenerateImages', () => Backend.GenerateImages(req)),
+
+  getVideoModels: () => invoke<FlowVideoModel[]>('GetVideoModels', Backend.GetVideoModels),
+  generateVideos: (req: GenerateVideoRequest) =>
+    invoke<GeneratedVideoItem[]>('GenerateVideos', () => Backend.GenerateVideos(req)),
+  getEditModels: () => invoke<FlowEditModel[]>('GetEditModels', Backend.GetEditModels),
+  editVideos: (req: EditVideoRequest) =>
+    invoke<GeneratedVideoItem[]>('EditVideos', () => Backend.EditVideos(req)),
+  pickVideo: () => invoke<ImportVideoResult>('PickVideo', Backend.PickVideo),
+  uploadSourceVideo: (localUrl: string) =>
+    invoke<UploadedSourceVideo>('UploadSourceVideo', () => Backend.UploadSourceVideo(localUrl)),
+  getStudioConfig: () => invoke<StudioConfig>('GetStudioConfig', Backend.GetStudioConfig),
+  listNodes: () => invoke<NodeSpec[]>('ListNodes', Backend.ListNodes),
+  saveMedia: (localUrl: string) =>
+    invoke<SaveMediaResult>('SaveMedia', () => Backend.SaveMedia(localUrl)),
 };

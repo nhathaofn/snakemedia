@@ -5,25 +5,42 @@
  * Never redeclare these shapes by hand: change the Go type, then run `wails dev`,
  * `wails build` or `wails generate module` to regenerate.
  */
-import { chrome, config, events, models, services } from '../../wailsjs/go/models';
-import type { buildinfo } from '../../wailsjs/go/models';
+import { chrome, config, engine, events, flow, models, session } from '../../wailsjs/go/models';
+import type { buildinfo, media, services } from '../../wailsjs/go/models';
 
 export type AppInfo = buildinfo.Info;
 export type AppConfig = config.AppConfig;
 export const AppConfig = config.AppConfig;
 export type SystemInfo = services.SystemInfo;
-export type LoginProcessInfo = services.LoginProcessInfo;
-export type LoginStatusInfo = services.LoginStatusInfo;
-export type AccountProfile = services.AccountProfile;
-export type FlowModel = services.FlowModel;
-export const FlowModel = services.FlowModel;
-export type GenerateImageRequest = services.GenerateImageRequest;
-export const GenerateImageRequest = services.GenerateImageRequest;
-export type GeneratedImageItem = services.GeneratedImageItem;
-export const GeneratedImageItem = services.GeneratedImageItem;
+export type LoginProcessInfo = session.LoginProcessInfo;
+export type LoginStatusInfo = session.LoginStatusInfo;
+export type AccountProfile = session.AccountProfile;
+export type FlowModel = flow.FlowModel;
+export const FlowModel = flow.FlowModel;
+export type GenerateImageRequest = flow.GenerateImageRequest;
+export const GenerateImageRequest = flow.GenerateImageRequest;
+export type GeneratedImageItem = flow.GeneratedImageItem;
+export const GeneratedImageItem = flow.GeneratedImageItem;
+export type FlowVideoModel = flow.FlowVideoModel;
+export type GenerateVideoRequest = flow.GenerateVideoRequest;
+export const GenerateVideoRequest = flow.GenerateVideoRequest;
+export type GeneratedVideoItem = flow.GeneratedVideoItem;
+export type SaveMediaResult = media.SaveResult;
+export type ImportVideoResult = media.ImportResult;
+export type FlowEditModel = flow.FlowEditModel;
+export type EditVideoRequest = flow.EditVideoRequest;
+export const EditVideoRequest = flow.EditVideoRequest;
+export type UploadedSourceVideo = flow.UploadedSourceVideo;
+export const UploadedSourceVideo = flow.UploadedSourceVideo;
+export type StudioConfig = flow.StudioConfig;
 export type AccountConfig = config.AccountConfig;
-export const AccountStatus = services.AccountStatus;
-export type AccountStatus = services.AccountStatus;
+export type NodeSpec = engine.Spec;
+export const PortType = engine.PortType;
+export type PortType = engine.PortType;
+export const ParamKind = engine.ParamKind;
+export type ParamKind = engine.ParamKind;
+export const AccountStatus = session.AccountStatus;
+export type AccountStatus = session.AccountStatus;
 export const AccountTier = chrome.Tier;
 export type AccountTier = chrome.Tier;
 

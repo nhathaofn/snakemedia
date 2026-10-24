@@ -10,7 +10,3 @@ export const IMAGE_MODES = [
   { value: 'single', label: 'Single', content: <SingleModePanel /> },
   { value: 'all', label: 'All', content: <AllModePanel /> },
 ] as const satisfies readonly TabItem<string>[];
-
-export type ImageMode = (typeof IMAGE_MODES)[number]['value'];
-
-export const DEFAULT_IMAGE_MODE: ImageMode = IMAGE_MODES[0].value;

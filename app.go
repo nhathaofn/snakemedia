@@ -3,16 +3,24 @@ package main
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"SnakeMedia/internal/buildinfo"
 	"SnakeMedia/internal/config"
+	"SnakeMedia/internal/engine"
 	"SnakeMedia/internal/events"
 	"SnakeMedia/internal/logger"
+	"SnakeMedia/internal/media"
 	"SnakeMedia/internal/models"
 	"SnakeMedia/internal/paths"
+	"SnakeMedia/internal/providers"
+	"SnakeMedia/internal/providers/flow"
+	"SnakeMedia/internal/providers/flow/session"
 	"SnakeMedia/internal/services"
 	"SnakeMedia/internal/window"
 )
@@ -25,8 +33,10 @@ type App struct {
 	cfg        *config.Manager
 	system     *services.SystemService
 	settings   *services.SettingsService
-	account    *services.AccountService
-	flowImage  *services.FlowImageService
+	account    *session.Service
+	flow       *flow.Provider
+	media      *media.Store
+	nodes      *engine.Registry
 	dispatcher *events.Dispatcher
 }
 
@@ -50,14 +60,27 @@ func NewApp(info buildinfo.Info) (*App, error) {
 	log.Info("starting application",
 		"name", info.Name, "version", info.Version, "commit", info.Commit, "dataDir", p.DataDir)
 
-	accountSvc := services.NewAccountService(p, cfgManager)
+	accounts := session.NewService(p, cfgManager)
+	store := media.NewStore(filepath.Join(p.DataDir, "media"))
+	flowProvider := flow.New(accounts, cfgManager, store)
+	nodes := engine.NewRegistry()
+	for _, provider := range []providers.Provider{flowProvider} {
+		if err := nodes.Register(provider.Nodes()...); err != nil {
+			return nil, err
+		}
+	}
+	if err := nodes.Register(store.SaveNode()); err != nil {
+		return nil, err
+	}
 	return &App{
-		info:      info,
-		cfg:       cfgManager,
-		system:    services.NewSystemService(info),
-		settings:  services.NewSettingsService(cfgManager),
-		account:   accountSvc,
-		flowImage: services.NewFlowImageService(accountSvc),
+		info:     info,
+		cfg:      cfgManager,
+		system:   services.NewSystemService(info),
+		settings: services.NewSettingsService(cfgManager),
+		account:  accounts,
+		flow:     flowProvider,
+		media:    store,
+		nodes:    nodes,
 	}, nil
 }
 
@@ -142,17 +165,17 @@ func (a *App) UpdateConfig(newCfg config.AppConfig) models.Response[config.AppCo
 }
 
 // LaunchLoginBrowser launches a dedicated Chrome instance for Google sign-in.
-func (a *App) LaunchLoginBrowser(sessionID string) models.Response[services.LoginProcessInfo] {
+func (a *App) LaunchLoginBrowser(sessionID string) models.Response[session.LoginProcessInfo] {
 	return a.account.LaunchLoginBrowser(a.ctx, sessionID)
 }
 
 // OpenAccountBrowser launches Chrome with a specific account's saved profile directory.
-func (a *App) OpenAccountBrowser(id string) models.Response[services.LoginProcessInfo] {
+func (a *App) OpenAccountBrowser(id string) models.Response[session.LoginProcessInfo] {
 	return a.account.OpenAccountBrowser(a.ctx, id)
 }
 
 // CheckLoginStatus queries the Chrome CDP port to report browser connection and page status.
-func (a *App) CheckLoginStatus(sessionID string) models.Response[services.LoginStatusInfo] {
+func (a *App) CheckLoginStatus(sessionID string) models.Response[session.LoginStatusInfo] {
 	return a.account.CheckLoginStatus(a.ctx, sessionID)
 }
 
@@ -161,7 +184,7 @@ func (a *App) CancelLogin(sessionID string) models.Response[bool] {
 }
 
 // GetAccounts returns the list of saved accounts.
-func (a *App) GetAccounts() models.Response[[]services.AccountProfile] {
+func (a *App) GetAccounts() models.Response[[]session.AccountProfile] {
 	return a.account.GetAccounts(a.ctx)
 }
 
@@ -171,21 +194,82 @@ func (a *App) RemoveAccount(id string) models.Response[bool] {
 }
 
 // RefreshAccount queries latest credits and cookies from the active Flow tab.
-func (a *App) RefreshAccount(id string) models.Response[services.AccountProfile] {
+func (a *App) RefreshAccount(id string) models.Response[session.AccountProfile] {
 	return a.account.RefreshAccount(a.ctx, id)
 }
 
 // GetImageModels queries available image generation models from Google Flow using the rotated account pool.
-func (a *App) GetImageModels() models.Response[[]services.FlowModel] {
-	return a.flowImage.GetImageModels(a.ctx)
+func (a *App) GetImageModels() models.Response[[]flow.FlowModel] {
+	return a.flow.GetImageModels(a.ctx)
 }
 
 // GetActiveRotationCount returns the number of connected accounts with valid cookies available for rotation.
 func (a *App) GetActiveRotationCount() models.Response[int] {
-	return a.flowImage.GetActiveRotationCount(a.ctx)
+	return a.flow.GetActiveRotationCount(a.ctx)
 }
 
 // GenerateImages dispatches image generation using a rotated account.
-func (a *App) GenerateImages(req services.GenerateImageRequest) models.Response[[]services.GeneratedImageItem] {
-	return a.flowImage.GenerateImages(a.ctx, req)
+func (a *App) GenerateImages(req flow.GenerateImageRequest) models.Response[[]flow.GeneratedImageItem] {
+	return a.flow.GenerateImages(a.ctx, req)
+}
+
+// SaveMedia asks the user for a folder and copies a downloaded image or video there.
+func (a *App) SaveMedia(localURL string) models.Response[media.SaveResult] {
+	return a.media.Save(localURL, func(defaultDir string) (string, error) {
+		return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+			Title:                "Chọn thư mục lưu",
+			DefaultDirectory:     defaultDir,
+			CanCreateDirectories: true,
+		})
+	})
+}
+
+// GetStudioConfig returns the choices and limits shared by the Flow studios.
+func (a *App) GetStudioConfig() models.Response[flow.StudioConfig] {
+	return a.flow.GetStudioConfig(a.ctx)
+}
+
+// GetVideoModels lists the text-to-video model families of the next account in rotation.
+func (a *App) GetVideoModels() models.Response[[]flow.FlowVideoModel] {
+	return a.flow.GetVideoModels(a.ctx)
+}
+
+// GenerateVideos creates videos from a prompt and waits for Flow to finish them.
+func (a *App) GenerateVideos(req flow.GenerateVideoRequest) models.Response[[]flow.GeneratedVideoItem] {
+	return a.flow.GenerateVideos(a.ctx, req)
+}
+
+// PickVideo asks the user for a video file and copies it into the media folder.
+func (a *App) PickVideo() models.Response[media.ImportResult] {
+	patterns := make([]string, 0, len(media.VideoTypes))
+	for ext := range media.VideoTypes {
+		patterns = append(patterns, "*"+ext)
+	}
+	slices.Sort(patterns)
+	return a.media.ImportVideo(func() (string, error) {
+		return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+			Title:   "Chọn video gốc",
+			Filters: []runtime.FileFilter{{DisplayName: "Video", Pattern: strings.Join(patterns, ";")}},
+		})
+	})
+}
+
+// UploadSourceVideo uploads an imported source video to Google Flow via Scotty.
+func (a *App) UploadSourceVideo(localURL string) models.Response[flow.UploadedSourceVideo] {
+	return a.flow.UploadSourceVideo(a.ctx, localURL)
+}
+
+// GetEditModels lists the model families that can edit a video for the next account.
+func (a *App) GetEditModels() models.Response[[]flow.FlowEditModel] {
+	return a.flow.GetEditModels(a.ctx)
+}
+
+// EditVideos rewrites an imported video with a prompt and waits for Flow to finish.
+func (a *App) EditVideos(req flow.EditVideoRequest) models.Response[[]flow.GeneratedVideoItem] {
+	return a.flow.EditVideos(a.ctx, req)
+}
+
+// ListNodes describes every node type the engine can run (for the node editor).
+func (a *App) ListNodes() models.Response[[]engine.Spec] {
+	return models.SuccessResponse(a.nodes.Specs())
 }

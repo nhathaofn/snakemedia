@@ -10,8 +10,16 @@ export function CheckLoginStatus(arg1) {
   return window['go']['main']['App']['CheckLoginStatus'](arg1);
 }
 
+export function EditVideos(arg1) {
+  return window['go']['main']['App']['EditVideos'](arg1);
+}
+
 export function GenerateImages(arg1) {
   return window['go']['main']['App']['GenerateImages'](arg1);
+}
+
+export function GenerateVideos(arg1) {
+  return window['go']['main']['App']['GenerateVideos'](arg1);
 }
 
 export function GetAccounts() {
@@ -30,20 +38,40 @@ export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }
 
+export function GetEditModels() {
+  return window['go']['main']['App']['GetEditModels']();
+}
+
 export function GetImageModels() {
   return window['go']['main']['App']['GetImageModels']();
+}
+
+export function GetStudioConfig() {
+  return window['go']['main']['App']['GetStudioConfig']();
 }
 
 export function GetSystemInfo() {
   return window['go']['main']['App']['GetSystemInfo']();
 }
 
+export function GetVideoModels() {
+  return window['go']['main']['App']['GetVideoModels']();
+}
+
 export function LaunchLoginBrowser(arg1) {
   return window['go']['main']['App']['LaunchLoginBrowser'](arg1);
 }
 
+export function ListNodes() {
+  return window['go']['main']['App']['ListNodes']();
+}
+
 export function OpenAccountBrowser(arg1) {
   return window['go']['main']['App']['OpenAccountBrowser'](arg1);
+}
+
+export function PickVideo() {
+  return window['go']['main']['App']['PickVideo']();
 }
 
 export function RefreshAccount(arg1) {
@@ -54,6 +82,14 @@ export function RemoveAccount(arg1) {
   return window['go']['main']['App']['RemoveAccount'](arg1);
 }
 
+export function SaveMedia(arg1) {
+  return window['go']['main']['App']['SaveMedia'](arg1);
+}
+
 export function UpdateConfig(arg1) {
   return window['go']['main']['App']['UpdateConfig'](arg1);
+}
+
+export function UploadSourceVideo(arg1) {
+  return window['go']['main']['App']['UploadSourceVideo'](arg1);
 }

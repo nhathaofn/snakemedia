@@ -6,6 +6,9 @@ import type { SegmentedOption } from '../components/ui/SegmentedControl/Segmente
 /** Default auto-dismiss delay for toasts; 0 keeps a toast until dismissed. */
 export const DEFAULT_TOAST_DURATION_MS = 4000;
 
+/** The Account page re-verifies, on open, accounts last verified longer ago than this. */
+export const ACCOUNT_AUTO_REFRESH_AFTER_MS = 60_000;
+
 /** Media query used to resolve the `system` theme. */
 export const PREFERS_DARK_QUERY = '(prefers-color-scheme: dark)';
 

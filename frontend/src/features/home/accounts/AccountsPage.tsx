@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ExternalLink, Plus, RefreshCw, Trash2, User } from 'lucide-react';
 import './AccountsPage.css';
 import { Button, Card, Icon } from '../../../components/ui';
+import { ACCOUNT_AUTO_REFRESH_AFTER_MS } from '../../../constants';
 import { api, unwrap } from '../../../services';
 import { useAppStore } from '../../../stores';
 import { AccountStatus, AccountTier } from '../../../types';
@@ -54,12 +55,12 @@ export const AccountsPage: React.FC = () => {
         setProfiles(list);
         setLoading(false);
 
-        // Auto-refresh accounts in background on startup / page load if they were verified before
+        // Auto-refresh accounts in background on page load if they were verified before
         for (const account of list) {
           if (!active) break;
           const isFresh =
             account.lastVerifiedAt &&
-            Date.now() - new Date(account.lastVerifiedAt).getTime() < 60_000;
+            Date.now() - new Date(account.lastVerifiedAt).getTime() < ACCOUNT_AUTO_REFRESH_AFTER_MS;
           if (account.status === AccountStatus.Connected && isFresh) {
             continue;
           }

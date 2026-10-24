@@ -92,7 +92,10 @@
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --account-card-min-width: 360px;
-  --flow-image-panel-width: 240px;
+  --flow-studio-panel-width: 240px;
+  --flow-edit-panel-width: 340px;
+  --flow-edit-preview-max-height: 240px;
+  --flow-edit-trim-label-width: 56px;
   --account-avatar-size: 40px;
   --account-email-max-width: 170px;
   --account-detail-max-width: 220px;

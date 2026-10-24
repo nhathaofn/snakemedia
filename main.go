@@ -10,11 +10,12 @@ import (
 
 	"SnakeMedia/internal/buildinfo"
 	"SnakeMedia/internal/config"
+	"SnakeMedia/internal/engine"
 	"SnakeMedia/internal/events"
 	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/models"
-	"SnakeMedia/internal/services"
-	"SnakeMedia/internal/services/chrome"
+	"SnakeMedia/internal/providers/flow/chrome"
+	"SnakeMedia/internal/providers/flow/session"
 )
 
 //go:embed all:frontend/dist
@@ -58,7 +59,8 @@ func run() error {
 		// The frontend renders its own title bar (components/layout/TitleBar).
 		Frameless: true,
 		AssetServer: &assetserver.Options{
-			Assets: assets,
+			Assets:     assets,
+			Middleware: app.media.Middleware,
 		},
 		BackgroundColour: windowBackground(cfg.Theme),
 		OnStartup:        app.startup,
@@ -77,7 +79,9 @@ func run() error {
 			config.AllLogLevels,
 			events.AllEvents,
 			models.AllCodes,
-			services.AllAccountStatuses,
+			session.AllAccountStatuses,
+			engine.AllPortTypes,
+			engine.AllParamKinds,
 			chrome.AllTiers,
 		},
 	})

@@ -37,11 +37,17 @@ Production desktop application scaffold built with Go and Wails v2, using Vite +
 | `internal/logger/` | `log/slog` logger: file + stdout, size rotation at startup, runtime level changes | `logger.go` |
 | `internal/events/` | Typed IPC event names (`events.Event`) and dispatcher | `events.go` |
 | `internal/models/` | `models.Response[T]` envelope and `models.Code` result codes | `response.go` |
-| `internal/services/` | Domain services (`SystemService`, `SettingsService`) | — |
+| `internal/services/` | App services (`SystemService`, `SettingsService`) | — |
+| `internal/engine/` | Node specs (typed ports, settings), registry, typed node adapter | `node.go` |
+| `internal/media/` | Downloaded and imported media store, `/flow-media/` middleware, `media.save` node | `store.go` |
+| `internal/providers/` | `Provider` interface; one package per external service | `provider.go` |
+| `internal/providers/flow/` | Google Flow provider: rotation, projects, model catalogue, image/video generation, video edit, nodes | `provider.go`, `nodes.go`, `edit.go` |
+| `internal/providers/flow/session/` | Google account sessions: Chrome profiles, DPAPI store, session sync | `account.go` |
+| `internal/providers/flow/chrome/` | Chrome/CDP, Flow HTTP client, Scotty video upload, reCAPTCHA (do not edit recaptcha.go) | `batch.go`, `upload.go` |
 | `pkg/utils/` | Reusable utilities (atomic writes, file checks, byte formatting) | `fileutils.go` |
 | `tools/gofmtcheck/` | Cross-platform gofmt gate used by CI and verify | — |
 | `frontend/src/components/` | UI primitives (`ui/`), desktop shell (`layout/`: TitleBar, Header, Sidebar), feedback (`feedback/`) | — |
-| `frontend/src/features/` | One folder per header section (`home/`, `flow/`, `settings/`): `section.tsx` manifest + one sub-folder per feature | `<section>/section.tsx` |
+| `frontend/src/features/` | One folder per header section (`home/`, `flow/`, `settings/`): `section.tsx` manifest + one sub-folder per feature (Flow: `image/`, `video/`, `edit/`, shared UI in `shared/`) | `<section>/section.tsx` |
 | `frontend/src/routes/` | Section registry (`registry.ts`) → router, header tabs, per-section sidebar; `useActiveSection` | `registry.ts` |
 | `frontend/src/stores/` | Global state with Zustand (`useAppStore`) | `appStore.ts` |
 | `frontend/src/services/` | Typed bridge over generated bindings (`api`, `invoke`, `unwrap`), runtime detection | `api.ts` |
@@ -55,7 +61,7 @@ Production desktop application scaffold built with Go and Wails v2, using Vite +
 
 ## Conventions
 - **Zero hardcode:** identity/version come from `wails.json`; user-tunable values live in `internal/config`; shared enums (theme, log level, events, response codes) are Go types bound via `EnumBind` and consumed in TS through `frontend/src/types/backend.ts`. Never redeclare a backend DTO or enum in TypeScript.
-- Native system interactions, OS file access, and heavy background tasks belong in `internal/services/` in Go.
+- Native system interactions, OS file access, and heavy background tasks belong in Go: external services in `internal/providers/<name>/` (exposed as engine nodes), generated files in `internal/media/`, app-level services in `internal/services/`.
 - Go methods exposed to the frontend return `models.Response[T]` with a `models.Code`; call them only through `frontend/src/services/api.ts`.
 - Navigation: header tabs are `AppSection`s; the sidebar lists only the active section's features, with `placement: 'sidebar'` sections (Settings) pinned at its bottom. Manifests are `as const satisfies AppSection`; navigate with the typed `ROUTES` map (`ROUTES.home.accounts`), never with path string literals. A page that lays out its own panels sets `layout: 'full'` on its feature instead of adding feature selectors to layout CSS. New screen: add one feature to `frontend/src/features/<section>/section.tsx`. New header tab: create that manifest and add it to `APP_SECTIONS` in `frontend/src/routes/registry.ts`. Router, header and sidebar derive from it.
 - Colours, sizes and timings in CSS come from `frontend/src/styles/tokens.css`.
@@ -73,6 +79,8 @@ Production desktop application scaffold built with Go and Wails v2, using Vite +
 - 0003 Single Source of Truth and Production Hardening → docs/decisions/0003-single-source-of-truth-and-hardening.md
 - 0004 Sectioned Navigation: Header Tabs Own the Sidebar → docs/decisions/0004-sectioned-navigation.md
 - 0005 Flow Image reCAPTCHA Enterprise Token Minting and Image-to-Image Pipeline → docs/decisions/0005-flow-image-recaptcha-and-image-to-image.md
+- 0006 Providers, Engine Nodes and a Shared Media Store → docs/decisions/0006-provider-engine-modules.md
+- 0007 Flow Video Editing: Scotty Upload and jIps6 → docs/decisions/0007-flow-video-edit.md
 
 ## Deeper docs
 - Decisions: `docs/decisions/README.md`

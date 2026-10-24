@@ -89,6 +89,9 @@ export namespace config {
 	    refreshCooldownSeconds: number;
 	    maxResponseBytes: number;
 	    maxDiscoveryScripts: number;
+	    generationTimeoutSeconds: number;
+	    videoGenerationTimeoutSeconds: number;
+	    videoPollIntervalMs: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new AccountConfig(source);
@@ -104,6 +107,9 @@ export namespace config {
 	        this.refreshCooldownSeconds = source["refreshCooldownSeconds"];
 	        this.maxResponseBytes = source["maxResponseBytes"];
 	        this.maxDiscoveryScripts = source["maxDiscoveryScripts"];
+	        this.generationTimeoutSeconds = source["generationTimeoutSeconds"];
+	        this.videoGenerationTimeoutSeconds = source["videoGenerationTimeoutSeconds"];
+	        this.videoPollIntervalMs = source["videoPollIntervalMs"];
 	    }
 	}
 	export class AppConfig {
@@ -147,12 +153,449 @@ export namespace config {
 
 }
 
+export namespace engine {
+	
+	export enum ParamKind {
+	    Integer = "integer",
+	    Select = "select",
+	    Text = "text",
+	}
+	export enum PortType {
+	    Image = "image",
+	    Media = "media",
+	    Text = "text",
+	    Video = "video",
+	}
+	export class Param {
+	    name: string;
+	    label: string;
+	    kind: ParamKind;
+	    optionsFrom?: string;
+	    min?: number;
+	    max?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Param(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.label = source["label"];
+	        this.kind = source["kind"];
+	        this.optionsFrom = source["optionsFrom"];
+	        this.min = source["min"];
+	        this.max = source["max"];
+	    }
+	}
+	export class Port {
+	    name: string;
+	    label: string;
+	    type: PortType;
+	    multiple: boolean;
+	    optional: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Port(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.label = source["label"];
+	        this.type = source["type"];
+	        this.multiple = source["multiple"];
+	        this.optional = source["optional"];
+	    }
+	}
+	export class Spec {
+	    type: string;
+	    provider: string;
+	    label: string;
+	    description: string;
+	    inputs: Port[];
+	    outputs: Port[];
+	    params: Param[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Spec(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.type = source["type"];
+	        this.provider = source["provider"];
+	        this.label = source["label"];
+	        this.description = source["description"];
+	        this.inputs = this.convertValues(source["inputs"], Port);
+	        this.outputs = this.convertValues(source["outputs"], Port);
+	        this.params = this.convertValues(source["params"], Param);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace events {
 	
 	export enum Event {
 	    AppReady = "app:ready",
 	    ConfigUpdated = "config:updated",
 	    ErrorOccurred = "error:occurred",
+	}
+
+}
+
+export namespace flow {
+	
+	export class EditVideoRequest {
+	    prompt: string;
+	    modelId: string;
+	    projectId?: string;
+	    sourceUrl: string;
+	    mediaId?: string;
+	    width?: number;
+	    height?: number;
+	    trimStartMs: number;
+	    trimEndMs: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditVideoRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.prompt = source["prompt"];
+	        this.modelId = source["modelId"];
+	        this.projectId = source["projectId"];
+	        this.sourceUrl = source["sourceUrl"];
+	        this.mediaId = source["mediaId"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.trimStartMs = source["trimStartMs"];
+	        this.trimEndMs = source["trimEndMs"];
+	    }
+	}
+	export class FlowEditModel {
+	    id: string;
+	    name: string;
+	    default: boolean;
+	    duration: number;
+	    maxInputSeconds: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new FlowEditModel(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.default = source["default"];
+	        this.duration = source["duration"];
+	        this.maxInputSeconds = source["maxInputSeconds"];
+	    }
+	}
+	export class FlowModel {
+	    id: string;
+	    name: string;
+	    description: string;
+	    default: boolean;
+	    maxReferenceImages: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new FlowModel(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.default = source["default"];
+	        this.maxReferenceImages = source["maxReferenceImages"];
+	    }
+	}
+	export class FlowVideoModel {
+	    id: string;
+	    name: string;
+	    default: boolean;
+	    durations: number[];
+	    aspectRatios: string[];
+	    resolutions: string[];
+	    maxReferenceImages: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new FlowVideoModel(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.default = source["default"];
+	        this.durations = source["durations"];
+	        this.aspectRatios = source["aspectRatios"];
+	        this.resolutions = source["resolutions"];
+	        this.maxReferenceImages = source["maxReferenceImages"];
+	    }
+	}
+	export class ReferenceImage {
+	    base64: string;
+	    mimeType: string;
+	    fileName: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ReferenceImage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.base64 = source["base64"];
+	        this.mimeType = source["mimeType"];
+	        this.fileName = source["fileName"];
+	    }
+	}
+	export class GenerateImageRequest {
+	    prompt: string;
+	    modelId: string;
+	    aspectRatio: string;
+	    count: number;
+	    references?: ReferenceImage[];
+	    projectId?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GenerateImageRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.prompt = source["prompt"];
+	        this.modelId = source["modelId"];
+	        this.aspectRatio = source["aspectRatio"];
+	        this.count = source["count"];
+	        this.references = this.convertValues(source["references"], ReferenceImage);
+	        this.projectId = source["projectId"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class GenerateVideoRequest {
+	    prompt: string;
+	    modelId: string;
+	    aspectRatio: string;
+	    duration: number;
+	    resolution: string;
+	    count: number;
+	    projectId?: string;
+	    references?: ReferenceImage[];
+	
+	    static createFrom(source: any = {}) {
+	        return new GenerateVideoRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.prompt = source["prompt"];
+	        this.modelId = source["modelId"];
+	        this.aspectRatio = source["aspectRatio"];
+	        this.duration = source["duration"];
+	        this.resolution = source["resolution"];
+	        this.count = source["count"];
+	        this.projectId = source["projectId"];
+	        this.references = this.convertValues(source["references"], ReferenceImage);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class GeneratedImageItem {
+	    id: string;
+	    url: string;
+	    prompt: string;
+	    model: string;
+	    aspectRatio: string;
+	    createdAt: string;
+	    modelName: string;
+	    localUrl?: string;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GeneratedImageItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.url = source["url"];
+	        this.prompt = source["prompt"];
+	        this.model = source["model"];
+	        this.aspectRatio = source["aspectRatio"];
+	        this.createdAt = source["createdAt"];
+	        this.modelName = source["modelName"];
+	        this.localUrl = source["localUrl"];
+	        this.error = source["error"];
+	    }
+	}
+	export class GeneratedVideoItem {
+	    id: string;
+	    prompt: string;
+	    model: string;
+	    aspectRatio: string;
+	    duration: number;
+	    resolution: string;
+	    createdAt: string;
+	    modelName: string;
+	    localUrl?: string;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GeneratedVideoItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.prompt = source["prompt"];
+	        this.model = source["model"];
+	        this.aspectRatio = source["aspectRatio"];
+	        this.duration = source["duration"];
+	        this.resolution = source["resolution"];
+	        this.createdAt = source["createdAt"];
+	        this.modelName = source["modelName"];
+	        this.localUrl = source["localUrl"];
+	        this.error = source["error"];
+	    }
+	}
+	
+	export class StudioConfig {
+	    imageAspectRatios: string[];
+	    defaultImageRatio: string;
+	    maxImages: number;
+	    maxVideos: number;
+	    maxReferenceBytes: number;
+	    referenceMimeTypes: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new StudioConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.imageAspectRatios = source["imageAspectRatios"];
+	        this.defaultImageRatio = source["defaultImageRatio"];
+	        this.maxImages = source["maxImages"];
+	        this.maxVideos = source["maxVideos"];
+	        this.maxReferenceBytes = source["maxReferenceBytes"];
+	        this.referenceMimeTypes = source["referenceMimeTypes"];
+	    }
+	}
+	export class UploadedSourceVideo {
+	    mediaId: string;
+	    workflowId: string;
+	    displayName: string;
+	    width: number;
+	    height: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new UploadedSourceVideo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mediaId = source["mediaId"];
+	        this.workflowId = source["workflowId"];
+	        this.displayName = source["displayName"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	    }
+	}
+
+}
+
+export namespace media {
+	
+	export class ImportResult {
+	    localUrl: string;
+	    fileName: string;
+	    size: number;
+	    contentType: string;
+	    canceled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImportResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.localUrl = source["localUrl"];
+	        this.fileName = source["fileName"];
+	        this.size = source["size"];
+	        this.contentType = source["contentType"];
+	        this.canceled = source["canceled"];
+	    }
+	}
+	export class SaveResult {
+	    path: string;
+	    canceled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new SaveResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.canceled = source["canceled"];
+	    }
 	}
 
 }
@@ -238,20 +681,20 @@ export namespace models {
 		    return a;
 		}
 	}
-	export class Response_SnakeMedia_internal_services_AccountProfile_ {
+	export class Response_SnakeMedia_internal_media_ImportResult_ {
 	    success: boolean;
-	    data: services.AccountProfile;
+	    data: media.ImportResult;
 	    error?: string;
 	    code: Code;
 	
 	    static createFrom(source: any = {}) {
-	        return new Response_SnakeMedia_internal_services_AccountProfile_(source);
+	        return new Response_SnakeMedia_internal_media_ImportResult_(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], services.AccountProfile);
+	        this.data = this.convertValues(source["data"], media.ImportResult);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }
@@ -274,20 +717,20 @@ export namespace models {
 		    return a;
 		}
 	}
-	export class Response_SnakeMedia_internal_services_LoginProcessInfo_ {
+	export class Response_SnakeMedia_internal_media_SaveResult_ {
 	    success: boolean;
-	    data: services.LoginProcessInfo;
+	    data: media.SaveResult;
 	    error?: string;
 	    code: Code;
 	
 	    static createFrom(source: any = {}) {
-	        return new Response_SnakeMedia_internal_services_LoginProcessInfo_(source);
+	        return new Response_SnakeMedia_internal_media_SaveResult_(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], services.LoginProcessInfo);
+	        this.data = this.convertValues(source["data"], media.SaveResult);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }
@@ -310,20 +753,164 @@ export namespace models {
 		    return a;
 		}
 	}
-	export class Response_SnakeMedia_internal_services_LoginStatusInfo_ {
+	export class Response_SnakeMedia_internal_providers_flow_StudioConfig_ {
 	    success: boolean;
-	    data: services.LoginStatusInfo;
+	    data: flow.StudioConfig;
 	    error?: string;
 	    code: Code;
 	
 	    static createFrom(source: any = {}) {
-	        return new Response_SnakeMedia_internal_services_LoginStatusInfo_(source);
+	        return new Response_SnakeMedia_internal_providers_flow_StudioConfig_(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], services.LoginStatusInfo);
+	        this.data = this.convertValues(source["data"], flow.StudioConfig);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_flow_UploadedSourceVideo_ {
+	    success: boolean;
+	    data: flow.UploadedSourceVideo;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_flow_UploadedSourceVideo_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], flow.UploadedSourceVideo);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_flow_session_AccountProfile_ {
+	    success: boolean;
+	    data: session.AccountProfile;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_flow_session_AccountProfile_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], session.AccountProfile);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_flow_session_LoginProcessInfo_ {
+	    success: boolean;
+	    data: session.LoginProcessInfo;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_flow_session_LoginProcessInfo_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], session.LoginProcessInfo);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_flow_session_LoginStatusInfo_ {
+	    success: boolean;
+	    data: session.LoginStatusInfo;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_flow_session_LoginStatusInfo_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], session.LoginStatusInfo);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }
@@ -382,20 +969,20 @@ export namespace models {
 		    return a;
 		}
 	}
-	export class Response___SnakeMedia_internal_services_AccountProfile_ {
+	export class Response___SnakeMedia_internal_engine_Spec_ {
 	    success: boolean;
-	    data: services.AccountProfile[];
+	    data: engine.Spec[];
 	    error?: string;
 	    code: Code;
 	
 	    static createFrom(source: any = {}) {
-	        return new Response___SnakeMedia_internal_services_AccountProfile_(source);
+	        return new Response___SnakeMedia_internal_engine_Spec_(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], services.AccountProfile);
+	        this.data = this.convertValues(source["data"], engine.Spec);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }
@@ -418,20 +1005,20 @@ export namespace models {
 		    return a;
 		}
 	}
-	export class Response___SnakeMedia_internal_services_FlowModel_ {
+	export class Response___SnakeMedia_internal_providers_flow_FlowEditModel_ {
 	    success: boolean;
-	    data: services.FlowModel[];
+	    data: flow.FlowEditModel[];
 	    error?: string;
 	    code: Code;
 	
 	    static createFrom(source: any = {}) {
-	        return new Response___SnakeMedia_internal_services_FlowModel_(source);
+	        return new Response___SnakeMedia_internal_providers_flow_FlowEditModel_(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], services.FlowModel);
+	        this.data = this.convertValues(source["data"], flow.FlowEditModel);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }
@@ -454,20 +1041,164 @@ export namespace models {
 		    return a;
 		}
 	}
-	export class Response___SnakeMedia_internal_services_GeneratedImageItem_ {
+	export class Response___SnakeMedia_internal_providers_flow_FlowModel_ {
 	    success: boolean;
-	    data: services.GeneratedImageItem[];
+	    data: flow.FlowModel[];
 	    error?: string;
 	    code: Code;
 	
 	    static createFrom(source: any = {}) {
-	        return new Response___SnakeMedia_internal_services_GeneratedImageItem_(source);
+	        return new Response___SnakeMedia_internal_providers_flow_FlowModel_(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], services.GeneratedImageItem);
+	        this.data = this.convertValues(source["data"], flow.FlowModel);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response___SnakeMedia_internal_providers_flow_FlowVideoModel_ {
+	    success: boolean;
+	    data: flow.FlowVideoModel[];
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response___SnakeMedia_internal_providers_flow_FlowVideoModel_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], flow.FlowVideoModel);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response___SnakeMedia_internal_providers_flow_GeneratedImageItem_ {
+	    success: boolean;
+	    data: flow.GeneratedImageItem[];
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response___SnakeMedia_internal_providers_flow_GeneratedImageItem_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], flow.GeneratedImageItem);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response___SnakeMedia_internal_providers_flow_GeneratedVideoItem_ {
+	    success: boolean;
+	    data: flow.GeneratedVideoItem[];
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response___SnakeMedia_internal_providers_flow_GeneratedVideoItem_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], flow.GeneratedVideoItem);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response___SnakeMedia_internal_providers_flow_session_AccountProfile_ {
+	    success: boolean;
+	    data: session.AccountProfile[];
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response___SnakeMedia_internal_providers_flow_session_AccountProfile_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], session.AccountProfile);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }
@@ -531,6 +1262,29 @@ export namespace models {
 
 export namespace services {
 	
+	export class SystemInfo {
+	    os: string;
+	    arch: string;
+	    goVersion: string;
+	    uptime: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SystemInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.os = source["os"];
+	        this.arch = source["arch"];
+	        this.goVersion = source["goVersion"];
+	        this.uptime = source["uptime"];
+	    }
+	}
+
+}
+
+export namespace session {
+	
 	export enum AccountStatus {
 	    Connected = "connected",
 	    Error = "error",
@@ -589,74 +1343,6 @@ export namespace services {
 		    }
 		    return a;
 		}
-	}
-	export class FlowModel {
-	    id: string;
-	    name: string;
-	    description: string;
-	    alias: string;
-	    default: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new FlowModel(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.name = source["name"];
-	        this.description = source["description"];
-	        this.alias = source["alias"];
-	        this.default = source["default"];
-	    }
-	}
-	export class GenerateImageRequest {
-	    prompt: string;
-	    modelId: string;
-	    aspectRatio: string;
-	    count: number;
-	    referenceImageBase64?: string;
-	    referenceMimeType?: string;
-	    referenceFileName?: string;
-	    projectId?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new GenerateImageRequest(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.prompt = source["prompt"];
-	        this.modelId = source["modelId"];
-	        this.aspectRatio = source["aspectRatio"];
-	        this.count = source["count"];
-	        this.referenceImageBase64 = source["referenceImageBase64"];
-	        this.referenceMimeType = source["referenceMimeType"];
-	        this.referenceFileName = source["referenceFileName"];
-	        this.projectId = source["projectId"];
-	    }
-	}
-	export class GeneratedImageItem {
-	    id: string;
-	    url: string;
-	    prompt: string;
-	    model: string;
-	    aspectRatio: string;
-	    createdAt: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new GeneratedImageItem(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.url = source["url"];
-	        this.prompt = source["prompt"];
-	        this.model = source["model"];
-	        this.aspectRatio = source["aspectRatio"];
-	        this.createdAt = source["createdAt"];
-	    }
 	}
 	export class LoginProcessInfo {
 	    sessionId: string;
@@ -735,24 +1421,6 @@ export namespace services {
 		    }
 		    return a;
 		}
-	}
-	export class SystemInfo {
-	    os: string;
-	    arch: string;
-	    goVersion: string;
-	    uptime: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new SystemInfo(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.os = source["os"];
-	        this.arch = source["arch"];
-	        this.goVersion = source["goVersion"];
-	        this.uptime = source["uptime"];
-	    }
 	}
 
 }
