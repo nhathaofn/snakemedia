@@ -15,6 +15,8 @@ export interface SelectFieldProps<T extends string | number> {
   loading?: boolean;
   /** Replaces the select with an error banner (e.g. models could not be fetched). */
   error?: { title: string; message: string } | null;
+  /** Text shown when the backend returned no options. */
+  emptyLabel?: string;
 }
 
 /** Labelled dropdown used for model, ratio and duration on every Flow page. */
@@ -26,6 +28,7 @@ export function SelectField<T extends string | number>({
   onChange,
   loading = false,
   error = null,
+  emptyLabel = 'Không có lựa chọn',
 }: SelectFieldProps<T>) {
   return (
     <div className="flow-field-group">
@@ -50,7 +53,7 @@ export function SelectField<T extends string | number>({
       ) : options.length === 0 ? (
         <div className="flow-select-wrapper">
           <select id={id} className="flow-select" disabled>
-            <option>Không có lựa chọn</option>
+            <option>{emptyLabel}</option>
           </select>
           <ChevronDown size={14} className="flow-select-arrow" />
         </div>

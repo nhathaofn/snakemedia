@@ -5,13 +5,21 @@ import { api } from '../../../services/api';
 
 /**
  * Tools panel of one mode. Fields stack from the top; the account rotation status
- * is always pinned to the bottom, identically on every Flow page.
+ * can be hidden when the mode has its own footer action.
  */
-export function FlowModePanel({ children }: { children: ReactNode }) {
+export function FlowModePanel({
+  children,
+  showRotationStatus = true,
+  className,
+}: {
+  children: ReactNode;
+  showRotationStatus?: boolean;
+  className?: string;
+}) {
   return (
-    <div className="flow-mode-panel">
+    <div className={`flow-mode-panel${className ? ` ${className}` : ''}`}>
       {children}
-      <RotationStatusBadge />
+      {showRotationStatus && <RotationStatusBadge />}
     </div>
   );
 }

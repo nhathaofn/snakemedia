@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"SnakeMedia/internal/models"
+	"github.com/google/uuid"
 )
 
 func TestPutUsesContentTypeExtension(t *testing.T) {
@@ -66,6 +67,66 @@ func TestSaveCopiesIntoChosenFolder(t *testing.T) {
 		if strings.Contains(bad, "..") && res.Code != models.CodeInvalidArgument {
 			t.Errorf("%q: path traversal must be rejected as invalid", bad)
 		}
+	}
+}
+
+func TestSaveImageToTaskFolderKeepsBatchImagesTogether(t *testing.T) {
+	store := NewStore(t.TempDir())
+	firstImage, err := store.Put("image-one", "image/png", ".png", []byte("PNG-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondImage, err := store.Put("image-two", "image/png", ".png", []byte("PNG-2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputDir := t.TempDir()
+	taskID := uuid.NewString()
+
+	first := store.SaveImageToTaskFolder(firstImage, outputDir, taskID)
+	second := store.SaveImageToTaskFolder(secondImage, outputDir, taskID)
+	if !first.Success || !second.Success {
+		t.Fatalf("could not save task images: %+v %+v", first, second)
+	}
+	firstDir := filepath.Dir(first.Data.Path)
+	if firstDir != filepath.Dir(second.Data.Path) || filepath.Base(firstDir) != "task-"+taskID {
+		t.Fatalf("images from one batch must share its task folder: %q %q", first.Data.Path, second.Data.Path)
+	}
+	for path, expected := range map[string]string{first.Data.Path: "PNG-1", second.Data.Path: "PNG-2"} {
+		data, err := os.ReadFile(path)
+		if err != nil || string(data) != expected {
+			t.Errorf("saved file %q = %q, %v; want %q", path, data, err, expected)
+		}
+	}
+
+	otherTask := store.SaveImageToTaskFolder(firstImage, outputDir, uuid.NewString())
+	if !otherTask.Success || filepath.Dir(otherTask.Data.Path) == firstDir {
+		t.Fatalf("a new prompt batch must use a new task folder: %+v", otherTask)
+	}
+}
+
+func TestSaveImageToTaskFolderRejectsInvalidInputs(t *testing.T) {
+	store := NewStore(t.TempDir())
+	image, err := store.Put("image", "image/png", ".png", []byte("PNG"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	video, err := store.Put("video", "video/mp4", ".mp4", []byte("MP4"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, localURL, outputDir, taskID string
+	}{
+		{"invalid task id", image, t.TempDir(), "../outside"},
+		{"missing folder", image, filepath.Join(t.TempDir(), "missing"), uuid.NewString()},
+		{"video result", video, t.TempDir(), uuid.NewString()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if response := store.SaveImageToTaskFolder(tc.localURL, tc.outputDir, tc.taskID); response.Success {
+				t.Fatalf("invalid save input was accepted: %+v", response)
+			}
+		})
 	}
 }
 

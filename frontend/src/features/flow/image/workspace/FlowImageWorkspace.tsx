@@ -3,7 +3,7 @@ import { AlertCircle, Copy, Download, Maximize2, X } from 'lucide-react';
 import './FlowImageWorkspace.css';
 import { api } from '../../../../services/api';
 import { useAppStore } from '../../../../stores';
-import { GenerateImageRequest } from '../../../../types';
+import { FlowImageProjectMode, GenerateImageRequest } from '../../../../types';
 import {
   ConversationGallery,
   PromptBar,
@@ -52,6 +52,7 @@ export const FlowImageWorkspace: React.FC = () => {
             prompt: current.prompt.trim(),
             modelId: current.selectedModel,
             aspectRatio: current.aspectRatio,
+            projectMode: FlowImageProjectMode.Single,
             count: current.quantity,
             references: current.referenceImages.map((img) => ({
               base64: img.base64,

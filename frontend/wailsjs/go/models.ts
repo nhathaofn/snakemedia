@@ -297,6 +297,15 @@ export namespace events {
 
 export namespace flow {
 	
+	export enum ImageProjectMode {
+	    All = "all",
+	    Single = "single",
+	}
+	export enum ImageQuality {
+	    FourK = "4K",
+	    OneK = "1K",
+	    TwoK = "2K",
+	}
 	export class EditVideoRequest {
 	    sourceId?: string;
 	    requestId?: string;
@@ -343,11 +352,32 @@ export namespace flow {
 	        this.maxInputSeconds = source["maxInputSeconds"];
 	    }
 	}
+	export class FlowImageProject {
+	    accountId: string;
+	    accountEmail: string;
+	    projectId: string;
+	    mode: ImageProjectMode;
+	    title: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FlowImageProject(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.accountId = source["accountId"];
+	        this.accountEmail = source["accountEmail"];
+	        this.projectId = source["projectId"];
+	        this.mode = source["mode"];
+	        this.title = source["title"];
+	    }
+	}
 	export class FlowModel {
 	    id: string;
 	    name: string;
 	    description: string;
 	    default: boolean;
+	    availableQualities: string[];
 	    maxReferenceImages: number;
 	
 	    static createFrom(source: any = {}) {
@@ -360,7 +390,40 @@ export namespace flow {
 	        this.name = source["name"];
 	        this.description = source["description"];
 	        this.default = source["default"];
+	        this.availableQualities = source["availableQualities"];
 	        this.maxReferenceImages = source["maxReferenceImages"];
+	    }
+	}
+	export class FlowProjectImage {
+	    id: string;
+	    name: string;
+	    previewUrl: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FlowProjectImage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.previewUrl = source["previewUrl"];
+	    }
+	}
+	export class FlowProjectImageReference {
+	    base64: string;
+	    mimeType: string;
+	    fileName: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FlowProjectImageReference(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.base64 = source["base64"];
+	        this.mimeType = source["mimeType"];
+	        this.fileName = source["fileName"];
 	    }
 	}
 	export class FlowVideoModel {
@@ -407,6 +470,8 @@ export namespace flow {
 	    prompt: string;
 	    modelId: string;
 	    aspectRatio: string;
+	    quality?: ImageQuality;
+	    projectMode?: ImageProjectMode;
 	    count: number;
 	    references?: ReferenceImage[];
 	    projectId?: string;
@@ -420,6 +485,8 @@ export namespace flow {
 	        this.prompt = source["prompt"];
 	        this.modelId = source["modelId"];
 	        this.aspectRatio = source["aspectRatio"];
+	        this.quality = source["quality"];
+	        this.projectMode = source["projectMode"];
 	        this.count = source["count"];
 	        this.references = this.convertValues(source["references"], ReferenceImage);
 	        this.projectId = source["projectId"];
@@ -623,6 +690,20 @@ export namespace flow {
 
 export namespace media {
 	
+	export class DirectoryResult {
+	    path: string;
+	    canceled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new DirectoryResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.canceled = source["canceled"];
+	    }
+	}
 	export class ImportResult {
 	    localUrl: string;
 	    fileName: string;
@@ -741,6 +822,42 @@ export namespace models {
 		    return a;
 		}
 	}
+	export class Response_SnakeMedia_internal_media_DirectoryResult_ {
+	    success: boolean;
+	    data: media.DirectoryResult;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_media_DirectoryResult_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], media.DirectoryResult);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Response_SnakeMedia_internal_media_ImportResult_ {
 	    success: boolean;
 	    data: media.ImportResult;
@@ -791,6 +908,42 @@ export namespace models {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
 	        this.data = this.convertValues(source["data"], media.SaveResult);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_flow_FlowProjectImageReference_ {
+	    success: boolean;
+	    data: flow.FlowProjectImageReference;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_flow_FlowProjectImageReference_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], flow.FlowProjectImageReference);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }
@@ -1101,6 +1254,42 @@ export namespace models {
 		    return a;
 		}
 	}
+	export class Response___SnakeMedia_internal_providers_flow_FlowImageProject_ {
+	    success: boolean;
+	    data: flow.FlowImageProject[];
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response___SnakeMedia_internal_providers_flow_FlowImageProject_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], flow.FlowImageProject);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Response___SnakeMedia_internal_providers_flow_FlowModel_ {
 	    success: boolean;
 	    data: flow.FlowModel[];
@@ -1115,6 +1304,42 @@ export namespace models {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
 	        this.data = this.convertValues(source["data"], flow.FlowModel);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response___SnakeMedia_internal_providers_flow_FlowProjectImage_ {
+	    success: boolean;
+	    data: flow.FlowProjectImage[];
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response___SnakeMedia_internal_providers_flow_FlowProjectImage_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], flow.FlowProjectImage);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }
@@ -1307,6 +1532,24 @@ export namespace models {
 	
 	    static createFrom(source: any = {}) {
 	        return new Response_int_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = source["data"];
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	}
+	export class Response_string_ {
+	    success: boolean;
+	    data: string;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_string_(source);
 	    }
 	
 	    constructor(source: any = {}) {

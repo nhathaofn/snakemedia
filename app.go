@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -28,16 +29,17 @@ import (
 // App is the Wails-bound controller. Every exported method is exposed to the
 // frontend, so keep internal helpers unexported.
 type App struct {
-	ctx        context.Context
-	info       buildinfo.Info
-	cfg        *config.Manager
-	system     *services.SystemService
-	settings   *services.SettingsService
-	account    *session.Service
-	flow       *flow.Provider
-	media      *media.Store
-	nodes      *engine.Registry
-	dispatcher *events.Dispatcher
+	ctx                  context.Context
+	info                 buildinfo.Info
+	cfg                  *config.Manager
+	system               *services.SystemService
+	settings             *services.SettingsService
+	account              *session.Service
+	flow                 *flow.Provider
+	media                *media.Store
+	imageOutputDirectory string
+	nodes                *engine.Registry
+	dispatcher           *events.Dispatcher
 }
 
 // NewApp resolves storage paths, loads configuration and initialises logging.
@@ -62,7 +64,7 @@ func NewApp(info buildinfo.Info) (*App, error) {
 
 	accounts := session.NewService(p, cfgManager)
 	store := media.NewStore(filepath.Join(p.DataDir, "media"))
-	flowProvider := flow.New(accounts, cfgManager, store)
+	flowProvider := flow.New(accounts, cfgManager, store, info.ProductName)
 	nodes := engine.NewRegistry()
 	for _, provider := range []providers.Provider{flowProvider} {
 		if err := nodes.Register(provider.Nodes()...); err != nil {
@@ -73,14 +75,15 @@ func NewApp(info buildinfo.Info) (*App, error) {
 		return nil, err
 	}
 	return &App{
-		info:     info,
-		cfg:      cfgManager,
-		system:   services.NewSystemService(info),
-		settings: services.NewSettingsService(cfgManager),
-		account:  accounts,
-		flow:     flowProvider,
-		media:    store,
-		nodes:    nodes,
+		info:                 info,
+		cfg:                  cfgManager,
+		system:               services.NewSystemService(info),
+		settings:             services.NewSettingsService(cfgManager),
+		account:              accounts,
+		flow:                 flowProvider,
+		media:                store,
+		imageOutputDirectory: filepath.Join(p.DataDir, "generated-images"),
+		nodes:                nodes,
 	}, nil
 }
 
@@ -224,9 +227,55 @@ func (a *App) SaveMedia(localURL string) models.Response[media.SaveResult] {
 	})
 }
 
+// GetDefaultImageOutputDirectory returns the per-user default folder for Image > All.
+func (a *App) GetDefaultImageOutputDirectory() models.Response[string] {
+	if err := os.MkdirAll(a.imageOutputDirectory, 0o755); err != nil {
+		return models.ErrorResponse[string]("Không tạo được thư mục lưu ảnh mặc định: "+err.Error(), models.CodeInternal)
+	}
+	return models.SuccessResponse(a.imageOutputDirectory)
+}
+
+// ChooseImageOutputDirectory opens the native folder picker for Image > All.
+func (a *App) ChooseImageOutputDirectory(defaultDir string) models.Response[media.DirectoryResult] {
+	dir, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:                "Chọn thư mục lưu ảnh",
+		DefaultDirectory:     defaultDir,
+		CanCreateDirectories: true,
+	})
+	if err != nil {
+		return models.ErrorResponse[media.DirectoryResult]("Không mở được hộp thoại chọn thư mục: "+err.Error(), models.CodeInternal)
+	}
+	if dir == "" {
+		return models.SuccessResponse(media.DirectoryResult{Canceled: true})
+	}
+	return models.SuccessResponse(media.DirectoryResult{Path: dir})
+}
+
+// SaveImageToTaskFolder saves one generated image under the selected root and
+// its prompt-batch folder.
+func (a *App) SaveImageToTaskFolder(localURL, outputDir, taskID string) models.Response[media.SaveResult] {
+	return a.media.SaveImageToTaskFolder(localURL, outputDir, taskID)
+}
+
 // GetStudioConfig returns the choices and limits shared by the Flow studios.
 func (a *App) GetStudioConfig() models.Response[flow.StudioConfig] {
 	return a.flow.GetStudioConfig(a.ctx)
+}
+
+// ListFlowImageProjects lists projects from connected Flow accounts for the
+// image reference library.
+func (a *App) ListFlowImageProjects(mode flow.ImageProjectMode) models.Response[[]flow.FlowImageProject] {
+	return a.flow.ListImageProjects(a.ctx, mode)
+}
+
+// ListFlowProjectImages lists image files in one Flow project.
+func (a *App) ListFlowProjectImages(accountID, projectID string, mode flow.ImageProjectMode) models.Response[[]flow.FlowProjectImage] {
+	return a.flow.ListProjectImages(a.ctx, accountID, projectID, mode)
+}
+
+// GetFlowProjectImageReference downloads one Flow project image for generation.
+func (a *App) GetFlowProjectImageReference(accountID, projectID string, mode flow.ImageProjectMode, mediaID string) models.Response[flow.FlowProjectImageReference] {
+	return a.flow.GetProjectImageReference(a.ctx, accountID, projectID, mode, mediaID)
 }
 
 // GetVideoModels lists the text-to-video model families of the next account in rotation.

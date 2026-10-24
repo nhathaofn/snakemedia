@@ -61,6 +61,13 @@ type SaveResult struct {
 	Canceled bool   `json:"canceled"`
 }
 
+// DirectoryResult reports the folder selected by the user, or that the
+// directory dialog was canceled.
+type DirectoryResult struct {
+	Path     string `json:"path"`
+	Canceled bool   `json:"canceled"`
+}
+
 // ImportResult describes a video the user picked, copied into the media folder
 // so the webview can preview it and providers can upload it.
 type ImportResult struct {
@@ -139,13 +146,58 @@ func (s *Store) Save(localURL string, chooseDir func(defaultDir string) (string,
 	}
 	name := filepath.Base(path)
 	ext := filepath.Ext(name)
+	s.mu.Lock()
 	saved, err := writeUniqueFile(dir, strings.TrimSuffix(name, ext), ext, data)
+	s.mu.Unlock()
 	if err != nil {
 		return models.ErrorResponse[SaveResult](err.Error(), models.CodeInternal)
 	}
 	s.mu.Lock()
 	s.saveDir = dir
 	s.mu.Unlock()
+	return models.SuccessResponse(SaveResult{Path: saved})
+}
+
+// SaveImageToTaskFolder copies a generated image into a stable folder for one
+// prompt batch. taskID must be a UUID so it cannot escape outputDir.
+func (s *Store) SaveImageToTaskFolder(localURL, outputDir, taskID string) models.Response[SaveResult] {
+	mediaPath, err := s.Path(localURL)
+	if err != nil {
+		return models.ErrorResponse[SaveResult]("Tệp không hợp lệ.", models.CodeInvalidArgument)
+	}
+	ext := strings.ToLower(filepath.Ext(mediaPath))
+	switch ext {
+	case ".png", ".jpg", ".webp", ".gif":
+	default:
+		return models.ErrorResponse[SaveResult]("Chỉ có thể lưu ảnh được tạo.", models.CodeInvalidArgument)
+	}
+	id, err := uuid.Parse(taskID)
+	if err != nil {
+		return models.ErrorResponse[SaveResult]("Mã tác vụ không hợp lệ.", models.CodeInvalidArgument)
+	}
+	if strings.TrimSpace(outputDir) == "" {
+		return models.ErrorResponse[SaveResult]("Chưa chọn thư mục lưu.", models.CodeInvalidArgument)
+	}
+	rootInfo, err := os.Stat(outputDir)
+	if err != nil || !rootInfo.IsDir() {
+		return models.ErrorResponse[SaveResult](fmt.Sprintf("Thư mục lưu %q không tồn tại.", outputDir), models.CodeInvalidArgument)
+	}
+	data, err := os.ReadFile(mediaPath)
+	if err != nil {
+		return models.ErrorResponse[SaveResult]("Không đọc được ảnh đã tạo: "+err.Error(), models.CodeNotFound)
+	}
+	taskDir := filepath.Join(outputDir, "task-"+id.String())
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		return models.ErrorResponse[SaveResult]("Không tạo được thư mục tác vụ: "+err.Error(), models.CodeInternal)
+	}
+
+	// Multiple image workers can save into the same task folder at once.
+	s.mu.Lock()
+	saved, err := writeUniqueFile(taskDir, strings.TrimSuffix(filepath.Base(mediaPath), filepath.Ext(mediaPath)), ext, data)
+	s.mu.Unlock()
+	if err != nil {
+		return models.ErrorResponse[SaveResult](err.Error(), models.CodeInternal)
+	}
 	return models.SuccessResponse(SaveResult{Path: saved})
 }
 

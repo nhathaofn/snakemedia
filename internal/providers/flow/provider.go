@@ -48,11 +48,16 @@ type Provider struct {
 	rotationChanged     chan struct{}
 	// Both caches are keyed by account ID: catalogue defaults depend on the
 	// account tier, and projects belong to one account.
-	models             map[string]modelCache
-	projects           map[string]string
-	videoModels        map[string]videoModelCache
-	fetchModelsPayload func(ctx context.Context, acc session.StoredAccount) (string, error)
-	refreshLiveCredits func(ctx context.Context, id string)
+	models               map[string]modelCache
+	projects             map[string]string
+	dailyImageProjects   map[dailyImageProjectKey]string
+	generatedImageCounts map[string]int
+	reservedImageCounts  map[string]int
+	imageProjectLocks    map[dailyImageProjectKey]*sync.Mutex
+	productName          string
+	videoModels          map[string]videoModelCache
+	fetchModelsPayload   func(ctx context.Context, acc session.StoredAccount) (string, error)
+	refreshLiveCredits   func(ctx context.Context, id string)
 	// syncSession refreshes an account's session from its Chrome profile.
 	syncSession        func(ctx context.Context, acc session.StoredAccount) (session.StoredAccount, error)
 	generateLiveVideos func(ctx context.Context, acc session.StoredAccount, req GenerateVideoRequest, variant string) ([]GeneratedVideoItem, error)
@@ -63,14 +68,23 @@ type Provider struct {
 }
 
 // New wires the provider to the account sessions, settings and media store.
-func New(accounts Accounts, cfg *config.Manager, store *media.Store) *Provider {
+func New(accounts Accounts, cfg *config.Manager, store *media.Store, productNames ...string) *Provider {
+	productName := ""
+	if len(productNames) > 0 {
+		productName = strings.TrimSpace(productNames[0])
+	}
 	s := &Provider{
-		accounts:    accounts,
-		cfg:         cfg,
-		media:       store,
-		models:      make(map[string]modelCache),
-		projects:    make(map[string]string),
-		videoModels: make(map[string]videoModelCache),
+		accounts:             accounts,
+		cfg:                  cfg,
+		media:                store,
+		productName:          productName,
+		models:               make(map[string]modelCache),
+		projects:             make(map[string]string),
+		dailyImageProjects:   make(map[dailyImageProjectKey]string),
+		generatedImageCounts: make(map[string]int),
+		reservedImageCounts:  make(map[string]int),
+		imageProjectLocks:    make(map[dailyImageProjectKey]*sync.Mutex),
+		videoModels:          make(map[string]videoModelCache),
 	}
 	s.fetchLiveModels = s.queryModelsFromAccount
 	s.generateLiveImages = s.generateImagesFromAccount

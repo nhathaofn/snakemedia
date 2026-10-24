@@ -50,6 +50,9 @@ func batchParams(c Credentials, rpcIDs string) url.Values {
 }
 
 func setBatchHeaders(req *http.Request, c Credentials, origin string) {
+	// Flow may send a delayed HTTP/1.1 error after a batchexecute response. Do not
+	// return this connection to Go's idle pool, where that late response is noisy.
+	req.Close = true
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
 	req.Header.Set("X-Same-Domain", "1")
 	req.Header.Set("User-Agent", c.UserAgent)

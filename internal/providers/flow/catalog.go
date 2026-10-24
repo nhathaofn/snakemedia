@@ -22,6 +22,9 @@ type FlowModel struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Default     bool   `json:"default"`
+	// AvailableQualities comes from the account's live Flow model catalogue.
+	// 1K is the original generated image; higher qualities require an upsampler.
+	AvailableQualities []ImageQuality `json:"availableQualities"`
 	// MaxReferenceImages is how many reference images Flow accepts for this model;
 	// 0 means the model takes none.
 	MaxReferenceImages int `json:"maxReferenceImages"`
@@ -59,7 +62,7 @@ func (s *Provider) GetImageModels(ctx context.Context) models.Response[[]FlowMod
 func (s *Provider) modelsFor(ctx context.Context, acc session.StoredAccount) ([]FlowModel, error) {
 	s.mu.Lock()
 	if cached, ok := s.models[acc.ID]; ok && time.Now().Before(cached.expires) && cached.buildLabel == acc.Credentials.BuildLabel && cached.tier == accountTier(acc) {
-		list := append([]FlowModel(nil), cached.models...)
+		list := cloneFlowModels(cached.models)
 		s.mu.Unlock()
 		return list, nil
 	}
@@ -72,7 +75,16 @@ func (s *Provider) modelsFor(ctx context.Context, acc session.StoredAccount) ([]
 	s.mu.Lock()
 	s.models[acc.ID] = modelCache{buildLabel: acc.Credentials.BuildLabel, tier: accountTier(acc), models: list, expires: time.Now().Add(modelCacheTTL)}
 	s.mu.Unlock()
-	return append([]FlowModel(nil), list...), nil
+	return cloneFlowModels(list), nil
+}
+
+func cloneFlowModels(models []FlowModel) []FlowModel {
+	cloned := make([]FlowModel, len(models))
+	copy(cloned, models)
+	for i := range cloned {
+		cloned[i].AvailableQualities = append([]ImageQuality(nil), models[i].AvailableQualities...)
+	}
+	return cloned
 }
 
 // findImageModel returns the account's image model with this ID.
@@ -150,6 +162,7 @@ func parseImageModels(payload string, tier int) ([]FlowModel, error) {
 	}
 
 	var list []FlowModel
+	availableQualities := imageQualitiesFromFamilies(asList(root[modelsImageFamiliesIndex]))
 	for _, f := range asList(root[modelsImageFamiliesIndex]) {
 		family := asList(f)
 		if len(family) < 4 {
@@ -172,13 +185,60 @@ func parseImageModels(payload string, tier int) ([]FlowModel, error) {
 					maxRefs = int(n)
 				}
 			}
-			list = append(list, FlowModel{ID: id, Name: displayName(name), Default: alias != "" && alias == defaultAlias, MaxReferenceImages: maxRefs})
+			list = append(list, FlowModel{
+				ID:                 id,
+				Name:               displayName(name),
+				Default:            alias != "" && alias == defaultAlias,
+				AvailableQualities: append([]ImageQuality(nil), availableQualities...),
+				MaxReferenceImages: maxRefs,
+			})
 		}
 	}
 	if len(list) == 0 {
 		return nil, errors.New("Google Flow không trả về model tạo ảnh nào cho tài khoản này")
 	}
 	return list, nil
+}
+
+func imageQualitiesFromFamilies(families []any) []ImageQuality {
+	available := map[ImageQuality]bool{ImageQuality1K: true}
+	for _, rawFamily := range families {
+		family := asList(rawFamily)
+		if len(family) < 2 {
+			continue
+		}
+		name, _ := family[0].(string)
+		var quality ImageQuality
+		switch strings.ToUpper(strings.TrimSpace(name)) {
+		case string(ImageQuality2K):
+			quality = ImageQuality2K
+		case string(ImageQuality4K):
+			quality = ImageQuality4K
+		default:
+			continue
+		}
+		for _, rawModel := range asList(family[1]) {
+			entry := asList(rawModel)
+			if len(entry) <= modelCapabilitiesIndex {
+				continue
+			}
+			id, _ := entry[0].(string)
+			// A resolution family is offered as an upsampler when the registry
+			// reports a model variant with a non-generation capability.
+			if id != "" && !hasCapability(entry[modelCapabilitiesIndex], capabilityTextToImage) {
+				available[quality] = true
+				break
+			}
+		}
+	}
+	qualities := []ImageQuality{ImageQuality1K}
+	if available[ImageQuality2K] {
+		qualities = append(qualities, ImageQuality2K)
+	}
+	if available[ImageQuality4K] {
+		qualities = append(qualities, ImageQuality4K)
+	}
+	return qualities
 }
 
 // FlowVideoModel is a video model family offering text-to-video for the account's

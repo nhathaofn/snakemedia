@@ -98,6 +98,7 @@
   --flow-chat-result-min-width: 220px;
   --flow-chat-result-max-width: 480px;
   --flow-chat-attachment-size: 72px;
+  --flow-image-bank-thumb-size: 112px;
   --flow-chat-video-overlay: rgba(15, 23, 42, 0.8);
   --flow-chat-preview-max-width: 78vw;
   --flow-chat-preview-max-height: 76vh;

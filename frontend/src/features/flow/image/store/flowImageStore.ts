@@ -1,9 +1,107 @@
 import { create } from 'zustand';
-import type { FlowModel, GeneratedImageItem } from '../../../../types';
+import { FlowImageQuality } from '../../../../types';
+import type {
+  FlowModel,
+  FlowImageQuality as FlowImageQualityType,
+  GeneratedImageItem,
+} from '../../../../types';
 import { createReferenceSlice, createStudioSlice } from '../../shared';
 import type { ReferenceSlice, StudioSlice } from '../../shared';
 
+export const MAX_ALL_IMAGE_THREADS = 10;
+export const ALL_IMAGE_WAIT_MODES = [
+  { value: 'immediate', label: 'Ngay lập tức', minSeconds: 0, maxSeconds: 0 },
+  { value: '5-10s', label: '5-10s', minSeconds: 5, maxSeconds: 10 },
+  { value: '10-20s', label: '10-20s', minSeconds: 10, maxSeconds: 20 },
+  { value: '20-30s', label: '20-30s', minSeconds: 20, maxSeconds: 30 },
+  { value: '30-60s', label: '30-60s', minSeconds: 30, maxSeconds: 60 },
+  { value: '60-90s', label: '60-90s', minSeconds: 60, maxSeconds: 90 },
+  { value: '90-120s', label: '90-120s', minSeconds: 90, maxSeconds: 120 },
+] as const;
+
+export type AllImageWaitMode = (typeof ALL_IMAGE_WAIT_MODES)[number]['value'];
+
+export const ALL_IMAGE_REFERENCE_MODES = [
+  { value: 'one-for-all', label: '1 cho tất cả' },
+  { value: 'sequential', label: 'Chạy tuần tự' },
+] as const;
+
+export type AllImageReferenceMode = (typeof ALL_IMAGE_REFERENCE_MODES)[number]['value'];
+
+export type QueuedImagePromptStatus =
+  'queued' | 'processing' | 'completed' | 'failed' | 'save-failed';
+
+export interface QueuedImageReference {
+  base64: string;
+  mimeType: string;
+  name: string;
+}
+
+export interface QueuedImagePrompt {
+  id: string;
+  batchId: string;
+  prompt: string;
+  modelId: string;
+  aspectRatio: string;
+  quality: FlowImageQualityType;
+  count: number;
+  references: QueuedImageReference[];
+  status: QueuedImagePromptStatus;
+  results: GeneratedImageItem[];
+  outputDirectory?: string;
+  savedLocalURLs: string[];
+  error?: string;
+  saveError?: string;
+}
+
 export interface FlowImageState extends StudioSlice<FlowModel, GeneratedImageItem>, ReferenceSlice {
+  allAspectRatio: string;
+  setAllAspectRatio: (ratio: string) => void;
+  allImageQuality: FlowImageQualityType;
+  setAllImageQuality: (quality: FlowImageQualityType) => void;
+  allImageCountPerPrompt: number;
+  setAllImageCountPerPrompt: (count: number) => void;
+  allReferenceMode: AllImageReferenceMode;
+  setAllReferenceMode: (mode: AllImageReferenceMode) => void;
+  allThreads: number;
+  setAllThreads: (threads: number) => void;
+  allWaitMode: AllImageWaitMode;
+  setAllWaitMode: (mode: AllImageWaitMode) => void;
+  hideGeminiLogo: boolean;
+  setHideGeminiLogo: (hidden: boolean) => void;
+  imageOutputDirectory: string;
+  setImageOutputDirectory: (directory: string) => void;
+  allPrompts: QueuedImagePrompt[];
+  addAllPrompts: (
+    prompts: string[],
+    modelId: string,
+    aspectRatio: string,
+    quality: FlowImageQualityType,
+    count: number,
+    references: QueuedImageReference[],
+  ) => void;
+  updateAllPrompt: (
+    id: string,
+    update: Partial<
+      Pick<
+        QueuedImagePrompt,
+        | 'status'
+        | 'results'
+        | 'references'
+        | 'error'
+        | 'outputDirectory'
+        | 'savedLocalURLs'
+        | 'saveError'
+      >
+    >,
+  ) => void;
+  removeAllPrompts: (ids: string[]) => void;
+  allProcessing: boolean;
+  setAllProcessing: (processing: boolean) => void;
+  allPaused: boolean;
+  setAllPaused: (paused: boolean) => void;
+  allStopRequested: boolean;
+  setAllStopRequested: (requested: boolean) => void;
   previewImage: GeneratedImageItem | null;
   setPreviewImage: (image: GeneratedImageItem | null) => void;
 }
@@ -11,6 +109,72 @@ export interface FlowImageState extends StudioSlice<FlowModel, GeneratedImageIte
 export const useFlowImageStore = create<FlowImageState>()((set) => ({
   ...createStudioSlice<FlowModel, GeneratedImageItem, FlowImageState>(set),
   ...createReferenceSlice<FlowImageState>(set),
+  allAspectRatio: '16:9',
+  setAllAspectRatio: (allAspectRatio) => set({ allAspectRatio }),
+  allImageQuality: FlowImageQuality.OneK,
+  setAllImageQuality: (allImageQuality) => set({ allImageQuality }),
+  allImageCountPerPrompt: 1,
+  setAllImageCountPerPrompt: (allImageCountPerPrompt) => {
+    if (Number.isInteger(allImageCountPerPrompt) && allImageCountPerPrompt >= 1) {
+      set({ allImageCountPerPrompt });
+    }
+  },
+  allReferenceMode: ALL_IMAGE_REFERENCE_MODES[0].value,
+  setAllReferenceMode: (allReferenceMode) => set({ allReferenceMode }),
+  allThreads: 1,
+  setAllThreads: (allThreads) => {
+    if (Number.isInteger(allThreads) && allThreads >= 1 && allThreads <= MAX_ALL_IMAGE_THREADS) {
+      set({ allThreads });
+    }
+  },
+  allWaitMode: ALL_IMAGE_WAIT_MODES[1].value,
+  setAllWaitMode: (allWaitMode) => set({ allWaitMode }),
+  hideGeminiLogo: true,
+  setHideGeminiLogo: (hideGeminiLogo) => set({ hideGeminiLogo }),
+  imageOutputDirectory: '',
+  setImageOutputDirectory: (imageOutputDirectory) => set({ imageOutputDirectory }),
+  allPrompts: [],
+  addAllPrompts: (prompts, modelId, aspectRatio, quality, count, references) => {
+    const batchId = crypto.randomUUID();
+    set((state) => ({
+      allPrompts: [
+        ...state.allPrompts,
+        ...prompts.map((prompt) => ({
+          id: crypto.randomUUID(),
+          batchId,
+          prompt,
+          modelId,
+          aspectRatio,
+          quality,
+          count,
+          references,
+          status: 'queued' as const,
+          results: [],
+          savedLocalURLs: [],
+        })),
+      ],
+    }));
+  },
+  updateAllPrompt: (id, update) =>
+    set((state) => ({
+      allPrompts: state.allPrompts.map((item) => (item.id === id ? { ...item, ...update } : item)),
+    })),
+  removeAllPrompts: (ids) =>
+    set((state) =>
+      state.allProcessing
+        ? {}
+        : {
+            allPrompts: state.allPrompts.filter(
+              (item) => item.status === 'processing' || !ids.includes(item.id),
+            ),
+          },
+    ),
+  allProcessing: false,
+  setAllProcessing: (allProcessing) => set({ allProcessing }),
+  allPaused: false,
+  setAllPaused: (allPaused) => set({ allPaused }),
+  allStopRequested: false,
+  setAllStopRequested: (allStopRequested) => set({ allStopRequested }),
   previewImage: null,
   setPreviewImage: (previewImage) => set({ previewImage }),
 }));

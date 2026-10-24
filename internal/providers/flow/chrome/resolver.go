@@ -28,6 +28,7 @@ const (
 	MethodProjectContents         = "/FlowService.GetProjectContents"
 	MethodMedia                   = "/FlowService.GetMedia"
 	MethodUploadImage             = "/FlowService.UploadImage"
+	MethodUpsampleImage           = "/FlowService.UpsampleImage"
 	MethodGenerateVideoText       = "/VideoFxService.BatchAsyncGenerateVideoText"
 	MethodGenerateVideoReferences = "/VideoFxService.BatchAsyncGenerateVideoReferenceImages"
 	MethodEditVideo               = "/VideoFxService.BatchAsyncGenerateVideoEditVideo"
@@ -41,6 +42,7 @@ type RPCRegistry struct {
 	ProjectContents         string `json:"projectContents,omitempty"`
 	Media                   string `json:"media,omitempty"`
 	UploadImage             string `json:"uploadImage,omitempty"`
+	UpsampleImage           string `json:"upsampleImage,omitempty"`
 	GenerateVideoText       string `json:"generateVideoText,omitempty"`
 	GenerateVideoReferences string `json:"generateVideoReferences,omitempty"`
 	EditVideo               string `json:"editVideo,omitempty"`
@@ -261,6 +263,8 @@ func (r *RPCRegistry) field(method string) *string {
 		return &r.Media
 	case MethodUploadImage:
 		return &r.UploadImage
+	case MethodUpsampleImage:
+		return &r.UpsampleImage
 	case MethodGenerateVideoText:
 		return &r.GenerateVideoText
 	case MethodGenerateVideoReferences:

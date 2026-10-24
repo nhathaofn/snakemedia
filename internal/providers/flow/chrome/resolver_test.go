@@ -67,8 +67,8 @@ func TestStudioMethodsResolveFromRealReferenceBundles(t *testing.T) {
 		}
 		sources = append(sources, "https://www.gstatic.com/"+name)
 	}
-	registry, err := resolveRPCs(sources, config.DefaultAccountConfig().MaxDiscoveryScripts, config.DefaultAccountConfig().MaxDiscoveryBytes, func(source string) ([]byte, error) { return os.ReadFile(filepath.Join(root, filepath.Base(source))) }, MethodModels, MethodProjects, MethodCreateProject, MethodEditVideo, MethodVideoStatus, MethodProjectContents, MethodMedia, MethodUploadImage, MethodGenerateVideoText, MethodGenerateVideoReferences)
-	if err != nil || !registry.Has(MethodModels, MethodProjects, MethodCreateProject, MethodEditVideo, MethodVideoStatus, MethodProjectContents, MethodMedia, MethodUploadImage, MethodGenerateVideoText, MethodGenerateVideoReferences) {
+	registry, err := resolveRPCs(sources, config.DefaultAccountConfig().MaxDiscoveryScripts, config.DefaultAccountConfig().MaxDiscoveryBytes, func(source string) ([]byte, error) { return os.ReadFile(filepath.Join(root, filepath.Base(source))) }, MethodModels, MethodProjects, MethodCreateProject, MethodEditVideo, MethodVideoStatus, MethodProjectContents, MethodMedia, MethodUploadImage, MethodUpsampleImage, MethodGenerateVideoText, MethodGenerateVideoReferences)
+	if err != nil || !registry.Has(MethodModels, MethodProjects, MethodCreateProject, MethodEditVideo, MethodVideoStatus, MethodProjectContents, MethodMedia, MethodUploadImage, MethodUpsampleImage, MethodGenerateVideoText, MethodGenerateVideoReferences) {
 		t.Fatalf("real bundle studio descriptors: %v", err)
 	}
 }

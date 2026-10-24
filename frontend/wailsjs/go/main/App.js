@@ -10,6 +10,10 @@ export function CheckLoginStatus(arg1) {
   return window['go']['main']['App']['CheckLoginStatus'](arg1);
 }
 
+export function ChooseImageOutputDirectory(arg1) {
+  return window['go']['main']['App']['ChooseImageOutputDirectory'](arg1);
+}
+
 export function EditVideos(arg1) {
   return window['go']['main']['App']['EditVideos'](arg1);
 }
@@ -38,8 +42,16 @@ export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }
 
+export function GetDefaultImageOutputDirectory() {
+  return window['go']['main']['App']['GetDefaultImageOutputDirectory']();
+}
+
 export function GetEditModels() {
   return window['go']['main']['App']['GetEditModels']();
+}
+
+export function GetFlowProjectImageReference(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['GetFlowProjectImageReference'](arg1, arg2, arg3, arg4);
 }
 
 export function GetImageModels() {
@@ -60,6 +72,14 @@ export function GetVideoModels() {
 
 export function LaunchLoginBrowser(arg1) {
   return window['go']['main']['App']['LaunchLoginBrowser'](arg1);
+}
+
+export function ListFlowImageProjects(arg1) {
+  return window['go']['main']['App']['ListFlowImageProjects'](arg1);
+}
+
+export function ListFlowProjectImages(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ListFlowProjectImages'](arg1, arg2, arg3);
 }
 
 export function ListNodes() {
@@ -88,6 +108,10 @@ export function RemoveAccount(arg1) {
 
 export function ResumeVideoEdit(arg1) {
   return window['go']['main']['App']['ResumeVideoEdit'](arg1);
+}
+
+export function SaveImageToTaskFolder(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SaveImageToTaskFolder'](arg1, arg2, arg3);
 }
 
 export function SaveMedia(arg1) {

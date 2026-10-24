@@ -8,6 +8,8 @@ export function CancelLogin(arg1:string):Promise<models.Response_bool_>;
 
 export function CheckLoginStatus(arg1:string):Promise<models.Response_SnakeMedia_internal_providers_flow_session_LoginStatusInfo_>;
 
+export function ChooseImageOutputDirectory(arg1:string):Promise<models.Response_SnakeMedia_internal_media_DirectoryResult_>;
+
 export function EditVideos(arg1:flow.EditVideoRequest):Promise<models.Response___SnakeMedia_internal_providers_flow_GeneratedVideoItem_>;
 
 export function GenerateImages(arg1:flow.GenerateImageRequest):Promise<models.Response___SnakeMedia_internal_providers_flow_GeneratedImageItem_>;
@@ -22,7 +24,11 @@ export function GetAppInfo():Promise<models.Response_SnakeMedia_internal_buildin
 
 export function GetConfig():Promise<models.Response_SnakeMedia_internal_config_AppConfig_>;
 
+export function GetDefaultImageOutputDirectory():Promise<models.Response_string_>;
+
 export function GetEditModels():Promise<models.Response___SnakeMedia_internal_providers_flow_FlowEditModel_>;
+
+export function GetFlowProjectImageReference(arg1:string,arg2:string,arg3:flow.ImageProjectMode,arg4:string):Promise<models.Response_SnakeMedia_internal_providers_flow_FlowProjectImageReference_>;
 
 export function GetImageModels():Promise<models.Response___SnakeMedia_internal_providers_flow_FlowModel_>;
 
@@ -33,6 +39,10 @@ export function GetSystemInfo():Promise<models.Response_SnakeMedia_internal_serv
 export function GetVideoModels():Promise<models.Response___SnakeMedia_internal_providers_flow_FlowVideoModel_>;
 
 export function LaunchLoginBrowser(arg1:string):Promise<models.Response_SnakeMedia_internal_providers_flow_session_LoginProcessInfo_>;
+
+export function ListFlowImageProjects(arg1:flow.ImageProjectMode):Promise<models.Response___SnakeMedia_internal_providers_flow_FlowImageProject_>;
+
+export function ListFlowProjectImages(arg1:string,arg2:string,arg3:flow.ImageProjectMode):Promise<models.Response___SnakeMedia_internal_providers_flow_FlowProjectImage_>;
 
 export function ListNodes():Promise<models.Response___SnakeMedia_internal_engine_Spec_>;
 
@@ -47,6 +57,8 @@ export function RefreshAccount(arg1:string):Promise<models.Response_SnakeMedia_i
 export function RemoveAccount(arg1:string):Promise<models.Response_bool_>;
 
 export function ResumeVideoEdit(arg1:string):Promise<models.Response___SnakeMedia_internal_providers_flow_GeneratedVideoItem_>;
+
+export function SaveImageToTaskFolder(arg1:string,arg2:string,arg3:string):Promise<models.Response_SnakeMedia_internal_media_SaveResult_>;
 
 export function SaveMedia(arg1:string):Promise<models.Response_SnakeMedia_internal_media_SaveResult_>;
 

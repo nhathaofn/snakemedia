@@ -26,6 +26,9 @@ func TestFlowClientSendsRuntimeSessionContext(t *testing.T) {
 	t.Cleanup(func() { http.DefaultTransport = original })
 	c := flowTestCredentials()
 	http.DefaultTransport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if !r.Close {
+			t.Error("batchexecute connection must close instead of entering the idle pool")
+		}
 		q := r.URL.Query()
 		for key, want := range map[string]string{"rpcids": "HTrJv", "bl": c.BuildLabel, "f.sid": c.SessionID, "hl": c.Language, "source-path": c.SourcePath, "authuser": c.AuthUser, "rt": "c"} {
 			if q.Get(key) != want {

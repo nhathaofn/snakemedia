@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -63,6 +64,28 @@ var ImageAspectRatios = []string{"16:9", "4:3", "1:1", "3:4", "9:16"}
 
 // DefaultImageAspectRatio is the ratio a new image request starts with.
 const DefaultImageAspectRatio = "1:1"
+
+// ImageQuality is the requested output resolution in Flow's image editor.
+type ImageQuality string
+
+const (
+	ImageQuality1K ImageQuality = "1K"
+	ImageQuality2K ImageQuality = "2K"
+	ImageQuality4K ImageQuality = "4K"
+)
+
+// DefaultImageQuality matches the default resolution Flow uses for generated images.
+const DefaultImageQuality = ImageQuality1K
+
+// AllImageQualities is bound to TypeScript as an enum.
+var AllImageQualities = []struct {
+	Value  ImageQuality
+	TSName string
+}{
+	{ImageQuality1K, "OneK"},
+	{ImageQuality2K, "TwoK"},
+	{ImageQuality4K, "FourK"},
+}
 
 // ReferenceMimeTypes are the reference image formats Flow accepts for upload.
 var ReferenceMimeTypes = []string{"image/png", "image/jpeg", "image/webp"}
@@ -172,6 +195,126 @@ func BuildImageUploadRequest(imageBase64 string, mimeType string, fileName strin
 	return json.Marshal(innerPayload)
 }
 
+// BuildImageUpsampleRequest constructs the verified UpsampleImage RPC request.
+// Flow's client uses target-resolution enum 1 for 2K and 2 for 4K; 1K is the
+// original generation and does not make this RPC.
+func BuildImageUpsampleRequest(mediaID string, quality ImageQuality, projectID string, recaptchaToken string) ([]byte, error) {
+	if strings.TrimSpace(mediaID) == "" {
+		return nil, errors.New("thiếu media ID ảnh cần nâng độ phân giải")
+	}
+	if projectID == "" {
+		return nil, errors.New("thiếu project ID")
+	}
+	var resolution int
+	switch quality {
+	case ImageQuality2K:
+		resolution = 1
+	case ImageQuality4K:
+		resolution = 2
+	default:
+		return nil, fmt.Errorf("mức chất lượng %q không hỗ trợ nâng độ phân giải", quality)
+	}
+	return json.Marshal([]any{mediaID, resolution, flowContext(projectID, recaptchaToken)})
+}
+
+// ParseUpsampledImageBytes extracts the image bytes returned in the response's
+// protobuf bytes field. The batchexecute JSON envelope can contain that field at
+// different nesting depths, so candidates are accepted only when their decoded
+// bytes have a supported raster image content type.
+func ParseUpsampledImageBytes(payload string) ([]byte, string, error) {
+	var root any
+	if err := json.Unmarshal([]byte(payload), &root); err != nil {
+		return nil, "", fmt.Errorf("phản hồi nâng độ phân giải không phải JSON hợp lệ: %w", err)
+	}
+	var imageData []byte
+	var contentType string
+	var visit func(any)
+	visit = func(value any) {
+		if imageData != nil {
+			return
+		}
+		switch item := value.(type) {
+		case []any:
+			if data, ok := numericImageBytes(item); ok {
+				imageData, contentType = data, detectedImageType(data)
+				return
+			}
+			for _, child := range item {
+				visit(child)
+				if imageData != nil {
+					return
+				}
+			}
+		case map[string]any:
+			for _, child := range item {
+				visit(child)
+				if imageData != nil {
+					return
+				}
+			}
+		case string:
+			candidate := strings.TrimSpace(item)
+			if strings.HasPrefix(candidate, "[") || strings.HasPrefix(candidate, "{") {
+				var nested any
+				if json.Unmarshal([]byte(candidate), &nested) == nil {
+					visit(nested)
+					return
+				}
+			}
+			if strings.HasPrefix(candidate, "data:") {
+				if comma := strings.IndexByte(candidate, ','); comma >= 0 {
+					candidate = candidate[comma+1:]
+				}
+			}
+			for _, decoder := range []*base64.Encoding{
+				base64.StdEncoding,
+				base64.RawStdEncoding,
+				base64.URLEncoding,
+				base64.RawURLEncoding,
+			} {
+				data, err := decoder.DecodeString(candidate)
+				if err != nil || len(data) == 0 || len(data) > maxGeneratedImageBytes {
+					continue
+				}
+				if detected := detectedImageType(data); detected != "" {
+					imageData, contentType = data, detected
+					return
+				}
+			}
+		}
+	}
+	visit(root)
+	if imageData == nil {
+		return nil, "", errors.New("Google Flow không trả về dữ liệu ảnh hợp lệ sau khi nâng độ phân giải")
+	}
+	return imageData, contentType, nil
+}
+
+func numericImageBytes(values []any) ([]byte, bool) {
+	if len(values) == 0 || len(values) > maxGeneratedImageBytes {
+		return nil, false
+	}
+	data := make([]byte, len(values))
+	for i, value := range values {
+		n, ok := value.(float64)
+		if !ok || n < 0 || n > 255 || n != float64(int(n)) {
+			return nil, false
+		}
+		data[i] = byte(n)
+	}
+	return data, detectedImageType(data) != ""
+}
+
+func detectedImageType(data []byte) string {
+	typeName := http.DetectContentType(data)
+	switch typeName {
+	case "image/png", "image/jpeg", "image/webp":
+		return typeName
+	default:
+		return ""
+	}
+}
+
 // ParseUploadedMediaID extracts the uploaded media ID from the maseQ payload. IDs the
 // request itself carried (project ID, client UUIDs) are never mistaken for it.
 func ParseUploadedMediaID(raw []byte, sent ...string) (string, error) {
@@ -278,6 +421,8 @@ type GenerateImageRequest struct {
 	Prompt      string           `json:"prompt"`
 	ModelID     string           `json:"modelId"`
 	AspectRatio string           `json:"aspectRatio"`
+	Quality     ImageQuality     `json:"quality,omitempty"`
+	ProjectMode ImageProjectMode `json:"projectMode,omitempty"`
 	Count       int              `json:"count"`
 	References  []ReferenceImage `json:"references,omitempty"`
 	ProjectID   string           `json:"projectId,omitempty"`
@@ -331,6 +476,12 @@ func (s *Provider) imageGenerationChoices(ctx context.Context, req GenerateImage
 			continue
 		}
 		model := available[idx]
+		if req.Quality != ImageQuality1K && !slices.Contains(model.AvailableQualities, req.Quality) {
+			if firstSelectionErr == nil {
+				firstSelectionErr = fmt.Errorf("Model %s không có chất lượng ảnh %s trên tài khoản %s.", model.Name, req.Quality, acc.Email)
+			}
+			continue
+		}
 		if err := checkReferenceLimit(model, len(req.References)); err != nil {
 			if firstSelectionErr == nil {
 				firstSelectionErr = err
@@ -360,6 +511,16 @@ func (s *Provider) GenerateImages(ctx context.Context, req GenerateImageRequest)
 			models.CodeInvalidArgument,
 		)
 	}
+	quality, err := normalizeImageQuality(req.Quality)
+	if err != nil {
+		return models.ErrorResponse[[]GeneratedImageItem](err.Error(), models.CodeInvalidArgument)
+	}
+	req.Quality = quality
+	projectMode, err := normalizeImageProjectMode(req.ProjectMode)
+	if err != nil {
+		return models.ErrorResponse[[]GeneratedImageItem](err.Error(), models.CodeInvalidArgument)
+	}
+	req.ProjectMode = projectMode
 	if err := validateGenerateRequest(req); err != nil {
 		return models.ErrorResponse[[]GeneratedImageItem](err.Error(), models.CodeInvalidArgument)
 	}
@@ -398,6 +559,7 @@ func (s *Provider) GenerateImages(ctx context.Context, req GenerateImageRequest)
 	if err != nil {
 		// A removed or inaccessible project must be resolved again next time.
 		s.forgetProject(acc.ID)
+		s.forgetDailyImageProjects(acc.ID)
 		return models.ErrorResponse[[]GeneratedImageItem](
 			fmt.Sprintf("Lỗi khi tạo ảnh từ Google Flow (%s): %s", acc.Email, err.Error()),
 			models.CodeUnavailable,
@@ -417,6 +579,12 @@ func validateGenerateRequest(req GenerateImageRequest) error {
 	if _, ok := FlowImageAspect[req.AspectRatio]; !ok {
 		return fmt.Errorf("Tỉ lệ ảnh %q không được hỗ trợ.", req.AspectRatio)
 	}
+	if _, err := normalizeImageQuality(req.Quality); err != nil {
+		return err
+	}
+	if _, err := normalizeImageProjectMode(req.ProjectMode); err != nil {
+		return err
+	}
 	if req.Count < 1 || req.Count > MaxImagesPerRequest {
 		return fmt.Errorf("Số lượng ảnh phải từ 1 đến %d.", MaxImagesPerRequest)
 	}
@@ -426,6 +594,18 @@ func validateGenerateRequest(req GenerateImageRequest) error {
 		}
 	}
 	return validateReferences(req.References)
+}
+
+func normalizeImageQuality(quality ImageQuality) (ImageQuality, error) {
+	if quality == "" {
+		return DefaultImageQuality, nil
+	}
+	switch quality {
+	case ImageQuality1K, ImageQuality2K, ImageQuality4K:
+		return quality, nil
+	default:
+		return "", fmt.Errorf("Chất lượng ảnh %q không được hỗ trợ.", quality)
+	}
 }
 
 // UploadReferenceImage registers a local image to Google Flow using the RPC ID
@@ -467,7 +647,11 @@ func (s *Provider) generateImagesFromAccount(ctx context.Context, acc session.St
 		return nil, errors.New("dịch vụ tài khoản chưa được khởi tạo")
 	}
 	limits := s.cfg.Get().Accounts
-	client, err := s.flowClient(ctx, acc, chrome.MethodProjects, chrome.MethodCreateProject, chrome.MethodProjectContents, chrome.MethodMedia)
+	methods := []string{chrome.MethodProjects, chrome.MethodCreateProject, chrome.MethodProjectContents, chrome.MethodMedia}
+	if req.Quality != ImageQuality1K {
+		methods = append(methods, chrome.MethodUpsampleImage)
+	}
+	client, err := s.flowClient(ctx, acc, methods...)
 	if err != nil {
 		return nil, err
 	}
@@ -475,10 +659,18 @@ func (s *Provider) generateImagesFromAccount(ctx context.Context, acc session.St
 
 	// Resolve the account's real project; the GetProjects call also proves Flow
 	// still accepts this session before a browser is involved.
-	projectID, err := s.resolveProject(ctx, client, acc, req.ProjectID)
+	projectID, finishProjectReservation, err := s.resolveImageProjectForRequest(ctx, client, acc, req.ProjectID, req.ProjectMode, req.Count)
 	if err != nil {
 		return nil, err
 	}
+	requestSubmitted := false
+	generatedMediaCount := 0
+	defer func() {
+		if requestSubmitted && generatedMediaCount == 0 {
+			generatedMediaCount = req.Count
+		}
+		finishProjectReservation(generatedMediaCount)
+	}()
 
 	// 1. Ensure headless browser and mint reCAPTCHA Enterprise token
 	var recaptchaToken string
@@ -531,7 +723,12 @@ func (s *Provider) generateImagesFromAccount(ctx context.Context, acc session.St
 	}
 
 	genBody, err := client.Do(ctx, rpcID, genFReq, time.Duration(limits.GenerationTimeoutSeconds)*time.Second)
+	if err != nil {
+		var responseError *chrome.HTTPError
+		requestSubmitted = !errors.As(err, &responseError)
+	}
 	if bytes.Contains(genBody, []byte("PUBLIC_ERROR_UNUSUAL_ACTIVITY")) {
+		requestSubmitted = false
 		return nil, errors.New("Google Flow yêu cầu xác thực reCAPTCHA Enterprise token (action: IMAGE_GENERATION). Phiên cần được cấp token qua trình duyệt trước khi tạo ảnh.")
 	}
 	if err != nil {
@@ -543,7 +740,9 @@ func (s *Provider) generateImagesFromAccount(ctx context.Context, acc session.St
 		return nil, fmt.Errorf("Google Flow từ chối yêu cầu tạo ảnh: %w", err)
 	}
 	images := ParseGeneratedImages(payload, req.Prompt, req.ModelID, req.AspectRatio)
+	requestSubmitted = false
 	if len(images) > 0 {
+		generatedMediaCount = len(images)
 		for i := range images {
 			data, contentType, fetchErr := client.FetchMedia(ctx, images[i].URL, []string{"image/"}, maxGeneratedImageBytes, time.Duration(limits.GenerationTimeoutSeconds)*time.Second)
 			if fetchErr == nil {
@@ -552,7 +751,28 @@ func (s *Provider) generateImagesFromAccount(ctx context.Context, acc session.St
 			if fetchErr != nil {
 				images[i].Error = "Không tải được ảnh để hiển thị: " + fetchErr.Error()
 				logger.Get().Warn("cannot download generated image", "media", images[i].ID, "error", fetchErr)
+				continue
 			}
+
+			if req.Quality == ImageQuality1K {
+				continue
+			}
+			upscaleToken, tokenErr := chrome.MintRecaptchaToken(ctx, browser.Port, policy, chrome.ActionImageGeneration)
+			if tokenErr != nil || upscaleToken == "" {
+				if tokenErr == nil {
+					tokenErr = errors.New("token reCAPTCHA Enterprise trả về rỗng")
+				}
+				images[i].Error = fmt.Sprintf("Không nâng được ảnh lên %s: %v", req.Quality, tokenErr)
+				logger.Get().Warn("cannot mint image upsample token", "media", images[i].ID, "error", tokenErr)
+				continue
+			}
+			upscaledURL, upsampleErr := s.upsampleGeneratedImage(ctx, client, projectID, images[i].ID, req.Quality, upscaleToken)
+			if upsampleErr != nil {
+				images[i].Error = fmt.Sprintf("Không nâng được ảnh lên %s: %v", req.Quality, upsampleErr)
+				logger.Get().Warn("cannot upsample generated image", "media", images[i].ID, "quality", req.Quality, "error", upsampleErr)
+				continue
+			}
+			images[i].LocalURL = upscaledURL
 		}
 		return images, nil
 	}
@@ -562,6 +782,42 @@ func (s *Provider) generateImagesFromAccount(ctx context.Context, acc session.St
 		limit = 200
 	}
 	return nil, fmt.Errorf("Google Flow chưa trả về ảnh hợp lệ (phản hồi: %s)", payload[:limit])
+}
+
+func (s *Provider) upsampleGeneratedImage(ctx context.Context, client *chrome.FlowClient, projectID, mediaID string, quality ImageQuality, recaptchaToken string) (string, error) {
+	rpcID := client.Credentials().RPCs.ID(chrome.MethodUpsampleImage)
+	if rpcID == "" {
+		return "", errors.New("Flow RPC nâng độ phân giải chưa được khám phá từ build hiện tại")
+	}
+	inner, err := BuildImageUpsampleRequest(mediaID, quality, projectID, recaptchaToken)
+	if err != nil {
+		return "", err
+	}
+	fReq, err := BuildBatchEnvelope(rpcID, inner)
+	if err != nil {
+		return "", fmt.Errorf("không đóng gói được envelope nâng độ phân giải: %w", err)
+	}
+	limits := s.cfg.Get().Accounts
+	body, err := client.Do(ctx, rpcID, fReq, time.Duration(limits.GenerationTimeoutSeconds)*time.Second)
+	if bytes.Contains(body, []byte("PUBLIC_ERROR_UNUSUAL_ACTIVITY")) {
+		return "", errors.New("Google Flow từ chối yêu cầu do token bảo mật không hợp lệ")
+	}
+	if err != nil {
+		return "", fmt.Errorf("lỗi khi gọi Flow UpsampleImage: %w", err)
+	}
+	payload, err := chrome.ParseRPCPayload(string(body), rpcID)
+	if err != nil {
+		return "", fmt.Errorf("Google Flow từ chối yêu cầu nâng độ phân giải: %w", err)
+	}
+	data, contentType, err := ParseUpsampledImageBytes(payload)
+	if err != nil {
+		return "", err
+	}
+	localURL, err := s.media.Put(mediaID, contentType, ".png", data)
+	if err != nil {
+		return "", fmt.Errorf("không lưu được ảnh đã nâng độ phân giải: %w", err)
+	}
+	return localURL, nil
 }
 
 // validateReferences checks reference images before anything is uploaded.

@@ -265,7 +265,8 @@ const getModelsPayload = `[[null,null,` +
 	`[["Nano Banana Pro",[["GEM_PIX_2",null,null,null,null,null,null,null,[[[[1]],[[1,4]]]],10]],true,"nano_banana_pro"],` +
 	`["Nano Banana 2 Lite",[["HARBOR_SEAL",null,null,null,null,null,null,null,[[[[1]],[[1,3]]]],3]],null,"harbor_seal"],` +
 	`["Nano Banana 2.1",[["BELUGA",null,null,null,null,null,null,null,[[[[1]]]]]],null,"beluga_display",[["Nano Banana 2"]]],` +
-	`["2K",[["GEM_PIX_2_UPSAMPLE_2K",null,null,null,null,null,null,null,[[[[5]]]]]],true,"upsample_2k"]],` +
+	`["2K",[["GEM_PIX_2_UPSAMPLE_2K",null,null,null,null,null,null,null,[[[[5]]]]]],true,"upsample_2k"],` +
+	`["4K",[["GEM_PIX_2_UPSAMPLE_4K",null,null,null,null,null,null,null,[[[[6]]]]]],true,"upsample_4k"]],` +
 	`null,[]]]`
 
 func TestParseImageModels(t *testing.T) {
@@ -289,6 +290,11 @@ func TestParseImageModels(t *testing.T) {
 	if list[0].MaxReferenceImages != 10 || list[1].MaxReferenceImages != 3 || list[2].MaxReferenceImages != 0 {
 		t.Fatalf("reference limits not read from the model entry: %+v", list)
 	}
+	for _, model := range list {
+		if got := strings.Join(imageQualityNames(model.AvailableQualities), ","); got != "1K,2K,4K" {
+			t.Fatalf("available resolutions not read from Flow's live catalogue: %s", got)
+		}
+	}
 
 	// An unknown tier uses the first default Flow lists.
 	list, err = parseImageModels(getModelsPayload, -1)
@@ -305,6 +311,53 @@ func TestParseImageModels(t *testing.T) {
 		if _, err := parseImageModels(broken, 1); err == nil {
 			t.Errorf("expected error for payload %s", broken)
 		}
+	}
+}
+
+func imageQualityNames(qualities []ImageQuality) []string {
+	names := make([]string, len(qualities))
+	for i, quality := range qualities {
+		names[i] = string(quality)
+	}
+	return names
+}
+
+func TestBuildImageUpsampleRequestUsesFlowResolutionEnums(t *testing.T) {
+	projectID := "22d33fe3-5afe-4106-8913-dc663677f8"
+	for _, test := range []struct {
+		quality ImageQuality
+		code    int
+	}{{ImageQuality2K, 1}, {ImageQuality4K, 2}} {
+		payload, err := BuildImageUpsampleRequest("media-id", test.quality, projectID, "captcha")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []any
+		if err := json.Unmarshal(payload, &got); err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 3 || got[0] != "media-id" || got[1] != float64(test.code) {
+			t.Fatalf("unexpected Flow upsample request for %s: %s", test.quality, payload)
+		}
+	}
+	if _, err := BuildImageUpsampleRequest("media-id", ImageQuality1K, projectID, "captcha"); err == nil {
+		t.Fatal("1K must use the original image instead of calling UpsampleImage")
+	}
+}
+
+func TestParseUpsampledImageBytesAcceptsSupportedImagePayloads(t *testing.T) {
+	const pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZsAAAAASUVORK5CYII="
+	for _, payload := range []string{
+		`["` + pngBase64 + `"]`,
+		`{"image":{"bytes":"` + pngBase64 + `"}}`,
+	} {
+		data, contentType, err := ParseUpsampledImageBytes(payload)
+		if err != nil || len(data) == 0 || contentType != "image/png" {
+			t.Fatalf("unexpected image decode: type=%q bytes=%d error=%v", contentType, len(data), err)
+		}
+	}
+	if _, _, err := ParseUpsampledImageBytes(`{"image":"not-an-image"}`); err == nil {
+		t.Fatal("expected invalid image data to be rejected")
 	}
 }
 

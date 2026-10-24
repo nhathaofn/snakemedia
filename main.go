@@ -14,6 +14,7 @@ import (
 	"SnakeMedia/internal/events"
 	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/models"
+	"SnakeMedia/internal/providers/flow"
 	"SnakeMedia/internal/providers/flow/chrome"
 	"SnakeMedia/internal/providers/flow/session"
 )
@@ -83,6 +84,8 @@ func run() error {
 			engine.AllPortTypes,
 			engine.AllParamKinds,
 			chrome.AllTiers,
+			flow.AllImageQualities,
+			flow.AllImageProjectModes,
 		},
 	})
 }

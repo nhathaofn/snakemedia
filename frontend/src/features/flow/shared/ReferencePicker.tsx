@@ -43,7 +43,7 @@ export function createReferenceSlice<S extends ReferenceSlice & { turns?: Conver
   };
 }
 
-const readReference = (file: File): Promise<ReferenceImage> =>
+export const readReference = (file: File): Promise<ReferenceImage> =>
   new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {

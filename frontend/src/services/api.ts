@@ -7,7 +7,11 @@ import type {
   AppInfo,
   EditVideoRequest,
   FlowEditModel,
+  FlowImageProject,
+  FlowImageProjectMode,
   FlowModel,
+  FlowProjectImage,
+  FlowProjectImageReference,
   FlowVideoModel,
   GenerateImageRequest,
   GenerateVideoRequest,
@@ -16,6 +20,7 @@ import type {
   ImportVideoResult,
   LoginProcessInfo,
   LoginStatusInfo,
+  MediaDirectoryResult,
   NodeSpec,
   SaveMediaResult,
   StudioConfig,
@@ -109,7 +114,32 @@ export const api = {
   uploadSourceVideo: (localUrl: string) =>
     invoke<UploadedSourceVideo>('UploadSourceVideo', () => Backend.UploadSourceVideo(localUrl)),
   getStudioConfig: () => invoke<StudioConfig>('GetStudioConfig', Backend.GetStudioConfig),
+  listFlowImageProjects: (mode: FlowImageProjectMode) =>
+    invoke<FlowImageProject[]>('ListFlowImageProjects', () => Backend.ListFlowImageProjects(mode)),
+  listFlowProjectImages: (accountID: string, projectID: string, mode: FlowImageProjectMode) =>
+    invoke<FlowProjectImage[]>('ListFlowProjectImages', () =>
+      Backend.ListFlowProjectImages(accountID, projectID, mode),
+    ),
+  getFlowProjectImageReference: (
+    accountID: string,
+    projectID: string,
+    mode: FlowImageProjectMode,
+    mediaID: string,
+  ) =>
+    invoke<FlowProjectImageReference>('GetFlowProjectImageReference', () =>
+      Backend.GetFlowProjectImageReference(accountID, projectID, mode, mediaID),
+    ),
+  getDefaultImageOutputDirectory: () =>
+    invoke<string>('GetDefaultImageOutputDirectory', Backend.GetDefaultImageOutputDirectory),
   listNodes: () => invoke<NodeSpec[]>('ListNodes', Backend.ListNodes),
   saveMedia: (localUrl: string) =>
     invoke<SaveMediaResult>('SaveMedia', () => Backend.SaveMedia(localUrl)),
+  chooseImageOutputDirectory: (defaultDir: string) =>
+    invoke<MediaDirectoryResult>('ChooseImageOutputDirectory', () =>
+      Backend.ChooseImageOutputDirectory(defaultDir),
+    ),
+  saveImageToTaskFolder: (localUrl: string, outputDir: string, taskId: string) =>
+    invoke<SaveMediaResult>('SaveImageToTaskFolder', () =>
+      Backend.SaveImageToTaskFolder(localUrl, outputDir, taskId),
+    ),
 };

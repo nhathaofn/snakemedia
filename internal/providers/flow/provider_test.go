@@ -110,6 +110,7 @@ func TestGenerateImagesRejectsIncompleteRequests(t *testing.T) {
 		"no model":        func(r *GenerateImageRequest) { r.ModelID = "" },
 		"unknown ratio":   func(r *GenerateImageRequest) { r.AspectRatio = "2:1" },
 		"missing ratio":   func(r *GenerateImageRequest) { r.AspectRatio = "" },
+		"invalid quality": func(r *GenerateImageRequest) { r.Quality = "8K" },
 		"zero count":      func(r *GenerateImageRequest) { r.Count = 0 },
 		"too many":        func(r *GenerateImageRequest) { r.Count = MaxImagesPerRequest + 1 },
 		"invalid project": func(r *GenerateImageRequest) { r.ProjectID = "default" },

@@ -19,6 +19,9 @@ func TestDirectHTTPUsesRuntimeContextAndScopedCookies(t *testing.T) {
 	t.Cleanup(func() { http.DefaultTransport = original })
 	credentials := Credentials{RPCs: RPCRegistry{Credits: creditsRPC, Availability: availabilityRPC}, AtToken: "runtime-at", SessionID: "runtime-session", BuildLabel: "runtime-build", Language: "runtime-language", UserAgent: "runtime-agent", SourcePath: "/project/test", Cookies: []CookieItem{{Name: "valid", Value: "original", Domain: "flow.google.com", Path: "/", Secure: true}, {Name: "other", Value: "must-not-send", Domain: "accounts.google.com", Path: "/", Secure: true}, {Name: "expired", Value: "must-not-send", Domain: "flow.google.com", Path: "/", Expires: 1, Secure: true}}}
 	http.DefaultTransport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if !r.Close {
+			t.Error("credits request connection must close instead of entering the idle pool")
+		}
 		if r.Header.Get("User-Agent") != credentials.UserAgent || r.URL.Query().Get("bl") != credentials.BuildLabel || r.URL.Query().Get("rpcids") != credentials.RPCs.ids() || r.Header.Get("Referer") != FlowURL+credentials.SourcePath {
 			t.Error("request contains invented runtime context")
 		}
