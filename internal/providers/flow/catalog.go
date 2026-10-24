@@ -28,8 +28,10 @@ type FlowModel struct {
 }
 
 type modelCache struct {
-	models  []FlowModel
-	expires time.Time
+	buildLabel string
+	tier       int
+	models     []FlowModel
+	expires    time.Time
 }
 
 // GetImageModels returns the image models Google Flow reports for the account
@@ -56,7 +58,7 @@ func (s *Provider) GetImageModels(ctx context.Context) models.Response[[]FlowMod
 // modelsFor returns the account's model catalogue, cached for modelCacheTTL.
 func (s *Provider) modelsFor(ctx context.Context, acc session.StoredAccount) ([]FlowModel, error) {
 	s.mu.Lock()
-	if cached, ok := s.models[acc.ID]; ok && time.Now().Before(cached.expires) {
+	if cached, ok := s.models[acc.ID]; ok && time.Now().Before(cached.expires) && cached.buildLabel == acc.Credentials.BuildLabel && cached.tier == accountTier(acc) {
 		list := append([]FlowModel(nil), cached.models...)
 		s.mu.Unlock()
 		return list, nil
@@ -68,7 +70,7 @@ func (s *Provider) modelsFor(ctx context.Context, acc session.StoredAccount) ([]
 		return nil, err
 	}
 	s.mu.Lock()
-	s.models[acc.ID] = modelCache{models: list, expires: time.Now().Add(modelCacheTTL)}
+	s.models[acc.ID] = modelCache{buildLabel: acc.Credentials.BuildLabel, tier: accountTier(acc), models: list, expires: time.Now().Add(modelCacheTTL)}
 	s.mu.Unlock()
 	return append([]FlowModel(nil), list...), nil
 }
@@ -198,6 +200,7 @@ type videoUsage struct {
 	caps        [][]int
 	aspects     []int
 	tiers       map[int]bool
+	costs       map[int]int
 	duration    int
 	anyDuration bool
 	resolutions []int
@@ -214,9 +217,11 @@ type videoFamily struct {
 }
 
 type videoModelCache struct {
-	families  []videoFamily
-	defaultID string
-	expires   time.Time
+	buildLabel string
+	tier       int
+	families   []videoFamily
+	defaultID  string
+	expires    time.Time
 }
 
 // parseVideoFamilies reads the video families and the tier's preselected family.
@@ -285,7 +290,7 @@ func parseVideoUsage(entry []any) (videoUsage, bool) {
 	if key == "" {
 		return videoUsage{}, false
 	}
-	u := videoUsage{key: key, tiers: map[int]bool{}, duration: videoDefaultDuration}
+	u := videoUsage{key: key, tiers: map[int]bool{}, costs: map[int]int{}, duration: videoDefaultDuration}
 	for _, c := range asList(firstOf(at(videoCapabilitiesIndex))) {
 		set := intList(firstOf(c))
 		if slices.Contains(set, 20) {
@@ -306,6 +311,15 @@ func parseVideoUsage(entry []any) (videoUsage, bool) {
 		// An available tier carries its cost in field 1; field 2 marks it unavailable.
 		value := asList(pair[1])
 		u.tiers[int(code)] = ok && len(value) > 0 && value[0] != nil
+		if !u.tiers[int(code)] {
+			continue
+		}
+		cost := asList(value[0])
+		if len(cost) > 1 {
+			if credits, ok := cost[1].(float64); ok && credits >= 0 {
+				u.costs[int(code)] = int(credits)
+			}
+		}
 	}
 	if d, ok := at(videoDurationIndex).(float64); ok && d > 0 {
 		u.duration = int(d)
@@ -337,6 +351,11 @@ var (
 // offered reports whether the account's tier may use the usage.
 func (u videoUsage) offered(tier int) bool {
 	return !u.hidden && u.tiers[tier]
+}
+
+func (u videoUsage) creditCost(tier int) (int, bool) {
+	cost, ok := u.costs[tier]
+	return cost, ok
 }
 
 // hasCapabilities reports whether one of the usage's capability sets is exactly want.
@@ -445,7 +464,7 @@ func (s *Provider) videoFamiliesFor(ctx context.Context, acc session.StoredAccou
 	s.mu.Lock()
 	cached, ok := s.videoModels[acc.ID]
 	s.mu.Unlock()
-	if ok && time.Now().Before(cached.expires) {
+	if ok && time.Now().Before(cached.expires) && cached.buildLabel == acc.Credentials.BuildLabel && cached.tier == accountTier(acc) {
 		return cached.families, cached.defaultID, nil
 	}
 	payload, err := s.fetchModelsPayload(ctx, acc)
@@ -457,7 +476,7 @@ func (s *Provider) videoFamiliesFor(ctx context.Context, acc session.StoredAccou
 		return nil, "", err
 	}
 	s.mu.Lock()
-	s.videoModels[acc.ID] = videoModelCache{families: families, defaultID: defaultID, expires: time.Now().Add(modelCacheTTL)}
+	s.videoModels[acc.ID] = videoModelCache{buildLabel: acc.Credentials.BuildLabel, tier: accountTier(acc), families: families, defaultID: defaultID, expires: time.Now().Add(modelCacheTTL)}
 	s.mu.Unlock()
 	return families, defaultID, nil
 }
@@ -482,20 +501,21 @@ func (s *Provider) fetchModelsPayloadFromAccount(ctx context.Context, acc sessio
 
 func (s *Provider) readModelsPayload(ctx context.Context, acc session.StoredAccount) (string, error) {
 	limits := s.cfg.Get().Accounts
-	client, err := chrome.NewFlowClient(acc.Credentials, limits)
+	client, err := s.catalogueClient(ctx, acc)
 	if err != nil {
 		return "", err
 	}
 	defer s.keepCredentials(acc, client)
-	fReq, err := BuildBatchEnvelope(RPCGetModels, "[]")
+	rpcID := client.Credentials().RPCs.ID(chrome.MethodModels)
+	fReq, err := BuildBatchEnvelope(rpcID, "[]")
 	if err != nil {
 		return "", err
 	}
-	raw, err := client.Do(ctx, RPCGetModels, fReq, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
+	raw, err := client.Do(ctx, rpcID, fReq, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
 	if err != nil {
 		return "", err
 	}
-	return chrome.ParseRPCPayload(string(raw), RPCGetModels)
+	return chrome.ParseRPCPayload(string(raw), rpcID)
 }
 
 // GetVideoModels returns the text-to-video families of the account whose turn is next.

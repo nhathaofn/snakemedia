@@ -92,8 +92,16 @@
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --account-card-min-width: 360px;
-  --flow-studio-panel-width: 240px;
-  --flow-edit-panel-width: 340px;
+  --flow-studio-panel-width: 340px;
+  --flow-chat-thread-max-width: 1120px;
+  --flow-chat-bubble-max-width: min(78%, 760px);
+  --flow-chat-result-min-width: 220px;
+  --flow-chat-result-max-width: 480px;
+  --flow-chat-attachment-size: 72px;
+  --flow-chat-video-overlay: rgba(15, 23, 42, 0.8);
+  --flow-chat-preview-max-width: 78vw;
+  --flow-chat-preview-max-height: 76vh;
+  --flow-chat-preview-media-max-height: 68vh;
   --flow-edit-preview-max-height: 240px;
   --flow-edit-trim-label-width: 56px;
   --account-avatar-size: 40px;

@@ -3,6 +3,7 @@ import { ImagePlus, X } from 'lucide-react';
 import { useAppStore } from '../../../stores';
 import type { StudioConfig } from '../../../types';
 import { formatBytes } from '../../../utils';
+import type { ConversationTurn } from './studioStore';
 
 /** A local file picked as reference, kept until generation uploads it. */
 export interface ReferenceImage {
@@ -22,14 +23,19 @@ export interface ReferenceSlice {
 
 type Setter<S> = (partial: Partial<S> | ((state: S) => Partial<S>)) => void;
 
-export function createReferenceSlice<S extends ReferenceSlice>(set: Setter<S>): ReferenceSlice {
+export function createReferenceSlice<S extends ReferenceSlice & { turns?: ConversationTurn[] }>(
+  set: Setter<S>,
+): ReferenceSlice {
   return {
     referenceImages: [],
     addReferenceImages: (images) =>
       set((state) => ({ referenceImages: [...state.referenceImages, ...images] }) as Partial<S>),
     removeReferenceImage: (previewUrl) =>
       set((state) => {
-        URL.revokeObjectURL(previewUrl);
+        const attachedToTurn = (state.turns ?? []).some((turn) =>
+          turn.attachments.some((attachment) => attachment.url === previewUrl),
+        );
+        if (!attachedToTurn) URL.revokeObjectURL(previewUrl);
         return {
           referenceImages: state.referenceImages.filter((img) => img.previewUrl !== previewUrl),
         } as Partial<S>;

@@ -66,6 +66,10 @@ export function ListNodes() {
   return window['go']['main']['App']['ListNodes']();
 }
 
+export function ListVideoEditJobs() {
+  return window['go']['main']['App']['ListVideoEditJobs']();
+}
+
 export function OpenAccountBrowser(arg1) {
   return window['go']['main']['App']['OpenAccountBrowser'](arg1);
 }
@@ -80,6 +84,10 @@ export function RefreshAccount(arg1) {
 
 export function RemoveAccount(arg1) {
   return window['go']['main']['App']['RemoveAccount'](arg1);
+}
+
+export function ResumeVideoEdit(arg1) {
+  return window['go']['main']['App']['ResumeVideoEdit'](arg1);
 }
 
 export function SaveMedia(arg1) {

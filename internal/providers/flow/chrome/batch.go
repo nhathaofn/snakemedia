@@ -18,11 +18,12 @@ import (
 // own browser profile. Cookies rotated by the provider are kept for persistence.
 // A FlowClient is not safe for concurrent use.
 type FlowClient struct {
-	base   string
-	origin *url.URL
-	creds  Credentials
-	policy config.AccountConfig
-	client *http.Client
+	base         string
+	origin       *url.URL
+	creds        Credentials
+	policy       config.AccountConfig
+	uploadPolicy config.FlowConfig
+	client       *http.Client
 }
 
 // NewFlowClient prepares a client for FlowURL.
@@ -44,7 +45,7 @@ func newFlowClient(base string, c Credentials, policy config.AccountConfig) (*Fl
 		return nil, err
 	}
 	client := &http.Client{Jar: jar, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-	return &FlowClient{base: base, origin: origin, creds: c, policy: policy, client: client}, nil
+	return &FlowClient{base: base, origin: origin, creds: c, policy: policy, uploadPolicy: config.DefaultFlowConfig(), client: client}, nil
 }
 
 // Credentials returns the session credentials including any rotated cookies.
@@ -131,3 +132,5 @@ func (f *FlowClient) FetchMedia(ctx context.Context, rawURL string, accept []str
 func mediaHost(host string) bool {
 	return strings.HasSuffix(host, ".google") || host == "storage.googleapis.com" || strings.HasSuffix(host, ".googleusercontent.com")
 }
+
+func (f *FlowClient) SetUploadPolicy(policy config.FlowConfig) { f.uploadPolicy = policy }

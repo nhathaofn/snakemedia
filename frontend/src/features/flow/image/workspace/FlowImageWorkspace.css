@@ -35,15 +35,6 @@
   gap: var(--space-2);
 }
 
-.flow-image-prompt-caption {
-  margin: 0;
-  font-size: var(--font-size-caption);
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* Lightbox Modal */
 .flow-lightbox-overlay {
   position: fixed;

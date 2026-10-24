@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,27 +27,36 @@ type Accounts interface {
 	EnsureAccountHeadlessBrowser(ctx context.Context, acc session.StoredAccount) (*chrome.Browser, error)
 	SyncSession(ctx context.Context, acc session.StoredAccount) (session.StoredAccount, error)
 	UpdateCredentials(id string, c chrome.Credentials) error
+	UpdateBalance(id string, balance chrome.FlowCredits, c chrome.Credentials) error
 }
 
 // Provider is the Google Flow provider: account rotation, per-account caches,
 // credential upkeep and the image/video capabilities (image.go, video.go) that
 // engine nodes expose.
 type Provider struct {
-	accounts Accounts
-	cfg      *config.Manager
-	media    *media.Store
-	rrIndex  uint64
-	mu       sync.Mutex
+	accounts            Accounts
+	cfg                 *config.Manager
+	media               *media.Store
+	rrIndex             uint64
+	jobLocks            sync.Map
+	balanceRefreshLocks sync.Map
+	mu                  sync.Mutex
+	rotationMu          sync.Mutex
+	rotationAccounts    map[string]*rotationAccountState
+	videoCurrent        map[string]float64
+	imageCursor         uint64
+	rotationChanged     chan struct{}
 	// Both caches are keyed by account ID: catalogue defaults depend on the
 	// account tier, and projects belong to one account.
 	models             map[string]modelCache
 	projects           map[string]string
 	videoModels        map[string]videoModelCache
 	fetchModelsPayload func(ctx context.Context, acc session.StoredAccount) (string, error)
+	refreshLiveCredits func(ctx context.Context, id string)
 	// syncSession refreshes an account's session from its Chrome profile.
 	syncSession        func(ctx context.Context, acc session.StoredAccount) (session.StoredAccount, error)
 	generateLiveVideos func(ctx context.Context, acc session.StoredAccount, req GenerateVideoRequest, variant string) ([]GeneratedVideoItem, error)
-	uploadLiveVideo    func(ctx context.Context, acc session.StoredAccount, source localVideo) (UploadedSourceVideo, error)
+	uploadLiveVideo    func(ctx context.Context, acc session.StoredAccount, source localVideo) (sourceRecord, error)
 	editLiveVideos     func(ctx context.Context, acc session.StoredAccount, req EditVideoRequest, source localVideo, family videoFamily) ([]GeneratedVideoItem, error)
 	fetchLiveModels    func(ctx context.Context, acc session.StoredAccount) ([]FlowModel, error)
 	generateLiveImages func(ctx context.Context, acc session.StoredAccount, req GenerateImageRequest) ([]GeneratedImageItem, error)
@@ -65,6 +75,7 @@ func New(accounts Accounts, cfg *config.Manager, store *media.Store) *Provider {
 	s.fetchLiveModels = s.queryModelsFromAccount
 	s.generateLiveImages = s.generateImagesFromAccount
 	s.fetchModelsPayload = s.fetchModelsPayloadFromAccount
+	s.refreshLiveCredits = s.refreshAccountCredits
 	s.generateLiveVideos = s.generateVideosFromAccount
 	s.uploadLiveVideo = s.uploadVideoFromAccount
 	s.editLiveVideos = s.editVideosFromAccount
@@ -74,37 +85,53 @@ func New(accounts Accounts, cfg *config.Manager, store *media.Store) *Provider {
 	return s
 }
 
-// readyAccount takes the next account in rotation, holds its profile and brings
-// its Flow session up to date from its Chrome profile. Accounts signed out of
-// Google are marked expired and skipped, so generation keeps working while any
-// account can still sign in. Call release when the work is done.
+// readyAccount reserves the least-busy compatible account, holds its profile
+// and brings its Flow session up to date from Chrome. Signed-out accounts are
+// skipped so generation can continue while another account remains connected.
 func (s *Provider) readyAccount(ctx context.Context) (*session.StoredAccount, func(), error) {
 	valid, err := s.GetValidConnectedAccounts()
 	if err != nil {
 		return nil, nil, err
 	}
+	return s.readyAccountFrom(ctx, valid)
+}
+
+func (s *Provider) readyAccountFrom(ctx context.Context, valid []session.StoredAccount) (*session.StoredAccount, func(), error) {
+	if len(valid) == 0 {
+		_, err := s.NextAccount()
+		return nil, nil, err
+	}
 	var skipped []string
-	for range valid {
-		acc, err := s.NextAccount()
+	for len(valid) > 0 {
+		acc, lease, err := s.acquireLeastBusy(ctx, valid)
 		if err != nil {
 			return nil, nil, err
 		}
-		release := s.accounts.AcquireProfile(acc.ProfileDir)
-		synced, err := s.syncSession(ctx, *acc)
+		releaseProfile := s.accounts.AcquireProfile(acc.ProfileDir)
+		synced, err := s.syncSession(ctx, acc)
 		if err == nil {
-			return &synced, release, nil
+			return &synced, func() {
+				releaseProfile()
+				lease.release()
+			}, nil
 		}
-		release()
+		releaseProfile()
+		lease.release()
 		if !errors.Is(err, session.ErrSessionSignedOut) {
 			return nil, nil, fmt.Errorf("không đồng bộ được phiên Flow của %s: %w", acc.Email, err)
 		}
 		skipped = append(skipped, acc.Email)
+		valid = removeAccount(valid, acc.ID)
 	}
 	if len(skipped) > 0 {
 		return nil, nil, fmt.Errorf("các tài khoản đã đăng xuất khỏi Google (%s); hãy đăng nhập lại ở mục Account", strings.Join(skipped, ", "))
 	}
-	_, err = s.NextAccount() // reports that no account is usable
+	_, err := s.NextAccount() // reports that no account is usable
 	return nil, nil, err
+}
+
+func removeAccount(accounts []session.StoredAccount, id string) []session.StoredAccount {
+	return slices.DeleteFunc(accounts, func(acc session.StoredAccount) bool { return acc.ID == id })
 }
 
 // isUnauthorized reports a Flow HTTP 401, i.e. a stale stored session.
@@ -212,6 +239,7 @@ func accountTier(acc session.StoredAccount) int {
 // StudioConfig holds the fixed choices and limits of both studios, so the
 // frontend renders them instead of keeping its own copies.
 type StudioConfig struct {
+	VideoExtensions    []string `json:"videoExtensions"`
 	ImageAspectRatios  []string `json:"imageAspectRatios"`
 	DefaultImageRatio  string   `json:"defaultImageRatio"`
 	MaxImages          int      `json:"maxImages"`
@@ -223,6 +251,7 @@ type StudioConfig struct {
 // GetStudioConfig returns the studio choices and limits enforced by the backend.
 func (s *Provider) GetStudioConfig(_ context.Context) models.Response[StudioConfig] {
 	return models.SuccessResponse(StudioConfig{
+		VideoExtensions:    media.SupportedVideoExtensions(),
 		ImageAspectRatios:  ImageAspectRatios,
 		DefaultImageRatio:  DefaultImageAspectRatio,
 		MaxImages:          MaxImagesPerRequest,

@@ -20,9 +20,32 @@ import (
 const creditsMethod = "/VideoFxService.GetCredits"
 const availabilityMethod = "/VideoFxService.CheckFlowAvailability"
 
+const (
+	MethodVideoStatus             = "/VideoFxService.BatchCheckAsyncVideoGenerationStatus"
+	MethodModels                  = "/FlowService.GetModels"
+	MethodProjects                = "/FlowService.GetProjects"
+	MethodCreateProject           = "/AiSandbox.CreateProject"
+	MethodProjectContents         = "/FlowService.GetProjectContents"
+	MethodMedia                   = "/FlowService.GetMedia"
+	MethodUploadImage             = "/FlowService.UploadImage"
+	MethodGenerateVideoText       = "/VideoFxService.BatchAsyncGenerateVideoText"
+	MethodGenerateVideoReferences = "/VideoFxService.BatchAsyncGenerateVideoReferenceImages"
+	MethodEditVideo               = "/VideoFxService.BatchAsyncGenerateVideoEditVideo"
+)
+
 type RPCRegistry struct {
-	Credits      string `json:"credits"`
-	Availability string `json:"availability"`
+	VideoStatus             string `json:"videoStatus,omitempty"`
+	Models                  string `json:"models,omitempty"`
+	Projects                string `json:"projects,omitempty"`
+	CreateProject           string `json:"createProject,omitempty"`
+	ProjectContents         string `json:"projectContents,omitempty"`
+	Media                   string `json:"media,omitempty"`
+	UploadImage             string `json:"uploadImage,omitempty"`
+	GenerateVideoText       string `json:"generateVideoText,omitempty"`
+	GenerateVideoReferences string `json:"generateVideoReferences,omitempty"`
+	EditVideo               string `json:"editVideo,omitempty"`
+	Credits                 string `json:"credits"`
+	Availability            string `json:"availability"`
 }
 
 var rpcIDPattern = regexp.MustCompile(`^[A-Za-z0-9_]{3,30}$`)
@@ -52,11 +75,12 @@ func scriptOrigin(raw string) bool {
 	return false
 }
 
-func discoverRPCs(ctx context.Context, conn *websocket.Conn, build string, policy config.AccountConfig) (RPCRegistry, error) {
+func discoverRPCs(ctx context.Context, conn *websocket.Conn, build string, policy config.AccountConfig, required ...string) (RPCRegistry, error) {
+	cacheKey := build + strings.Join(required, ",")
 	if build == "" {
 		return RPCRegistry{}, errors.New("missing runtime build label")
 	}
-	if cached, ok := registryCache.Load(build); ok {
+	if cached, ok := registryCache.Load(cacheKey); ok {
 		entry := cached.(registryEntry)
 		if entry.Err == nil || time.Now().Before(entry.Until) {
 			return entry.Registry, entry.Err
@@ -121,7 +145,7 @@ func discoverRPCs(ctx context.Context, conn *websocket.Conn, build string, polic
 		}
 		return sources[i] < sources[j]
 	})
-	registry, err := resolveRPCs(sources, policy.MaxDiscoveryScripts, policy.MaxResponseBytes, func(source string) ([]byte, error) {
+	registry, err := resolveRPCs(sources, policy.MaxDiscoveryScripts, policy.MaxDiscoveryBytes, func(source string) ([]byte, error) {
 		if scriptID := scripts[source]; scriptID != "" {
 			var result struct {
 				Source string `json:"scriptSource"`
@@ -139,13 +163,15 @@ func discoverRPCs(ctx context.Context, conn *websocket.Conn, build string, polic
 			return []byte(text), nil
 		}
 		return nil, errors.New("cannot read script source")
-	})
-	registryCache.Store(build, registryEntry{Registry: registry, Err: err, Until: time.Now().Add(time.Duration(policy.PollMaxIntervalMS) * time.Millisecond)})
+	}, required...)
+	if len(required) == 0 || err == nil {
+		registryCache.Store(cacheKey, registryEntry{Registry: registry, Err: err, Until: time.Now().Add(time.Duration(policy.PollMaxIntervalMS) * time.Millisecond)})
+	}
 	return registry, err
 }
 
 // Deduplication, an origin allowlist and a cumulative budget bound discovery.
-func resolveRPCs(sources []string, maxScripts int, budget int64, load func(string) ([]byte, error)) (RPCRegistry, error) {
+func resolveRPCs(sources []string, maxScripts int, budget int64, load func(string) ([]byte, error), required ...string) (RPCRegistry, error) {
 	var registry RPCRegistry
 	seen := make(map[string]bool)
 	for _, source := range sources {
@@ -184,27 +210,28 @@ func resolveRPCs(sources []string, maxScripts int, budget int64, load func(strin
 			if method == "" || candidateCount != 1 {
 				continue
 			}
-			switch method {
-			case creditsMethod:
-				if registry.Credits != "" && registry.Credits != candidateID {
-					return RPCRegistry{}, errors.New("ambiguous credits RPC")
+			field := registry.field(method)
+			if field != nil {
+				if *field != "" && *field != candidateID {
+					return RPCRegistry{}, fmt.Errorf("ambiguous Flow RPC: %s", method)
 				}
-				registry.Credits = candidateID
-			case availabilityMethod:
-				if registry.Availability != "" && registry.Availability != candidateID {
-					return RPCRegistry{}, errors.New("ambiguous availability RPC")
-				}
-				registry.Availability = candidateID
+				*field = candidateID
 			}
 		}
-		if registry.valid() && registry.Availability != "" {
+		if (len(required) == 0 && registry.valid() && registry.Availability != "") || (len(required) > 0 && registry.Has(required...)) {
 			return registry, nil
 		}
 	}
-	if registry.valid() {
+	if (len(required) == 0 && registry.valid()) || (len(required) > 0 && registry.Has(required...)) {
 		return registry, nil
 	}
-	return RPCRegistry{}, errors.New("Không tìm thấy RPC tài khoản trong bundle Flow hiện tại. Hãy tải lại trang; không sử dụng mã RPC của build cũ.")
+	missing := []string{}
+	for _, method := range required {
+		if !registry.Has(method) {
+			missing = append(missing, method)
+		}
+	}
+	return registry, fmt.Errorf("Flow chưa tải đủ RPC của build hiện tại (scripts=%d, missing=%s). Mở project Flow rồi thử lại.", len(seen), strings.Join(missing, ","))
 }
 
 func (r RPCRegistry) ids() string {
@@ -212,4 +239,80 @@ func (r RPCRegistry) ids() string {
 		return r.Credits
 	}
 	return strings.Join([]string{r.Credits, r.Availability}, ",")
+}
+
+func (r *RPCRegistry) field(method string) *string {
+	switch method {
+	case MethodVideoStatus:
+		return &r.VideoStatus
+	case creditsMethod:
+		return &r.Credits
+	case availabilityMethod:
+		return &r.Availability
+	case MethodModels:
+		return &r.Models
+	case MethodProjects:
+		return &r.Projects
+	case MethodCreateProject:
+		return &r.CreateProject
+	case MethodProjectContents:
+		return &r.ProjectContents
+	case MethodMedia:
+		return &r.Media
+	case MethodUploadImage:
+		return &r.UploadImage
+	case MethodGenerateVideoText:
+		return &r.GenerateVideoText
+	case MethodGenerateVideoReferences:
+		return &r.GenerateVideoReferences
+	case MethodEditVideo:
+		return &r.EditVideo
+	}
+	return nil
+}
+
+func (r RPCRegistry) ID(method string) string {
+	p := r.field(method)
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+func (r RPCRegistry) Has(methods ...string) bool {
+	for _, m := range methods {
+		if !rpcIDPattern.MatchString(r.ID(m)) {
+			return false
+		}
+	}
+	return true
+}
+
+// DiscoverFlowRPCs reads descriptors from the account's currently loaded scripts.
+// Missing methods fail explicitly; a captured RPC ID is never used as fallback.
+func DiscoverFlowRPCs(ctx context.Context, port int, build string, policy config.AccountConfig, required ...string) (RPCRegistry, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(policy.RequestTimeoutSeconds)*time.Second)
+	defer cancel()
+	var pages []pageEntry
+	if err := localJSON(ctx, port, "/json", policy, &pages); err != nil {
+		return RPCRegistry{}, err
+	}
+	for _, page := range pages {
+		u, err := url.Parse(page.URL)
+		if err != nil || page.Type != "page" || u.Scheme != "https" || u.Host != "flow.google.com" {
+			continue
+		}
+		if !localWebSocket(page.WebSocketDebuggerURL, port) {
+			return RPCRegistry{}, errors.New("invalid account page endpoint")
+		}
+		conn, _, err := websocket.DefaultDialer.DialContext(ctx, page.WebSocketDebuggerURL, nil)
+		if err != nil {
+			return RPCRegistry{}, err
+		}
+		defer conn.Close()
+		conn.SetReadLimit(policy.MaxDiscoveryBytes)
+		stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+		defer stop()
+		return discoverRPCs(ctx, conn, build, policy, required...)
+	}
+	return RPCRegistry{}, ErrPageNotReady
 }

@@ -44,3 +44,40 @@ On Windows, `accounts.json` contains a versioned DPAPI-encrypted store bound to 
 Removing an account closes its managed Chrome session and permanently deletes its application credentials and profile directory (cookies, cache and local login data). Removal is restricted to directories under the managed profiles root; linked directories and profiles shared by other accounts are rejected. A deletion failure keeps the account listed so it can be retried. This does not delete the Google account itself. Closing an unfinished login cancels its work, closes the owned browser and removes the unsaved profile. Completed account browsers stay available until application shutdown. Automatic polling stops after success, cancellation or timeout; refresh work is serialized and respects the configured cooldown and server `Retry-After`.
 
 Regression tests use synthetic sessions and local CDP/HTTP responses. To run the optional real Chrome lifecycle smoke test with a temporary profile and `about:blank`, set `SNAKEMEDIA_TEST_CHROME=1` and run `go test ./internal/services/chrome -run TestBrowserLifecycle -v`. This does not test an interactive Google login.
+
+
+### Edit video runtime
+
+Edit video requires Chrome and FFmpeg's `ffprobe` executable. The backend finds
+`ffprobe` on `PATH`; an explicit executable can be selected with `flow.probePath`
+in the user's `config.json`. No machine-specific executable path is shipped.
+Video dimensions and duration come from the actual local file, independently of
+whether WebView2 supports previewing its codec.
+
+Uploaded sources are recorded under the user data directory's `flow/sources`.
+The frontend receives an opaque source ID; ownership, project, workflow and media
+IDs remain bound by the backend. Edits create a version in the uploaded workflow.
+After upload, the backend waits for Flow's source processing to succeed and
+publish a serving URL. The editor then uses Flow's normalized dimensions and
+duration. Trim coordinates refer to that untrimmed source timeline.
+
+`flow/jobs` journals each edit before submission. A timeout or lost response keeps
+the existing job available through **Kiểm tra tiếp**, including after restart;
+resuming never sends another generation request. Jobs do not contain cookies,
+CSRF tokens or reCAPTCHA tokens. Runtime RPC descriptors and the reCAPTCHA key are
+discovered from the active account's page, including its lazily loaded studio.
+
+Upload retry/size policy, trim step/minimum and polling backoff live under `flow`
+in `config.json`.
+Script discovery has a separate `accounts.maxDiscoveryBytes` budget, so studio
+bundles do not compete with the HTTP response limit. Downloads stream atomically
+to disk rather than buffering entire videos in memory.
+
+For the optional real integration test, set `SNAKEMEDIA_LIVE_EDIT=1`,
+`SNAKEMEDIA_LIVE_DATA` to the existing application data directory and
+`SNAKEMEDIA_LIVE_VIDEO` to a real source file and `SNAKEMEDIA_LIVE_PROMPT` to
+the intended edit, then run
+`go test ./internal/providers/flow -run '^TestLiveVideoEdit$' -v -count=1`.
+`SNAKEMEDIA_LIVE_OUTPUT` optionally retains the result and job records in a chosen
+folder. This test uploads a real file and can consume Flow credits; it does not
+substitute simulated server results.

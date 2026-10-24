@@ -47,16 +47,17 @@ type flowProject struct {
 // FetchAccountProjects queries RPC UpteDb (/Provider.GetProjects) and returns the
 // account's projects, most recently updated first.
 func (s *Provider) FetchAccountProjects(ctx context.Context, client *chrome.FlowClient) ([]flowProject, error) {
-	fReq, err := BuildBatchEnvelope(RPCGetProjects, []any{"projects/*", 21, nil, nil, nil, nil, []any{1}})
+	rpcID := client.Credentials().RPCs.ID(chrome.MethodProjects)
+	fReq, err := BuildBatchEnvelope(rpcID, []any{"projects/*", 21, nil, nil, nil, nil, []any{1}})
 	if err != nil {
 		return nil, err
 	}
 	limits := s.cfg.Get().Accounts
-	body, err := client.Do(ctx, RPCGetProjects, fReq, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
+	body, err := client.Do(ctx, rpcID, fReq, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
 	if err != nil {
 		return nil, err
 	}
-	payload, err := chrome.ParseRPCPayload(string(body), RPCGetProjects)
+	payload, err := chrome.ParseRPCPayload(string(body), rpcID)
 	if err != nil {
 		return nil, err
 	}
@@ -107,16 +108,17 @@ func (s *Provider) CreateAccountProject(ctx context.Context, client *chrome.Flow
 	if err != nil {
 		return "", err
 	}
-	fReq, err := BuildBatchEnvelope(RPCCreateProject, inner)
+	rpcID := client.Credentials().RPCs.ID(chrome.MethodCreateProject)
+	fReq, err := BuildBatchEnvelope(rpcID, inner)
 	if err != nil {
 		return "", err
 	}
 	limits := s.cfg.Get().Accounts
-	body, err := client.Do(ctx, RPCCreateProject, fReq, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
+	body, err := client.Do(ctx, rpcID, fReq, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
 	if err != nil {
 		return "", err
 	}
-	payload, err := chrome.ParseRPCPayload(string(body), RPCCreateProject)
+	payload, err := chrome.ParseRPCPayload(string(body), rpcID)
 	if err != nil {
 		return "", err
 	}

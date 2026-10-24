@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 
@@ -41,6 +42,15 @@ var contentTypes = map[string]string{".mp4": "video/mp4", ".m4v": "video/mp4", "
 // VideoTypes are the video files a user may import, with the type sent when
 // uploading them (Flow's upload whitelist: mp4, m4v, webm, quicktime).
 var VideoTypes = map[string]string{".mp4": "video/mp4", ".m4v": "video/m4v", ".webm": "video/webm", ".mov": "video/quicktime"}
+
+func SupportedVideoExtensions() []string {
+	list := make([]string, 0, len(VideoTypes))
+	for extension := range VideoTypes {
+		list = append(list, extension)
+	}
+	slices.Sort(list)
+	return list
+}
 
 var unsafeFileChars = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
 

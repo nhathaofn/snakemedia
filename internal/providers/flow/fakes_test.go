@@ -48,7 +48,7 @@ func seedFlowAccount(t *testing.T, f *fakeAccounts, email string, verified bool)
 			Balance: &chrome.FlowCredits{Credits: 58, TierCode: 1, Tier: chrome.TierPro, DailyLimit: 58},
 		},
 		Credentials: chrome.Credentials{
-			RPCs:    chrome.RPCRegistry{Credits: "testCredits", Availability: "testAvailability"},
+			RPCs:    chrome.RPCRegistry{Credits: "testCredits", Availability: "testAvailability", Models: RPCGetModels, Projects: RPCGetProjects, CreateProject: RPCCreateProject, ProjectContents: RPCGetProjectContents, Media: RPCGetMedia, EditVideo: RPCEditVideo},
 			AtToken: "test-csrf", SessionID: "test-session", BuildLabel: "test-runtime-build",
 			Language: "en", UserAgent: "test-runtime-agent", SourcePath: "/",
 			Cookies: []chrome.CookieItem{
@@ -112,6 +112,25 @@ func (f *fakeAccounts) UpdateCredentials(id string, c chrome.Credentials) error 
 	return errors.New("account removed")
 }
 
+func (f *fakeAccounts) UpdateBalance(id string, balance chrome.FlowCredits, c chrome.Credentials) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.list {
+		if f.list[i].ID != id {
+			continue
+		}
+		if f.list[i].Credentials.AtToken != c.AtToken {
+			return nil
+		}
+		f.list[i].Balance = &balance
+		f.list[i].Credentials = c
+		f.list[i].LastVerifiedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		f.list[i].Status = session.AccountConnected
+		return nil
+	}
+	return errors.New("account removed")
+}
+
 func (f *fakeAccounts) findAccount(id string) (session.StoredAccount, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -133,6 +152,7 @@ func (f *fakeAccounts) profilePath(dir string) (string, error) {
 func testFlowService(accounts *fakeAccounts) *Provider {
 	s := New(accounts, accounts.cfgManager, media.NewStore(accounts.mediaDir))
 	offline := errors.New("live Flow call in a unit test")
+	s.refreshLiveCredits = func(context.Context, string) {}
 	s.fetchModelsPayload = func(context.Context, session.StoredAccount) (string, error) { return "", offline }
 	s.syncSession = func(_ context.Context, acc session.StoredAccount) (session.StoredAccount, error) { return acc, nil }
 	s.generateLiveImages = func(context.Context, session.StoredAccount, GenerateImageRequest) ([]GeneratedImageItem, error) {
@@ -141,8 +161,8 @@ func testFlowService(accounts *fakeAccounts) *Provider {
 	s.generateLiveVideos = func(context.Context, session.StoredAccount, GenerateVideoRequest, string) ([]GeneratedVideoItem, error) {
 		return nil, offline
 	}
-	s.uploadLiveVideo = func(context.Context, session.StoredAccount, localVideo) (UploadedSourceVideo, error) {
-		return UploadedSourceVideo{}, offline
+	s.uploadLiveVideo = func(context.Context, session.StoredAccount, localVideo) (sourceRecord, error) {
+		return sourceRecord{}, offline
 	}
 	s.editLiveVideos = func(context.Context, session.StoredAccount, EditVideoRequest, localVideo, videoFamily) ([]GeneratedVideoItem, error) {
 		return nil, offline

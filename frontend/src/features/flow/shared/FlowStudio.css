@@ -220,6 +220,258 @@
   flex-direction: column;
 }
 
+.flow-conversation-gallery {
+  scroll-behavior: smooth;
+}
+
+.flow-chat-thread {
+  width: min(100%, var(--flow-chat-thread-max-width));
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-10);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-10);
+}
+
+.flow-chat-turn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-7);
+}
+
+.flow-chat-row {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+}
+
+.flow-chat-user-row {
+  justify-content: flex-end;
+}
+
+.flow-chat-user-message,
+.flow-chat-ai-message {
+  min-width: 0;
+  max-width: var(--flow-chat-bubble-max-width);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.flow-chat-user-message {
+  padding: var(--space-6) var(--space-7);
+  border: var(--border-width) solid var(--feedback-primary-border);
+  border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-lg);
+  background: var(--feedback-primary-bg);
+}
+
+.flow-chat-role {
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-secondary);
+}
+
+.flow-chat-prompt {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.flow-chat-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+}
+
+.flow-chat-attachment {
+  width: var(--flow-chat-attachment-size);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2);
+  overflow: hidden;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  cursor: zoom-in;
+  transition:
+    border-color var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.flow-chat-attachment:hover {
+  border-color: var(--primary);
+  transform: translateY(-1px);
+}
+
+.flow-chat-attachment-preview {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  display: block;
+  overflow: hidden;
+  background: var(--bg-tertiary);
+}
+
+.flow-chat-attachment-preview img,
+.flow-chat-attachment-preview video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.flow-chat-attachment-video-icon {
+  position: absolute;
+  right: var(--space-2);
+  bottom: var(--space-2);
+  padding: var(--space-1);
+  box-sizing: content-box;
+  border-radius: var(--radius-full);
+  background: var(--flow-chat-video-overlay);
+  color: var(--text-primary);
+}
+
+.flow-chat-attachment-name {
+  padding: 0 var(--space-2) var(--space-2);
+  overflow: hidden;
+  font-size: var(--font-size-caption);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-chat-ai-row {
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.flow-chat-ai-icon {
+  width: var(--icon-size-lg);
+  height: var(--icon-size-lg);
+  margin-top: var(--space-7);
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: var(--primary);
+}
+
+.flow-chat-ai-message {
+  flex: 1;
+}
+
+.flow-chat-results {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-5);
+}
+
+.flow-chat-result,
+.flow-chat-pending {
+  min-width: 0;
+  flex: 1 1 var(--flow-chat-result-min-width);
+  max-width: var(--flow-chat-result-max-width);
+}
+
+.flow-chat-result > .flow-media-card,
+.flow-chat-result > .flow-video-card {
+  width: 100%;
+}
+
+.flow-chat-pending {
+  min-height: var(--flow-chat-result-min-width);
+  padding: var(--space-6);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  border: var(--border-width) solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: var(--font-size-caption);
+  text-align: center;
+}
+
+.flow-chat-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-dialog);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8);
+  background: var(--dialog-backdrop);
+  backdrop-filter: blur(var(--dialog-blur));
+}
+
+.flow-chat-preview-dialog {
+  position: relative;
+  max-width: var(--flow-chat-preview-max-width);
+  max-height: var(--flow-chat-preview-max-height);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  overflow: hidden;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-lg);
+}
+
+.flow-chat-preview-dialog img,
+.flow-chat-preview-dialog video {
+  display: block;
+  max-width: 100%;
+  max-height: var(--flow-chat-preview-media-max-height);
+  object-fit: contain;
+  background: var(--bg-primary);
+}
+
+.flow-chat-preview-name {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-chat-preview-close {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-4);
+  z-index: 1;
+  width: var(--icon-size-lg);
+  height: var(--icon-size-lg);
+  padding: var(--space-1);
+  display: grid;
+  place-items: center;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-full);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: var(--font-size-label);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.flow-chat-preview-close:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
 /* Empty State */
 .flow-gallery-empty {
   flex: 1;
@@ -381,6 +633,19 @@
   margin: 0;
   font-size: var(--font-size-caption);
   color: var(--text-muted);
+}
+
+.flow-chat-error {
+  flex: 1 1 100%;
+  max-width: var(--flow-chat-result-max-width);
+  margin: 0;
+  padding: var(--space-4) var(--space-5);
+  border: var(--border-width) solid var(--danger);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--danger);
+  font-size: var(--font-size-caption);
+  overflow-wrap: anywhere;
 }
 
 .flow-prompt-input-row {

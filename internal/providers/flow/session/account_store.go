@@ -214,6 +214,35 @@ func (s *Service) UpdateCredentials(id string, c chrome.Credentials) error {
 	return errors.New("Tài khoản đã bị xóa trong lúc xử lý.")
 }
 
+// UpdateBalance stores a balance queried after a Flow generation. A newer
+// session snapshot wins so a background query cannot overwrite newer cookies.
+func (s *Service) UpdateBalance(id string, balance chrome.FlowCredits, c chrome.Credentials) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	accounts, err := s.loadAccountsUnsafe()
+	if err != nil {
+		return err
+	}
+	for i := range accounts {
+		if accounts[i].ID != id {
+			continue
+		}
+		if accounts[i].Credentials.AtToken != c.AtToken {
+			return nil
+		}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		accounts[i].Balance = &balance
+		accounts[i].BalanceError = ""
+		accounts[i].Credentials = c
+		accounts[i].CookieCount = len(c.Cookies)
+		accounts[i].Status = AccountConnected
+		accounts[i].LastVerifiedAt = now
+		accounts[i].UpdatedAt = now
+		return s.saveAccountsUnsafe(accounts)
+	}
+	return errors.New("Tài khoản đã bị xóa trong lúc xử lý.")
+}
+
 // replaceCredentials stores a session read straight from the account's browser.
 func (s *Service) replaceCredentials(id string, c chrome.Credentials) error {
 	return s.updateStored(id, func(acc *StoredAccount) {

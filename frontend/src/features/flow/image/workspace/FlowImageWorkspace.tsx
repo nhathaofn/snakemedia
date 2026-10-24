@@ -5,7 +5,7 @@ import { api } from '../../../../services/api';
 import { useAppStore } from '../../../../stores';
 import { GenerateImageRequest } from '../../../../types';
 import {
-  MediaGallery,
+  ConversationGallery,
   PromptBar,
   cssAspectRatio,
   selectedModelOf,
@@ -20,7 +20,7 @@ export const FlowImageWorkspace: React.FC = () => {
   const addToast = useAppStore((s) => s.addToast);
   const generate = useGeneration(useFlowImageStore, 'ảnh');
   const saveMedia = useSaveMedia();
-  const { prompt, aspectRatio, quantity, referenceImages, items, previewImage } = store;
+  const { prompt, referenceImages, items, turns, previewImage } = store;
 
   const referenceLimit = model?.maxReferenceImages ?? 0;
   const blockedReason = !model
@@ -29,23 +29,48 @@ export const FlowImageWorkspace: React.FC = () => {
       ? `${model.name} nhận tối đa ${referenceLimit} ảnh tham chiếu.`
       : undefined;
 
-  const onGenerate = () =>
-    void generate(() =>
-      api.generateImages(
-        // createFrom builds the generated class, which converts the nested references.
-        GenerateImageRequest.createFrom({
-          prompt: prompt.trim(),
-          modelId: store.selectedModel,
-          aspectRatio,
-          count: quantity,
-          references: referenceImages.map((img) => ({
-            base64: img.base64,
-            mimeType: img.mimeType,
-            fileName: img.name,
-          })),
-        }),
-      ),
+  const onGenerate = () => {
+    const current = useFlowImageStore.getState();
+    const turn = {
+      id: crypto.randomUUID(),
+      prompt: current.prompt.trim(),
+      attachments: current.referenceImages.map((image) => ({
+        id: image.previewUrl,
+        kind: 'image' as const,
+        name: image.name,
+        url: image.previewUrl,
+      })),
+      pendingCount: current.quantity,
+      pendingRatio: current.aspectRatio,
+      pendingLabel: 'Đang tạo ảnh',
+    };
+    void generate(
+      () =>
+        api.generateImages(
+          // createFrom builds the generated class, which converts the nested references.
+          GenerateImageRequest.createFrom({
+            prompt: current.prompt.trim(),
+            modelId: current.selectedModel,
+            aspectRatio: current.aspectRatio,
+            count: current.quantity,
+            references: current.referenceImages.map((img) => ({
+              base64: img.base64,
+              mimeType: img.mimeType,
+              fileName: img.name,
+            })),
+          }),
+        ),
+      {
+        onStart: () => useFlowImageStore.getState().beginTurn(turn),
+        onSuccess: (results) => useFlowImageStore.getState().completeTurn(turn.id, results),
+        onFailure: (message, promptRestored) => {
+          const current = useFlowImageStore.getState();
+          if (promptRestored) current.removeTurn(turn.id);
+          else current.failTurn(turn.id, message);
+        },
+      },
     );
+  };
 
   const copyPrompt = (text: string) => {
     void navigator.clipboard.writeText(text);
@@ -54,20 +79,13 @@ export const FlowImageWorkspace: React.FC = () => {
 
   return (
     <div className="flow-workspace-container">
-      <MediaGallery
-        isEmpty={items.length === 0}
+      <ConversationGallery
+        turns={turns}
+        items={items}
         emptyTitle="Tạo hình ảnh với Google Flow"
         emptyText="Mô tả hình ảnh bạn muốn ở ô bên dưới rồi nhấn Enter."
-        pending={store.isGenerating ? quantity : 0}
-        pendingRatio={aspectRatio}
-        pendingLabel="Đang tạo ảnh"
-      >
-        {items.map((img) => (
-          <div
-            key={img.id}
-            className="flow-media-card"
-            style={{ aspectRatio: cssAspectRatio(img.aspectRatio) }}
-          >
+        renderItem={(img) => (
+          <div className="flow-media-card" style={{ aspectRatio: cssAspectRatio(img.aspectRatio) }}>
             {img.localUrl ? (
               <img src={img.localUrl} alt={img.prompt} loading="lazy" />
             ) : (
@@ -106,13 +124,10 @@ export const FlowImageWorkspace: React.FC = () => {
                   <Download size={14} />
                 </button>
               </div>
-              <p className="flow-image-prompt-caption" title={img.prompt}>
-                {img.prompt}
-              </p>
             </div>
           </div>
-        ))}
-      </MediaGallery>
+        )}
+      />
 
       <PromptBar
         prompt={prompt}

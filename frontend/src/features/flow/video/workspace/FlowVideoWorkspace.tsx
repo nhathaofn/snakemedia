@@ -2,9 +2,8 @@ import React from 'react';
 import { api } from '../../../../services/api';
 import { GenerateVideoRequest } from '../../../../types';
 import {
-  MediaGallery,
+  ConversationGallery,
   PromptBar,
-  VIDEO_GRID_CLASS,
   VideoCard,
   selectedModelOf,
   useGeneration,
@@ -17,7 +16,7 @@ export const FlowVideoWorkspace: React.FC = () => {
   const model = useFlowVideoStore(selectedModelOf);
   const generate = useGeneration(useFlowVideoStore, 'video');
   const saveMedia = useSaveMedia();
-  const { prompt, aspectRatio, duration, resolution, quantity, items, referenceImages } = store;
+  const { prompt, items, referenceImages, turns } = store;
 
   const referenceLimit = model?.maxReferenceImages ?? 0;
   const blockedReason = !model
@@ -26,41 +25,62 @@ export const FlowVideoWorkspace: React.FC = () => {
       ? `${model.name} nhận tối đa ${referenceLimit} ảnh tham chiếu.`
       : undefined;
 
-  const onGenerate = () =>
-    void generate(() =>
-      api.generateVideos(
-        // createFrom builds the generated class, which converts the nested references.
-        GenerateVideoRequest.createFrom({
-          prompt: prompt.trim(),
-          modelId: store.selectedModel,
-          aspectRatio,
-          duration,
-          resolution,
-          count: quantity,
-          references: referenceImages.map((img) => ({
-            base64: img.base64,
-            mimeType: img.mimeType,
-            fileName: img.name,
-          })),
-        }),
-      ),
+  const onGenerate = () => {
+    const current = useFlowVideoStore.getState();
+    const turn = {
+      id: crypto.randomUUID(),
+      prompt: current.prompt.trim(),
+      attachments: current.referenceImages.map((image) => ({
+        id: image.previewUrl,
+        kind: 'image' as const,
+        name: image.name,
+        url: image.previewUrl,
+      })),
+      pendingCount: current.quantity,
+      pendingRatio: current.aspectRatio,
+      pendingLabel: 'Đang tạo video',
+    };
+    void generate(
+      () =>
+        api.generateVideos(
+          // createFrom builds the generated class, which converts the nested references.
+          GenerateVideoRequest.createFrom({
+            prompt: current.prompt.trim(),
+            modelId: current.selectedModel,
+            aspectRatio: current.aspectRatio,
+            duration: current.duration,
+            resolution: current.resolution,
+            count: current.quantity,
+            references: current.referenceImages.map((img) => ({
+              base64: img.base64,
+              mimeType: img.mimeType,
+              fileName: img.name,
+            })),
+          }),
+        ),
+      {
+        onStart: () => useFlowVideoStore.getState().beginTurn(turn),
+        onSuccess: (results) => useFlowVideoStore.getState().completeTurn(turn.id, results),
+        onFailure: (message, promptRestored) => {
+          const current = useFlowVideoStore.getState();
+          if (promptRestored) current.removeTurn(turn.id);
+          else current.failTurn(turn.id, message);
+        },
+      },
     );
+  };
 
   return (
     <div className="flow-workspace-container">
-      <MediaGallery
-        isEmpty={items.length === 0}
+      <ConversationGallery
+        turns={turns}
+        items={items}
         emptyTitle="Tạo video với Google Flow"
         emptyText="Mô tả video bạn muốn ở ô bên dưới rồi nhấn Enter. Flow cần vài phút để dựng video."
-        pending={store.isGenerating ? quantity : 0}
-        pendingRatio={aspectRatio}
-        pendingLabel="Đang tạo video"
-        gridClassName={VIDEO_GRID_CLASS}
-      >
-        {items.map((video) => (
-          <VideoCard key={video.id} video={video} onSave={(url) => void saveMedia(url)} />
-        ))}
-      </MediaGallery>
+        renderItem={(video) => (
+          <VideoCard video={video} showPrompt={false} onSave={(url) => void saveMedia(url)} />
+        )}
+      />
 
       <PromptBar
         prompt={prompt}

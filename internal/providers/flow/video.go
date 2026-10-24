@@ -1,12 +1,15 @@
 package flow
 
 import (
+	"SnakeMedia/internal/media"
 	"SnakeMedia/internal/providers/flow/session"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math"
 	"regexp"
 	"slices"
 	"strings"
@@ -24,23 +27,11 @@ import (
 // (references/SolwStudio/plugins/flow/flow_rpc.py). Raw submit replies are logged
 // at debug level so the layout can be checked against real traffic.
 const (
-	// RPCGenerateVideoText is /VideoFxService.BatchAsyncGenerateVideoText.
-	RPCGenerateVideoText = "YhhmEf"
-	// RPCGenerateVideoReferences is /VideoFxService.BatchAsyncGenerateVideoReferenceImages.
-	RPCGenerateVideoReferences = "MZZa6b"
-	// RPCGetProjectContents is /Provider.GetProjectContents (project listing).
-	RPCGetProjectContents = "Zzl0ze"
-	// RPCGetMedia is /Provider.GetMedia; a video is ready once it carries a
-	// flow-content.google/video/ URL.
-	RPCGetMedia = "as29s"
 	// videoURLMarker identifies the finished video file among a media's URLs.
 	videoURLMarker = "flow-content.google/video/"
-	// maxPollFailures stops polling after this many consecutive failed rounds.
-	maxPollFailures = 5
 	// MaxVideosPerRequest is the largest output count offered for one request.
-	MaxVideosPerRequest = 4
-	// maxGeneratedVideoBytes bounds one downloaded video.
-	maxGeneratedVideoBytes = 512 << 20
+	MaxVideosPerRequest     = 4
+	publicErrorDangerFilter = "PUBLIC_ERROR_DANGER_FILTER"
 )
 
 // Video usage fields inside a GetModels video family (0-based JSON indices).
@@ -91,10 +82,13 @@ type GenerateVideoRequest struct {
 	ProjectID   string `json:"projectId,omitempty"`
 	// References are images the video must follow (reference-to-video).
 	References []ReferenceImage `json:"references,omitempty"`
+	onAccepted func()
 }
 
 // GeneratedVideoItem is one requested output video.
 type GeneratedVideoItem struct {
+	JobID       string `json:"jobId,omitempty"`
+	Pending     bool   `json:"pending,omitempty"`
 	ID          string `json:"id"`
 	Prompt      string `json:"prompt"`
 	Model       string `json:"model"`
@@ -137,47 +131,140 @@ func validateVideoRequest(req GenerateVideoRequest) error {
 	return validateReferences(req.References)
 }
 
-// GenerateVideos dispatches text-to-video with round-robin account rotation and
-// waits until Flow finishes rendering or the configured timeout passes.
+type videoGenerationChoice struct {
+	rotation videoAccountCandidate
+	family   videoFamily
+	usage    videoUsage
+}
+
+func (s *Provider) videoGenerationChoices(ctx context.Context, req GenerateVideoRequest) ([]videoGenerationChoice, models.Code, error) {
+	accounts, err := s.GetValidConnectedAccounts()
+	if err != nil {
+		return nil, models.CodeUnavailable, err
+	}
+	if len(accounts) == 0 {
+		return nil, models.CodeUnavailable, errors.New("không có tài khoản Google Flow nào có cookie hợp lệ. Vui lòng đăng nhập hoặc làm mới tài khoản.")
+	}
+	choices := make([]videoGenerationChoice, 0, len(accounts))
+	var firstCatalogErr, firstSelectionErr error
+	for _, acc := range accounts {
+		families, _, err := s.videoFamiliesFor(ctx, acc)
+		if err != nil {
+			if firstCatalogErr == nil {
+				firstCatalogErr = err
+			}
+			continue
+		}
+		idx := slices.IndexFunc(families, func(f videoFamily) bool { return f.id == req.ModelID })
+		if idx < 0 {
+			if firstSelectionErr == nil {
+				firstSelectionErr = fmt.Errorf("Model %q không có trong danh sách model của tài khoản %s.", req.ModelID, acc.Email)
+			}
+			continue
+		}
+		usage, err := selectVideoVariant(families[idx], accountTier(acc), FlowVideoAspect[req.AspectRatio], req.Duration, FlowVideoResolution[req.Resolution], len(req.References) > 0)
+		if err != nil {
+			if firstSelectionErr == nil {
+				firstSelectionErr = err
+			}
+			continue
+		}
+		if len(req.References) > usage.maxRefs && len(req.References) > 0 {
+			if firstSelectionErr == nil {
+				firstSelectionErr = fmt.Errorf("Model %s nhận tối đa %d ảnh tham chiếu (đang chọn %d).", displayName(families[idx].name), usage.maxRefs, len(req.References))
+			}
+			continue
+		}
+		cost, known := usage.creditCost(accountTier(acc))
+		if known && req.Count > 0 {
+			maxInt := int(^uint(0) >> 1)
+			if cost > maxInt/req.Count {
+				return nil, models.CodeInternal, errors.New("chi phí video vượt quá giới hạn số nguyên")
+			}
+			cost *= req.Count
+		}
+		choices = append(choices, videoGenerationChoice{
+			rotation: videoAccountCandidate{account: acc, cost: cost},
+			family:   families[idx],
+			usage:    usage,
+		})
+	}
+	if len(choices) > 0 {
+		return choices, models.CodeOK, nil
+	}
+	if firstCatalogErr != nil {
+		return nil, models.CodeUnavailable, fmt.Errorf("không lấy được danh sách model video từ tài khoản nào: %w", firstCatalogErr)
+	}
+	if firstSelectionErr != nil {
+		return nil, models.CodeInvalidArgument, firstSelectionErr
+	}
+	return nil, models.CodeUnavailable, errors.New("không có tài khoản nào hỗ trợ yêu cầu video này")
+}
+
+// GenerateVideos chooses a compatible account using Flow's current per-model
+// cost and a smooth credit-weighted rotation, then waits for Flow's job result.
 func (s *Provider) GenerateVideos(ctx context.Context, req GenerateVideoRequest) models.Response[[]GeneratedVideoItem] {
 	if err := validateVideoRequest(req); err != nil {
 		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeInvalidArgument)
 	}
-	acc, release, err := s.readyAccount(ctx)
+	choices, code, err := s.videoGenerationChoices(ctx, req)
 	if err != nil {
-		return models.ErrorResponse[[]GeneratedVideoItem]("Không thể tạo video: "+err.Error(), models.CodeUnavailable)
+		return models.ErrorResponse[[]GeneratedVideoItem]("Không thể tạo video: "+err.Error(), code)
 	}
-	defer release()
+	rotationCandidates := make([]videoAccountCandidate, 0, len(choices))
+	remaining := append([]videoGenerationChoice(nil), choices...)
+	var chosen videoGenerationChoice
+	var account session.StoredAccount
+	var lease *accountLease
+	var releaseProfile func()
+	var skipped []string
+	for len(remaining) > 0 {
+		rotationCandidates = rotationCandidates[:0]
+		for _, choice := range remaining {
+			rotationCandidates = append(rotationCandidates, choice.rotation)
+		}
+		idx, nextLease, reserveErr := s.acquireVideoCandidate(ctx, rotationCandidates)
+		if reserveErr != nil {
+			return models.ErrorResponse[[]GeneratedVideoItem]("Không thể tạo video: "+reserveErr.Error(), models.CodeUnavailable)
+		}
+		next := remaining[idx]
+		nextReleaseProfile := s.accounts.AcquireProfile(next.rotation.account.ProfileDir)
+		synced, syncErr := s.syncSession(ctx, next.rotation.account)
+		if syncErr == nil {
+			chosen, account, lease, releaseProfile = next, synced, nextLease, nextReleaseProfile
+			break
+		}
+		nextReleaseProfile()
+		nextLease.release()
+		if !errors.Is(syncErr, session.ErrSessionSignedOut) {
+			return models.ErrorResponse[[]GeneratedVideoItem](fmt.Sprintf("Không đồng bộ được phiên Flow của %s: %v", next.rotation.account.Email, syncErr), models.CodeUnavailable)
+		}
+		skipped = append(skipped, next.rotation.account.Email)
+		remaining = slices.Delete(remaining, idx, idx+1)
+	}
+	if lease == nil {
+		return models.ErrorResponse[[]GeneratedVideoItem]("Các tài khoản đã đăng xuất khỏi Google ("+strings.Join(skipped, ", ")+"); hãy đăng nhập lại ở mục Account.", models.CodeUnavailable)
+	}
+	defer func() {
+		releaseProfile()
+		lease.release()
+	}()
 
-	families, _, err := s.videoFamiliesFor(ctx, *acc)
+	req.onAccepted = lease.commitVideoSpend
+	videos, err := s.generateLiveVideos(ctx, account, req, chosen.usage.key)
+	if s.refreshLiveCredits != nil {
+		s.refreshLiveCredits(ctx, account.ID)
+	}
 	if err != nil {
-		return models.ErrorResponse[[]GeneratedVideoItem]("Không lấy được danh sách model video: "+err.Error(), models.CodeUnavailable)
-	}
-	idx := slices.IndexFunc(families, func(f videoFamily) bool { return f.id == req.ModelID })
-	if idx < 0 {
-		return models.ErrorResponse[[]GeneratedVideoItem](fmt.Sprintf("Model %q không có trong danh sách model của tài khoản.", req.ModelID), models.CodeInvalidArgument)
-	}
-	usage, err := selectVideoVariant(families[idx], accountTier(*acc), FlowVideoAspect[req.AspectRatio], req.Duration, FlowVideoResolution[req.Resolution], len(req.References) > 0)
-	if err != nil {
-		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeInvalidArgument)
-	}
-	if len(req.References) > usage.maxRefs && len(req.References) > 0 {
+		s.forgetProject(account.ID)
 		return models.ErrorResponse[[]GeneratedVideoItem](
-			fmt.Sprintf("Model %s nhận tối đa %d ảnh tham chiếu (đang chọn %d).", displayName(families[idx].name), usage.maxRefs, len(req.References)),
-			models.CodeInvalidArgument,
-		)
-	}
-
-	videos, err := s.generateLiveVideos(ctx, *acc, req, usage.key)
-	if err != nil {
-		s.forgetProject(acc.ID)
-		return models.ErrorResponse[[]GeneratedVideoItem](
-			fmt.Sprintf("Lỗi khi tạo video từ Google Flow (%s): %s", acc.Email, err.Error()),
+			fmt.Sprintf("Lỗi khi tạo video từ Google Flow (%s): %s", account.Email, err.Error()),
 			models.CodeUnavailable,
 		)
 	}
+	lease.commitVideoSpend()
 	for i := range videos {
-		videos[i].ModelName = displayName(families[idx].name)
+		videos[i].ModelName = displayName(chosen.family.name)
 	}
 	return models.SuccessResponse(videos)
 }
@@ -237,6 +324,8 @@ func buildVideoRequest(prompt, projectID, variantKey string, aspect, resolution,
 }
 
 type pendingVideo struct {
+	statusObserved bool
+	clientID       string
 	// operation identifies a generation whose media ID is not known yet
 	// (reference-to-video replies name the workflow, not the media).
 	operation string
@@ -267,12 +356,16 @@ func parseVideoMedia(payload string, listIndex int) ([]pendingVideo, error) {
 			continue
 		}
 		pv := pendingVideo{name: name}
+		if len(media) > 2 {
+			pv.operation, _ = media[2].(string)
+		}
 		if len(media) > 5 {
 			if holder := asList(media[5]); len(holder) > 8 {
 				state := asList(holder[8])
 				if len(state) > 0 {
 					if code, ok := state[0].(float64); ok {
 						pv.status = int(code)
+						pv.statusObserved = true
 					}
 				}
 				if len(state) > 1 && state[1] != nil {
@@ -280,6 +373,9 @@ func parseVideoMedia(payload string, listIndex int) ([]pendingVideo, error) {
 					pv.errMsg = string(detail)
 				}
 			}
+		}
+		if pv.statusObserved && pv.status == videoStatusSuccess {
+			pv.url = videoOutputURL(media)
 		}
 		out = append(out, pv)
 	}
@@ -353,6 +449,20 @@ func videoStatusText(code int) string {
 	return fmt.Sprintf("Flow trả về trạng thái %d", code)
 }
 
+func videoFailureDetail(raw string) string {
+	if strings.Contains(raw, publicErrorDangerFilter) {
+		return "Flow đã từ chối yêu cầu này qua bộ lọc an toàn nội dung. Đây là phản hồi từ Flow, không phải lỗi kết nối. Hãy thử nội dung khác phù hợp với chính sách của Flow."
+	}
+	return raw
+}
+
+func editVideoFailureDetail(raw string) string {
+	if strings.Contains(raw, publicErrorDangerFilter) {
+		return "Flow đã từ chối video nguồn hoặc yêu cầu chỉnh sửa này qua bộ lọc an toàn nội dung. Đây là phản hồi từ Flow, không phải lỗi kết nối. Hãy thử video nguồn khác hoặc yêu cầu chỉnh sửa khác phù hợp với chính sách của Flow."
+	}
+	return videoFailureDetail(raw)
+}
+
 func logRawVideoReply(rpcID, payload string) {
 	limit := len(payload)
 	if limit > 4000 {
@@ -366,8 +476,15 @@ func (s *Provider) generateVideosFromAccount(ctx context.Context, acc session.St
 	if s.accounts == nil {
 		return nil, errors.New("dịch vụ tài khoản chưa được khởi tạo")
 	}
-	limits := s.cfg.Get().Accounts
-	client, err := chrome.NewFlowClient(acc.Credentials, limits)
+	generateMethod := chrome.MethodGenerateVideoText
+	if len(req.References) > 0 {
+		generateMethod = chrome.MethodGenerateVideoReferences
+	}
+	methods := []string{chrome.MethodProjects, chrome.MethodCreateProject, chrome.MethodProjectContents, chrome.MethodMedia, chrome.MethodVideoStatus, generateMethod}
+	if len(req.References) > 0 {
+		methods = append(methods, chrome.MethodUploadImage)
+	}
+	client, err := s.flowClient(ctx, acc, methods...)
 	if err != nil {
 		return nil, err
 	}
@@ -416,23 +533,23 @@ func (s *Provider) generateVideosFromAccount(ctx context.Context, acc session.St
 		refMediaIDs = append(refMediaIDs, mediaID)
 	}
 
-	// 3. Dispatch text-to-video (YhhmEf) or reference-to-video (MZZa6b)
-	rpcID := RPCGenerateVideoText
+	// 3. Dispatch text-to-video or reference-to-video using the active Flow build.
+	rpcID := client.Credentials().RPCs.ID(chrome.MethodGenerateVideoText)
 	inner, err := BuildVideoTextRequest(req.Prompt, projectID, variant, FlowVideoAspect[req.AspectRatio], FlowVideoResolution[req.Resolution], req.Count, recaptchaToken)
 	if len(refMediaIDs) > 0 {
-		rpcID = RPCGenerateVideoReferences
+		rpcID = client.Credentials().RPCs.ID(chrome.MethodGenerateVideoReferences)
 		inner, err = BuildVideoReferenceRequest(req.Prompt, projectID, variant, FlowVideoAspect[req.AspectRatio], FlowVideoResolution[req.Resolution], req.Count, refMediaIDs, recaptchaToken)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("không đóng gói được payload tạo video: %w", err)
 	}
-	return s.runVideoJob(ctx, client, projectID, rpcID, inner, GeneratedVideoItem{Prompt: req.Prompt, Model: variant, AspectRatio: req.AspectRatio, Duration: req.Duration, Resolution: req.Resolution})
+	return s.runVideoJob(ctx, client, projectID, rpcID, inner, GeneratedVideoItem{Prompt: req.Prompt, Model: variant, AspectRatio: req.AspectRatio, Duration: req.Duration, Resolution: req.Resolution}, req.onAccepted)
 }
 
 // runVideoJob submits a built video request (text, reference or edit), follows
 // its videos until Flow finishes them and downloads the results. template
 // carries the request's settings into every returned item.
-func (s *Provider) runVideoJob(ctx context.Context, client *chrome.FlowClient, projectID, rpcID string, inner []byte, template GeneratedVideoItem) ([]GeneratedVideoItem, error) {
+func (s *Provider) runVideoJob(ctx context.Context, client *chrome.FlowClient, projectID, rpcID string, inner []byte, template GeneratedVideoItem, accepted ...func()) ([]GeneratedVideoItem, error) {
 	limits := s.cfg.Get().Accounts
 	fReq, err := BuildBatchEnvelope(rpcID, inner)
 	if err != nil {
@@ -462,14 +579,19 @@ func (s *Provider) runVideoJob(ctx context.Context, client *chrome.FlowClient, p
 	if len(started) == 0 {
 		return nil, fmt.Errorf("Google Flow không trả về video nào đang tạo (phản hồi: %.200s)", payload)
 	}
+	if len(accepted) > 0 && accepted[0] != nil {
+		accepted[0]()
+	}
 
-	// 4. Follow each video until it has a video URL or Flow reports a failure.
 	final, err := s.waitForVideos(ctx, client, projectID, started, limits.VideoPollIntervalMS, limits.VideoGenerationTimeoutSeconds)
 	if err != nil {
 		return nil, err
 	}
+	return s.collectVideoItems(ctx, client, final, template), nil
+}
 
-	// 5. Download finished videos into the app's media folder.
+func (s *Provider) collectVideoItems(ctx context.Context, client *chrome.FlowClient, final []pendingVideo, template GeneratedVideoItem) []GeneratedVideoItem {
+	limits := s.cfg.Get().Accounts
 	now := time.Now().UTC().Format(time.RFC3339)
 	items := make([]GeneratedVideoItem, 0, len(final))
 	for _, v := range final {
@@ -483,7 +605,11 @@ func (s *Provider) runVideoJob(ctx context.Context, client *chrome.FlowClient, p
 		case v.url == "":
 			item.Error = videoStatusText(v.status)
 			if v.errMsg != "" {
-				item.Error += ": " + v.errMsg
+				detail := videoFailureDetail(v.errMsg)
+				if template.JobID != "" {
+					detail = editVideoFailureDetail(v.errMsg)
+				}
+				item.Error += ": " + detail
 			}
 		default:
 			local, dlErr := s.downloadVideo(ctx, client, v, limits.GenerationTimeoutSeconds)
@@ -492,25 +618,41 @@ func (s *Provider) runVideoJob(ctx context.Context, client *chrome.FlowClient, p
 				logger.Get().Warn("cannot download generated video", "media", v.name, "error", dlErr)
 			} else {
 				item.LocalURL = local
+				if template.JobID != "" {
+					file, pathErr := s.media.Path(local)
+					probeCtx, cancel := context.WithTimeout(ctx, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
+					metadata, probeErr := media.ProbeVideo(probeCtx, file, s.cfg.Get().Flow)
+					cancel()
+					if pathErr != nil || probeErr != nil {
+						item.LocalURL = ""
+						item.Error = "Không kiểm tra được tệp video đã tải."
+					} else {
+						item.Duration = int(math.Round(metadata.DurationSeconds))
+					}
+				}
 			}
 		}
 		items = append(items, item)
 	}
-	return items, nil
+	return items
 }
 
 // waitForVideos polls until every started video has a video URL or failed. As in
 // SolwStudio, GetMedia is the authority for the URL because the project listing
 // can lag behind; the listing supplies failure states and the media IDs of
 // generations known only by operation.
-func (s *Provider) waitForVideos(ctx context.Context, client *chrome.FlowClient, projectID string, started []pendingVideo, intervalMS, timeoutSeconds int) ([]pendingVideo, error) {
+func (s *Provider) waitForVideos(ctx context.Context, client *chrome.FlowClient, projectID string, started []pendingVideo, intervalMS, timeoutSeconds int, checkpoint ...func([]pendingVideo) error) ([]pendingVideo, error) {
 	timeout := time.Duration(s.cfg.Get().Accounts.RequestTimeoutSeconds) * time.Second
-	deadline := time.Now().Add(time.Duration(timeoutSeconds) * time.Second)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
 	videos := append([]pendingVideo(nil), started...)
-	settled := func(v pendingVideo) bool { return v.url != "" || slices.Contains(videoFailedStatuses, v.status) }
-	listing, err := BuildBatchEnvelope(RPCGetProjectContents, []any{"projects/" + projectID, nil, nil, nil, []any{1}})
+	settled := func(v pendingVideo) bool { return v.url != "" || videoFailed(v) }
+	listingRPC := client.Credentials().RPCs.ID(chrome.MethodProjectContents)
+	mediaRPC := client.Credentials().RPCs.ID(chrome.MethodMedia)
+	statusRPC := client.Credentials().RPCs.ID(chrome.MethodVideoStatus)
+	listing, err := BuildBatchEnvelope(listingRPC, []any{"projects/" + projectID, nil, nil, nil, []any{1}})
 	if err != nil {
-		return nil, err
+		return videos, err
 	}
 	call := func(rpcID, fReq string) (string, error) {
 		body, err := client.Do(ctx, rpcID, fReq, timeout)
@@ -520,79 +662,197 @@ func (s *Provider) waitForVideos(ctx context.Context, client *chrome.FlowClient,
 		return chrome.ParseRPCPayload(string(body), rpcID)
 	}
 
+	delay := time.Duration(intervalMS) * time.Millisecond
 	failures := 0
+	notFound := make(map[string]int)
 	var lastErr error
 	for slices.ContainsFunc(videos, func(v pendingVideo) bool { return !settled(v) }) {
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("quá %d giây mà Flow chưa tạo xong video", timeoutSeconds)
-		}
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(time.Duration(intervalMS) * time.Millisecond):
+			return videos, ctx.Err()
+		case <-time.After(delay):
 		}
 
 		roundFailed := false
-		if payload, err := call(RPCGetProjectContents, listing); err == nil {
-			// GetProjectContents: field 3 (index 2) lists the project's media.
-			media, _ := parseVideoMedia(payload, 2)
-			for i, v := range videos {
-				if settled(v) {
-					continue
+		active := make(map[string]bool)
+		if statusRPC != "" {
+			ids := []any{}
+			for _, v := range videos {
+				if !settled(v) && v.name != "" {
+					ids = append(ids, []any{v.name})
 				}
-				if v.name == "" {
-					videos[i].name = mediaForOperation(payload, v.operation)
+			}
+			if len(ids) > 0 {
+				fReq, err := BuildBatchEnvelope(statusRPC, []any{nil, nil, ids})
+				if err != nil {
+					return videos, err
 				}
-				for _, m := range media {
-					if m.name == videos[i].name {
-						videos[i].status, videos[i].errMsg = m.status, m.errMsg
+				payload, err := call(statusRPC, fReq)
+				if err != nil {
+					roundFailed, lastErr = true, err
+				} else {
+					records, parseErr := parseVideoMedia(payload, 2)
+					if parseErr != nil {
+						roundFailed, lastErr = true, parseErr
+					} else {
+						for i, v := range videos {
+							for _, record := range records {
+								if record.name == v.name {
+									videos[i].status, videos[i].errMsg, videos[i].statusObserved = record.status, record.errMsg, record.statusObserved
+									videos[i].url = record.url
+									active[v.name] = record.statusObserved && slices.Contains([]int{1, 2, 6}, record.status)
+								}
+							}
+						}
 					}
 				}
 			}
-		} else {
-			roundFailed, lastErr = true, err
+		}
+		listed := make(map[string]bool)
+		listingOK := false
+		needsListing := statusRPC == "" || slices.ContainsFunc(videos, func(v pendingVideo) bool {
+			return !settled(v) && (v.name == "" || (v.clientID != "" && strings.EqualFold(v.name, v.clientID)))
+		})
+		if needsListing {
+			if payload, err := call(listingRPC, listing); err == nil {
+				listingOK = true
+				// GetProjectContents: field 3 (index 2) lists the project's media.
+				media, _ := parseVideoMedia(payload, 2)
+				for i, v := range videos {
+					if settled(v) {
+						continue
+					}
+					if v.clientID != "" && (v.name == "" || strings.EqualFold(v.name, v.clientID)) {
+						if found := mediaForClient(payload, v.clientID); found.name != "" {
+							videos[i].name = found.name
+							videos[i].operation = found.operation
+						}
+					}
+					if v.name == "" {
+						videos[i].name = mediaForOperation(payload, v.operation)
+					}
+					for _, m := range media {
+						if m.name == videos[i].name || (v.name == "" && v.operation != "" && m.operation == v.operation) {
+							videos[i].name = m.name
+							listed[m.name] = true
+							if !active[videos[i].name] && !settled(videos[i]) {
+								videos[i].status, videos[i].errMsg, videos[i].statusObserved = m.status, m.errMsg, m.statusObserved
+							}
+						}
+					}
+				}
+			} else {
+				roundFailed, lastErr = true, err
+			}
 		}
 		for i, v := range videos {
-			if settled(v) || v.name == "" {
+			if settled(v) || v.name == "" || active[v.name] {
 				continue
 			}
-			fReq, err := BuildBatchEnvelope(RPCGetMedia, []any{v.name})
+			fReq, err := BuildBatchEnvelope(mediaRPC, []any{v.name})
 			if err != nil {
-				return nil, err
+				return videos, err
 			}
-			payload, err := call(RPCGetMedia, fReq)
+			payload, err := call(mediaRPC, fReq)
 			if err != nil {
 				// A media still rendering may not be served yet ("Media not found");
 				// only transport failures count against the poll.
+				var rpcError *chrome.RPCError
+				if errors.As(err, &rpcError) && rpcError.Code == 5 && listingOK && !listed[v.name] {
+					notFound[v.name]++
+					if notFound[v.name] >= s.cfg.Get().Flow.MaxPollFailures {
+						return videos, errors.New("Flow chưa tìm thấy media hoặc workflow của job đã nhận")
+					}
+				} else {
+					notFound[v.name] = 0
+				}
 				var remote *chrome.HTTPError
 				if errors.As(err, &remote) || ctx.Err() != nil {
 					roundFailed, lastErr = true, err
 				}
 				continue
 			}
+			notFound[v.name] = 0
 			var decoded any
 			if json.Unmarshal([]byte(payload), &decoded) == nil {
-				if u := videoURL(decoded); u != "" {
+				records, _ := parseVideoMedia("[["+payload+"]]", 0)
+				for _, record := range records {
+					if record.name == v.name && videoFailed(record) {
+						videos[i].status = record.status
+						videos[i].statusObserved = record.statusObserved
+						videos[i].errMsg = record.errMsg
+					}
+				}
+				if u := videoOutputURL(asList(decoded)); u != "" && !videoFailed(videos[i]) {
 					videos[i].url, videos[i].status = u, videoStatusSuccess
+				}
+			}
+		}
+		for _, save := range checkpoint {
+			if save != nil {
+				if err := save(videos); err != nil {
+					return videos, err
 				}
 			}
 		}
 		if roundFailed {
 			failures++
-			if failures >= maxPollFailures {
-				return nil, fmt.Errorf("lỗi khi theo dõi tiến độ video: %w", lastErr)
+			delay = min(delay*2, time.Duration(s.cfg.Get().Flow.PollMaxIntervalMS)*time.Millisecond)
+			var remote *chrome.HTTPError
+			if errors.As(lastErr, &remote) {
+				delay = max(delay, remote.RetryAfter)
+			}
+			if failures >= s.cfg.Get().Flow.MaxPollFailures {
+				return videos, fmt.Errorf("lỗi khi theo dõi tiến độ video: %w", lastErr)
 			}
 		} else {
 			failures = 0
+			delay = time.Duration(intervalMS) * time.Millisecond
 		}
 	}
 	return videos, nil
 }
 
 func (s *Provider) downloadVideo(ctx context.Context, client *chrome.FlowClient, v pendingVideo, timeoutSeconds int) (string, error) {
-	data, contentType, err := client.FetchMedia(ctx, v.url, []string{"video/", "application/octet-stream"}, maxGeneratedVideoBytes, time.Duration(timeoutSeconds)*time.Second)
-	if err != nil {
-		return "", err
+	var local string
+	err := client.DownloadMedia(ctx, v.url, []string{"video/", "application/octet-stream"}, time.Duration(timeoutSeconds)*time.Second, func(reader io.Reader, contentType string) error {
+		var err error
+		local, err = s.media.PutReader(v.name, contentType, ".mp4", reader, s.cfg.Get().Flow.MaxDownloadBytes)
+		return err
+	})
+	return local, err
+}
+
+func videoFailed(v pendingVideo) bool {
+	return slices.Contains(videoFailedStatuses, v.status) || (v.statusObserved && v.status == 0)
+}
+
+// GetMedia materializes the current video's serving URL in video field 1/9.
+// Other Flow variants use field 5/3. Both belong to this media, not its inputs.
+func videoOutputURL(record []any) string {
+	if len(record) <= 7 {
+		return ""
 	}
-	return s.media.Put(v.name, contentType, ".mp4", data)
+	video := asList(record[7])
+	if len(video) > 0 {
+		materialized := asList(video[0])
+		if len(materialized) > 8 {
+			value, _ := materialized[8].(string)
+			if strings.HasPrefix(value, "https://") && strings.Contains(value, videoURLMarker) {
+				return value
+			}
+		}
+	}
+	if len(video) <= 4 {
+		return ""
+	}
+	generated := asList(video[4])
+	if len(generated) <= 2 {
+		return ""
+	}
+	value, _ := generated[2].(string)
+	if !strings.HasPrefix(value, "https://") {
+		return ""
+	}
+	return value
 }

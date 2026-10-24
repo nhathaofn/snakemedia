@@ -640,7 +640,7 @@ func (s *Service) SyncSession(ctx context.Context, acc StoredAccount) (StoredAcc
 				return acc, errors.New("Chrome của tài khoản đang đăng nhập một tài khoản Google khác.")
 			}
 			creds := details.Credentials
-			if creds.RPCs == (chrome.RPCRegistry{}) {
+			if creds.RPCs == (chrome.RPCRegistry{}) && creds.BuildLabel == acc.Credentials.BuildLabel {
 				// Identity inspection does not rediscover the credits RPCs.
 				creds.RPCs = acc.Credentials.RPCs
 			}

@@ -210,6 +210,14 @@ func TestParseUploadedMediaID(t *testing.T) {
 	}
 }
 
+func TestParseUploadedMediaIDUsesDiscoveredRPC(t *testing.T) {
+	raw := []byte(`)]}'` + "\n\n1\n" + `[["wrb.fr","runtimeUploadId","[[\"b3b12345-6789-4abc-def0-123456789abc\"]]",null,null,null,"generic"]]`)
+	mediaID, err := parseUploadedMediaID(raw, "runtimeUploadId")
+	if err != nil || mediaID != "b3b12345-6789-4abc-def0-123456789abc" {
+		t.Fatalf("dynamic upload RPC response was not parsed: %q %v", mediaID, err)
+	}
+}
+
 func TestBuildBatchEnvelope(t *testing.T) {
 	inner := []any{"projects/*", 21, nil, nil, nil, nil, []any{1}}
 	envelope, err := BuildBatchEnvelope("UpteDb", inner)

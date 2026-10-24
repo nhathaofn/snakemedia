@@ -58,6 +58,16 @@ func ParseRPCPayload(text, rpcID string) (string, error) {
 	return parseRPCPayload(text, rpcID)
 }
 
+// RPCError preserves the provider status so polling can distinguish an asset
+// still unavailable from transport failures and explicit mutation rejection.
+type RPCError struct {
+	ID     string
+	Code   int
+	Detail string
+}
+
+func (e *RPCError) Error() string { return fmt.Sprintf("%s RPC returned an error: %s", e.ID, e.Detail) }
+
 func parseRPCPayload(text, rpcID string) (string, error) {
 	if !rpcIDPattern.MatchString(rpcID) {
 		return "", errors.New("invalid runtime RPC ID")
@@ -99,7 +109,13 @@ func parseRPCPayload(text, rpcID string) (string, error) {
 				return "", fmt.Errorf("duplicate %s RPC response", rpcID)
 			}
 			if len(env) > 5 && !bytes.Equal(env[5], []byte("null")) {
-				return "", fmt.Errorf("%s RPC returned an error: %s", rpcID, env[5])
+				var state []json.RawMessage
+				_ = json.Unmarshal(env[5], &state)
+				code := 0
+				if len(state) > 0 {
+					_ = json.Unmarshal(state[0], &code)
+				}
+				return "", &RPCError{ID: rpcID, Code: code, Detail: string(env[5])}
 			}
 			var payload string
 			if err := json.Unmarshal(env[2], &payload); err != nil || payload == "" {

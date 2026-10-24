@@ -88,6 +88,7 @@ export namespace config {
 	    browserStartupTimeoutSeconds: number;
 	    refreshCooldownSeconds: number;
 	    maxResponseBytes: number;
+	    maxDiscoveryBytes: number;
 	    maxDiscoveryScripts: number;
 	    generationTimeoutSeconds: number;
 	    videoGenerationTimeoutSeconds: number;
@@ -106,10 +107,39 @@ export namespace config {
 	        this.browserStartupTimeoutSeconds = source["browserStartupTimeoutSeconds"];
 	        this.refreshCooldownSeconds = source["refreshCooldownSeconds"];
 	        this.maxResponseBytes = source["maxResponseBytes"];
+	        this.maxDiscoveryBytes = source["maxDiscoveryBytes"];
 	        this.maxDiscoveryScripts = source["maxDiscoveryScripts"];
 	        this.generationTimeoutSeconds = source["generationTimeoutSeconds"];
 	        this.videoGenerationTimeoutSeconds = source["videoGenerationTimeoutSeconds"];
 	        this.videoPollIntervalMs = source["videoPollIntervalMs"];
+	    }
+	}
+	export class FlowConfig {
+	    probePath: string;
+	    maxSourceBytes: number;
+	    maxDownloadBytes: number;
+	    uploadAttempts: number;
+	    uploadRetryDelayMs: number;
+	    maxPollFailures: number;
+	    pollMaxIntervalMs: number;
+	    minTrimSeconds: number;
+	    trimStepSeconds: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new FlowConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.probePath = source["probePath"];
+	        this.maxSourceBytes = source["maxSourceBytes"];
+	        this.maxDownloadBytes = source["maxDownloadBytes"];
+	        this.uploadAttempts = source["uploadAttempts"];
+	        this.uploadRetryDelayMs = source["uploadRetryDelayMs"];
+	        this.maxPollFailures = source["maxPollFailures"];
+	        this.pollMaxIntervalMs = source["pollMaxIntervalMs"];
+	        this.minTrimSeconds = source["minTrimSeconds"];
+	        this.trimStepSeconds = source["trimStepSeconds"];
 	    }
 	}
 	export class AppConfig {
@@ -118,6 +148,7 @@ export namespace config {
 	    windowScale: number;
 	    cdpPort: number;
 	    accounts: AccountConfig;
+	    flow: FlowConfig;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -130,6 +161,7 @@ export namespace config {
 	        this.windowScale = source["windowScale"];
 	        this.cdpPort = source["cdpPort"];
 	        this.accounts = this.convertValues(source["accounts"], AccountConfig);
+	        this.flow = this.convertValues(source["flow"], FlowConfig);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -266,13 +298,12 @@ export namespace events {
 export namespace flow {
 	
 	export class EditVideoRequest {
+	    sourceId?: string;
+	    requestId?: string;
 	    prompt: string;
 	    modelId: string;
 	    projectId?: string;
 	    sourceUrl: string;
-	    mediaId?: string;
-	    width?: number;
-	    height?: number;
 	    trimStartMs: number;
 	    trimEndMs: number;
 	
@@ -282,13 +313,12 @@ export namespace flow {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sourceId = source["sourceId"];
+	        this.requestId = source["requestId"];
 	        this.prompt = source["prompt"];
 	        this.modelId = source["modelId"];
 	        this.projectId = source["projectId"];
 	        this.sourceUrl = source["sourceUrl"];
-	        this.mediaId = source["mediaId"];
-	        this.width = source["width"];
-	        this.height = source["height"];
 	        this.trimStartMs = source["trimStartMs"];
 	        this.trimEndMs = source["trimEndMs"];
 	    }
@@ -486,6 +516,8 @@ export namespace flow {
 	    }
 	}
 	export class GeneratedVideoItem {
+	    jobId?: string;
+	    pending?: boolean;
 	    id: string;
 	    prompt: string;
 	    model: string;
@@ -503,6 +535,8 @@ export namespace flow {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.jobId = source["jobId"];
+	        this.pending = source["pending"];
 	        this.id = source["id"];
 	        this.prompt = source["prompt"];
 	        this.model = source["model"];
@@ -517,6 +551,7 @@ export namespace flow {
 	}
 	
 	export class StudioConfig {
+	    videoExtensions: string[];
 	    imageAspectRatios: string[];
 	    defaultImageRatio: string;
 	    maxImages: number;
@@ -530,6 +565,7 @@ export namespace flow {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.videoExtensions = source["videoExtensions"];
 	        this.imageAspectRatios = source["imageAspectRatios"];
 	        this.defaultImageRatio = source["defaultImageRatio"];
 	        this.maxImages = source["maxImages"];
@@ -539,8 +575,11 @@ export namespace flow {
 	    }
 	}
 	export class UploadedSourceVideo {
-	    mediaId: string;
-	    workflowId: string;
+	    minTrimSeconds: number;
+	    trimStepSeconds: number;
+	    sourceId: string;
+	    durationSeconds: number;
+	    models: FlowEditModel[];
 	    displayName: string;
 	    width: number;
 	    height: number;
@@ -551,12 +590,33 @@ export namespace flow {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.mediaId = source["mediaId"];
-	        this.workflowId = source["workflowId"];
+	        this.minTrimSeconds = source["minTrimSeconds"];
+	        this.trimStepSeconds = source["trimStepSeconds"];
+	        this.sourceId = source["sourceId"];
+	        this.durationSeconds = source["durationSeconds"];
+	        this.models = this.convertValues(source["models"], FlowEditModel);
 	        this.displayName = source["displayName"];
 	        this.width = source["width"];
 	        this.height = source["height"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }

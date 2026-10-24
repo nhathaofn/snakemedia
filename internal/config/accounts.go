@@ -12,6 +12,7 @@ type AccountConfig struct {
 	BrowserStartupTimeoutSeconds int   `json:"browserStartupTimeoutSeconds"`
 	RefreshCooldownSeconds       int   `json:"refreshCooldownSeconds"`
 	MaxResponseBytes             int64 `json:"maxResponseBytes"`
+	MaxDiscoveryBytes            int64 `json:"maxDiscoveryBytes"`
 	MaxDiscoveryScripts          int   `json:"maxDiscoveryScripts"`
 	// GenerationTimeoutSeconds bounds one media upload or generation RPC, which
 	// runs far longer than session and metadata calls.
@@ -29,6 +30,7 @@ func DefaultAccountConfig() AccountConfig {
 		BrowserStartupTimeoutSeconds: 30, RefreshCooldownSeconds: 15,
 		MaxResponseBytes:              4 << 20,
 		MaxDiscoveryScripts:           16,
+		MaxDiscoveryBytes:             16 << 20,
 		GenerationTimeoutSeconds:      120,
 		VideoGenerationTimeoutSeconds: 600,
 		VideoPollIntervalMS:           5000,
@@ -36,6 +38,9 @@ func DefaultAccountConfig() AccountConfig {
 }
 
 func (c AccountConfig) Validate() error {
+	if c.MaxDiscoveryBytes < 1024 || c.MaxDiscoveryBytes > 64<<20 {
+		return fmt.Errorf("accounts: invalid script discovery budget")
+	}
 	if c.PollIntervalMS < 500 || c.PollMaxIntervalMS < c.PollIntervalMS || c.PollMaxIntervalMS > 60000 {
 		return fmt.Errorf("accounts: polling must be between 500 and 60000 ms, with max >= interval")
 	}

@@ -26,12 +26,6 @@ const (
 	RPCBatchAsyncGenerateImages = "Z9cAtf"
 	// RPCUploadImage is the image upload registration RPC identifier on Google Flow.
 	RPCUploadImage = "maseQ"
-	// RPCGetProjects is /Provider.GetProjects (project summaries of the account).
-	RPCGetProjects = "UpteDb"
-	// RPCGetModels is /Provider.GetModels (model catalogue of the account).
-	RPCGetModels = "HTrJv"
-	// RPCCreateProject is /AiSandbox.CreateProject.
-	RPCCreateProject = "jHPbke"
 	// FlowSurfaceID represents Google Flow Studio's internal surface identifier (22).
 	FlowSurfaceID = 22
 	// RefTypeImage is the reference type code for images (1).
@@ -181,7 +175,11 @@ func BuildImageUploadRequest(imageBase64 string, mimeType string, fileName strin
 // ParseUploadedMediaID extracts the uploaded media ID from the maseQ payload. IDs the
 // request itself carried (project ID, client UUIDs) are never mistaken for it.
 func ParseUploadedMediaID(raw []byte, sent ...string) (string, error) {
-	payload, err := chrome.ParseRPCPayload(string(raw), RPCUploadImage)
+	return parseUploadedMediaID(raw, RPCUploadImage, sent...)
+}
+
+func parseUploadedMediaID(raw []byte, rpcID string, sent ...string) (string, error) {
+	payload, err := chrome.ParseRPCPayload(string(raw), rpcID)
 	if err != nil {
 		return "", fmt.Errorf("phản hồi tải ảnh lên không hợp lệ: %w", err)
 	}
@@ -302,7 +300,58 @@ type GeneratedImageItem struct {
 	Error string `json:"error,omitempty"`
 }
 
-// GenerateImages coordinates request dispatch using round-robin account rotation.
+type imageGenerationChoice struct {
+	account session.StoredAccount
+	model   FlowModel
+}
+
+func (s *Provider) imageGenerationChoices(ctx context.Context, req GenerateImageRequest) ([]imageGenerationChoice, models.Code, error) {
+	accounts, err := s.GetValidConnectedAccounts()
+	if err != nil {
+		return nil, models.CodeUnavailable, err
+	}
+	if len(accounts) == 0 {
+		return nil, models.CodeUnavailable, errors.New("không có tài khoản Google Flow nào có cookie hợp lệ. Vui lòng đăng nhập hoặc làm mới tài khoản.")
+	}
+	choices := make([]imageGenerationChoice, 0, len(accounts))
+	var firstCatalogErr, firstSelectionErr error
+	for _, acc := range accounts {
+		available, err := s.modelsFor(ctx, acc)
+		if err != nil {
+			if firstCatalogErr == nil {
+				firstCatalogErr = err
+			}
+			continue
+		}
+		idx := slices.IndexFunc(available, func(model FlowModel) bool { return model.ID == req.ModelID })
+		if idx < 0 {
+			if firstSelectionErr == nil {
+				firstSelectionErr = fmt.Errorf("Model %q không có trong danh sách model của tài khoản %s.", req.ModelID, acc.Email)
+			}
+			continue
+		}
+		model := available[idx]
+		if err := checkReferenceLimit(model, len(req.References)); err != nil {
+			if firstSelectionErr == nil {
+				firstSelectionErr = err
+			}
+			continue
+		}
+		choices = append(choices, imageGenerationChoice{account: acc, model: model})
+	}
+	if len(choices) > 0 {
+		return choices, models.CodeOK, nil
+	}
+	if firstCatalogErr != nil {
+		return nil, models.CodeUnavailable, fmt.Errorf("không lấy được danh sách model ảnh từ tài khoản nào: %w", firstCatalogErr)
+	}
+	if firstSelectionErr != nil {
+		return nil, models.CodeInvalidArgument, firstSelectionErr
+	}
+	return nil, models.CodeInvalidArgument, fmt.Errorf("Model %q không được tài khoản Flow nào hỗ trợ.", req.ModelID)
+}
+
+// GenerateImages selects the least-busy account that supports the requested model.
 func (s *Provider) GenerateImages(ctx context.Context, req GenerateImageRequest) models.Response[[]GeneratedImageItem] {
 	prompt := strings.TrimSpace(req.Prompt)
 	if prompt == "" {
@@ -315,26 +364,37 @@ func (s *Provider) GenerateImages(ctx context.Context, req GenerateImageRequest)
 		return models.ErrorResponse[[]GeneratedImageItem](err.Error(), models.CodeInvalidArgument)
 	}
 
+	choices, code, err := s.imageGenerationChoices(ctx, req)
+	if err != nil {
+		return models.ErrorResponse[[]GeneratedImageItem]("Không thể tạo ảnh: "+err.Error(), code)
+	}
+	compatible := make([]session.StoredAccount, len(choices))
+	for i := range choices {
+		compatible[i] = choices[i].account
+	}
 	// The account's profile stays held (its headless browser must outlive this
 	// request) and its session is read fresh from that browser.
-	acc, release, err := s.readyAccount(ctx)
+	acc, release, err := s.readyAccountFrom(ctx, compatible)
 	if err != nil {
-		return models.ErrorResponse[[]GeneratedImageItem](
-			"Không thể tạo ảnh: "+err.Error(),
-			models.CodeUnavailable,
-		)
+		return models.ErrorResponse[[]GeneratedImageItem]("Không thể tạo ảnh: "+err.Error(), models.CodeUnavailable)
 	}
 	defer release()
 
-	model, err := s.findImageModel(ctx, *acc, req.ModelID)
-	if err != nil {
-		return models.ErrorResponse[[]GeneratedImageItem](err.Error(), models.CodeInvalidArgument)
+	var model FlowModel
+	for _, choice := range choices {
+		if choice.account.ID == acc.ID {
+			model = choice.model
+			break
+		}
 	}
-	if err := checkReferenceLimit(model, len(req.References)); err != nil {
-		return models.ErrorResponse[[]GeneratedImageItem](err.Error(), models.CodeInvalidArgument)
+	if model.ID == "" {
+		return models.ErrorResponse[[]GeneratedImageItem]("Không tìm lại được model ảnh tương thích cho tài khoản đã chọn.", models.CodeInternal)
 	}
 
 	images, err := s.generateLiveImages(ctx, *acc, req)
+	if s.refreshLiveCredits != nil {
+		s.refreshLiveCredits(ctx, acc.ID)
+	}
 	if err != nil {
 		// A removed or inaccessible project must be resolved again next time.
 		s.forgetProject(acc.ID)
@@ -368,7 +428,8 @@ func validateGenerateRequest(req GenerateImageRequest) error {
 	return validateReferences(req.References)
 }
 
-// UploadReferenceImage registers a local image to Google Flow via RPC maseQ.
+// UploadReferenceImage registers a local image to Google Flow using the RPC ID
+// discovered from the account's active Flow build.
 func (s *Provider) UploadReferenceImage(ctx context.Context, client *chrome.FlowClient, _ session.StoredAccount, imageBase64 string, mimeType string, fileName string, token string, projectID ...string) (string, error) {
 	proj := ""
 	if len(projectID) > 0 {
@@ -379,21 +440,25 @@ func (s *Provider) UploadReferenceImage(ctx context.Context, client *chrome.Flow
 		return "", fmt.Errorf("không đóng gói được payload maseQ: %w", err)
 	}
 
-	fReq, err := BuildBatchEnvelope(RPCUploadImage, inner)
+	rpcID := client.Credentials().RPCs.ID(chrome.MethodUploadImage)
+	if rpcID == "" {
+		return "", errors.New("Flow RPC tải ảnh tham chiếu chưa được khám phá từ build hiện tại")
+	}
+	fReq, err := BuildBatchEnvelope(rpcID, inner)
 	if err != nil {
-		return "", fmt.Errorf("không đóng gói được envelope maseQ: %w", err)
+		return "", fmt.Errorf("không đóng gói được envelope tải ảnh tham chiếu: %w", err)
 	}
 	limits := s.cfg.Get().Accounts
-	body, err := client.Do(ctx, RPCUploadImage, fReq, time.Duration(limits.GenerationTimeoutSeconds)*time.Second)
+	body, err := client.Do(ctx, rpcID, fReq, time.Duration(limits.GenerationTimeoutSeconds)*time.Second)
 	if bytes.Contains(body, []byte("PUBLIC_ERROR_UNUSUAL_ACTIVITY")) {
 		return "", errors.New("Google Flow từ chối tải ảnh lên do token bảo mật không hợp lệ")
 	}
 	if err != nil {
-		return "", fmt.Errorf("lỗi khi gọi maseQ: %w", err)
+		return "", fmt.Errorf("lỗi khi gọi Flow UploadImage: %w", err)
 	}
 
 	// The request echoes its own IDs; only an ID Flow created can be the media ID.
-	return ParseUploadedMediaID(body, uuidRegex.FindAllString(string(inner), -1)...)
+	return parseUploadedMediaID(body, rpcID, uuidRegex.FindAllString(string(inner), -1)...)
 }
 
 // generateImagesFromAccount executes generation against Google Flow using the selected account.
@@ -402,7 +467,7 @@ func (s *Provider) generateImagesFromAccount(ctx context.Context, acc session.St
 		return nil, errors.New("dịch vụ tài khoản chưa được khởi tạo")
 	}
 	limits := s.cfg.Get().Accounts
-	client, err := chrome.NewFlowClient(acc.Credentials, limits)
+	client, err := s.flowClient(ctx, acc, chrome.MethodProjects, chrome.MethodCreateProject, chrome.MethodProjectContents, chrome.MethodMedia)
 	if err != nil {
 		return nil, err
 	}

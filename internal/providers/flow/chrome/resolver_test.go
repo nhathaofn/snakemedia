@@ -56,3 +56,19 @@ func TestResolverMatchesReferenceBundleWhenPresent(t *testing.T) {
 		t.Fatalf("resolver does not match documented bundle format: %v", err)
 	}
 }
+
+func TestStudioMethodsResolveFromRealReferenceBundles(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "references", "flow-research", "observations", "bundles")
+	names := []string{"bundle_0.js", "chunk_studio_1.js"}
+	sources := []string{}
+	for _, name := range names {
+		if _, err := os.Stat(filepath.Join(root, name)); err != nil {
+			t.Skip("reference bundles not present")
+		}
+		sources = append(sources, "https://www.gstatic.com/"+name)
+	}
+	registry, err := resolveRPCs(sources, config.DefaultAccountConfig().MaxDiscoveryScripts, config.DefaultAccountConfig().MaxDiscoveryBytes, func(source string) ([]byte, error) { return os.ReadFile(filepath.Join(root, filepath.Base(source))) }, MethodModels, MethodProjects, MethodCreateProject, MethodEditVideo, MethodVideoStatus, MethodProjectContents, MethodMedia, MethodUploadImage, MethodGenerateVideoText, MethodGenerateVideoReferences)
+	if err != nil || !registry.Has(MethodModels, MethodProjects, MethodCreateProject, MethodEditVideo, MethodVideoStatus, MethodProjectContents, MethodMedia, MethodUploadImage, MethodGenerateVideoText, MethodGenerateVideoReferences) {
+		t.Fatalf("real bundle studio descriptors: %v", err)
+	}
+}

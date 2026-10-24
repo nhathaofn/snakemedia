@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 
 	"SnakeMedia/internal/models"
@@ -54,7 +55,7 @@ func TestEditModelsComeFromVideoInputUsages(t *testing.T) {
 	if err != nil || u.key != "abra_edit" || resolution != 1 {
 		t.Fatalf("picked %q at %d: %v", u.key, resolution, err)
 	}
-	if start, end := sourceFrames(u); start != 0 || end != 240 {
+	if start, end, _ := editSourceFrames(8, 0, 0, u.maxInputSeconds); start != 0 || end != 240 {
 		t.Fatalf("source frames %d-%d, Flow sends 0-240", start, end)
 	}
 	// A tier without the 720p edit falls back to 360p.
@@ -161,9 +162,23 @@ func TestEditVideosValidatesAndSelectsVariant(t *testing.T) {
 	}
 }
 
-func TestUploadSourceVideoAndEditWithMediaID(t *testing.T) {
+func TestEditVideoFailureDetailNamesSourceAndPrompt(t *testing.T) {
+	detail := editVideoFailureDetail(`[3,"PUBLIC_ERROR_DANGER_FILTER"]`)
+	if !strings.Contains(detail, "video nguồn") || !strings.Contains(detail, "yêu cầu chỉnh sửa") || strings.Contains(detail, publicErrorDangerFilter) {
+		t.Fatalf("edit safety rejection lacks source-aware guidance: %q", detail)
+	}
+
+	job := editJob{Complete: true, Results: []GeneratedVideoItem{{Error: `[3,"PUBLIC_ERROR_DANGER_FILTER"]`}}}
+	items := job.items()
+	if len(items) != 1 || !strings.Contains(items[0].Error, "video nguồn") {
+		t.Fatalf("persisted edit error was not normalized: %+v", items)
+	}
+}
+
+func TestUploadedSourceKeepsOwnershipAcrossRotationAndRestart(t *testing.T) {
 	accounts := testAccountService(t)
-	seedFlowAccount(t, accounts, "upload@example.invalid", true)
+	owner := seedFlowAccount(t, accounts, "upload@example.invalid", true)
+	seedFlowAccount(t, accounts, "other@example.invalid", true)
 	service := testFlowService(accounts)
 	service.fetchModelsPayload = func(context.Context, session.StoredAccount) (string, error) { return editModelsPayload, nil }
 
@@ -176,23 +191,24 @@ func TestUploadSourceVideoAndEditWithMediaID(t *testing.T) {
 		t.Fatal(imported.Error)
 	}
 
-	service.uploadLiveVideo = func(_ context.Context, _ session.StoredAccount, source localVideo) (UploadedSourceVideo, error) {
-		return UploadedSourceVideo{
-			MediaID:     "uploaded-mid-123",
-			WorkflowID:  "wf-123",
-			DisplayName: source.fileName,
-			Width:       1920,
-			Height:      1080,
-		}, nil
+	service.uploadLiveVideo = func(_ context.Context, _ session.StoredAccount, source localVideo) (sourceRecord, error) {
+		return sourceRecord{MediaID: "uploaded-mid-123", ProjectID: "22d33fe3-5afe-4106-8913-dc66336677f8", WorkflowID: "wf-123", Video: UploadedSourceVideo{DurationSeconds: 8, DisplayName: source.fileName, Width: 1920, Height: 1080}}, nil
 	}
 
 	upRes := service.UploadSourceVideo(context.Background(), imported.Data.LocalURL)
-	if !upRes.Success || upRes.Data.MediaID != "uploaded-mid-123" || upRes.Data.Width != 1920 {
+	if !upRes.Success || upRes.Data.SourceID == "" || upRes.Data.Width != 1920 {
 		t.Fatalf("unexpected upload result: %+v", upRes)
 	}
 
+	// Other operations advance rotation, and the provider is recreated.
+	_, _ = service.NextAccount()
+	service = testFlowService(accounts)
+	service.fetchModelsPayload = func(context.Context, session.StoredAccount) (string, error) { return editModelsPayload, nil }
 	var passedReq EditVideoRequest
-	service.editLiveVideos = func(_ context.Context, _ session.StoredAccount, req EditVideoRequest, _ localVideo, _ videoFamily) ([]GeneratedVideoItem, error) {
+	service.editLiveVideos = func(_ context.Context, selected session.StoredAccount, req EditVideoRequest, _ localVideo, _ videoFamily) ([]GeneratedVideoItem, error) {
+		if selected.ID != owner.ID {
+			t.Errorf("source crossed account boundary")
+		}
 		passedReq = req
 		return []GeneratedVideoItem{{ID: "gen-1"}}, nil
 	}
@@ -201,14 +217,64 @@ func TestUploadSourceVideoAndEditWithMediaID(t *testing.T) {
 		Prompt:      "cinematic pan",
 		ModelID:     "abra",
 		SourceURL:   imported.Data.LocalURL,
-		MediaID:     upRes.Data.MediaID,
-		Width:       upRes.Data.Width,
-		Height:      upRes.Data.Height,
+		SourceID:    upRes.Data.SourceID,
 		TrimStartMS: 500,
 		TrimEndMS:   4500,
 	}
 	editRes := service.EditVideos(context.Background(), editReq)
-	if !editRes.Success || passedReq.MediaID != "uploaded-mid-123" {
+	if !editRes.Success || passedReq.source == nil || passedReq.source.MediaID != "uploaded-mid-123" {
 		t.Fatalf("expected edit to succeed with passed MediaID, got: %+v", editRes)
+	}
+}
+
+func TestEditRangeUsesActualSourceTimeline(t *testing.T) {
+	for _, tc := range []struct {
+		duration                          float64
+		startMS, endMS, limit, start, end int
+		invalid                           bool
+	}{
+		{6, 0, 0, 10, 0, 180, false},
+		{12, 5000, 9000, 10, 150, 270, false},
+		{2.5, 0, 2500, 10, 0, 75, false},
+		{6, 0, 7000, 10, 0, 0, true},
+		{20, 0, 11000, 10, 0, 0, true},
+		{0, 0, 0, 10, 0, 0, true},
+	} {
+		first, last, err := editSourceFrames(tc.duration, tc.startMS, tc.endMS, tc.limit)
+		if tc.invalid {
+			if err == nil {
+				t.Error("invalid range accepted")
+			}
+			continue
+		}
+		if err != nil || first != tc.start || last != tc.end {
+			t.Errorf("range: got %d-%d %v expected %d-%d", first, last, err, tc.start, tc.end)
+		}
+	}
+}
+
+func TestVideoOutputNeverUsesReferenceURL(t *testing.T) {
+	sourceURL := "https://flow-content.google/video/input"
+	if got := videoOutputURL([]any{"pending", nil, nil, nil, nil, []any{sourceURL}}); got != "" {
+		t.Fatal("input treated as finished output")
+	}
+	outputURL := "https://flow-content.google/video/output"
+	record := []any{"output", nil, nil, nil, nil, []any{sourceURL}, nil, []any{nil, nil, nil, nil, []any{nil, nil, outputURL}}}
+	if got := videoOutputURL(record); got != outputURL {
+		t.Fatalf("wrong output URL %q", got)
+	}
+}
+
+func TestMaterializedOutputURLMatchesLiveGetMedia(t *testing.T) {
+	expected := "https://flow-content.google/video/result"
+	descriptor := make([]any, 9)
+	descriptor[8] = expected
+	record := []any{"result", nil, nil, nil, nil, nil, nil, []any{descriptor}}
+	if got := videoOutputURL(record); got != expected {
+		t.Fatalf("materialized serving URL was lost: %q", got)
+	}
+	descriptor[8] = "https://lh3.googleusercontent.com/thumbnail"
+	if got := videoOutputURL(record); got != "" {
+		t.Fatal("thumbnail treated as output")
 	}
 }

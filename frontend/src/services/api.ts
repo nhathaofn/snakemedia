@@ -98,6 +98,10 @@ export const api = {
   getVideoModels: () => invoke<FlowVideoModel[]>('GetVideoModels', Backend.GetVideoModels),
   generateVideos: (req: GenerateVideoRequest) =>
     invoke<GeneratedVideoItem[]>('GenerateVideos', () => Backend.GenerateVideos(req)),
+  listVideoEditJobs: () =>
+    invoke<GeneratedVideoItem[]>('ListVideoEditJobs', Backend.ListVideoEditJobs),
+  resumeVideoEdit: (id: string) =>
+    invoke<GeneratedVideoItem[]>('ResumeVideoEdit', () => Backend.ResumeVideoEdit(id)),
   getEditModels: () => invoke<FlowEditModel[]>('GetEditModels', Backend.GetEditModels),
   editVideos: (req: EditVideoRequest) =>
     invoke<GeneratedVideoItem[]>('EditVideos', () => Backend.EditVideos(req)),

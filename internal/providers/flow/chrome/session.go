@@ -167,7 +167,7 @@ func inspectFlowSession(ctx context.Context, port int, policy config.AccountConf
 		return nil, err
 	}
 	defer conn.Close()
-	conn.SetReadLimit(policy.MaxResponseBytes)
+	conn.SetReadLimit(max(policy.MaxResponseBytes, policy.MaxDiscoveryBytes))
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 	var identity struct {

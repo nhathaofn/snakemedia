@@ -1,8 +1,3 @@
-/* Edit video: a wider tools column holds the source preview and its trim. */
-.flow-edit-panel {
-  width: var(--flow-edit-panel-width);
-}
-
 .flow-edit-note {
   margin: 0;
   font-size: var(--font-size-caption);

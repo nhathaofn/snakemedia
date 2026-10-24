@@ -82,6 +82,7 @@ type AppConfig struct {
 	// port. Other managed profiles always receive their own independent port.
 	CdpPort  int           `json:"cdpPort"`
 	Accounts AccountConfig `json:"accounts"`
+	Flow     FlowConfig    `json:"flow"`
 }
 
 // DefaultConfig provides the fallback settings used on first run or when the file is unusable.
@@ -92,6 +93,7 @@ func DefaultConfig() AppConfig {
 		WindowScale: 0.7,
 		CdpPort:     DefaultCdpPort,
 		Accounts:    DefaultAccountConfig(),
+		Flow:        DefaultFlowConfig(),
 	}
 }
 
@@ -112,6 +114,9 @@ func (c AppConfig) Validate() error {
 		errs = append(errs, fmt.Errorf("cdpPort %d must be between %d and %d", c.CdpPort, MinPort, MaxPort))
 	}
 	if err := c.Accounts.Validate(); err != nil {
+		errs = append(errs, err)
+	}
+	if err := c.Flow.Validate(); err != nil {
 		errs = append(errs, err)
 	}
 	if len(errs) > 0 {

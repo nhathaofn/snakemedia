@@ -273,3 +273,13 @@ func (a *App) EditVideos(req flow.EditVideoRequest) models.Response[[]flow.Gener
 func (a *App) ListNodes() models.Response[[]engine.Spec] {
 	return models.SuccessResponse(a.nodes.Specs())
 }
+
+// ListVideoEditJobs exposes the persisted edit journal for explicit recovery.
+func (a *App) ListVideoEditJobs() models.Response[[]flow.GeneratedVideoItem] {
+	return a.flow.ListVideoEditJobs(a.ctx)
+}
+
+// ResumeVideoEdit follows an existing mutation without submitting another edit.
+func (a *App) ResumeVideoEdit(id string) models.Response[[]flow.GeneratedVideoItem] {
+	return a.flow.ResumeVideoEdit(a.ctx, id)
+}

@@ -62,6 +62,16 @@ func TestVideoModelsFollowTierAndCapabilities(t *testing.T) {
 	for _, f := range families {
 		byID[f.id] = f
 	}
+	priced, err := selectVideoVariant(byID["veo_3_1_fast"], 1, 2, 8, 1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cost, ok := priced.creditCost(1); !ok || cost != 20 {
+		t.Fatalf("Flow's tier 1 video cost = %d, %v; want 20 credits", cost, ok)
+	}
+	if _, ok := priced.creditCost(3); ok {
+		t.Fatal("unavailable tier unexpectedly received a credit cost")
+	}
 	for _, tc := range []struct {
 		family                string
 		tier, aspect, ds, res int
@@ -224,7 +234,7 @@ func TestWaitForVideosPollsUntilSettled(t *testing.T) {
 				envelope := `)]}'` + "\n\n1\n" + `[["wrb.fr","as29s",null,null,null,[5],"generic"]]`
 				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(envelope)), Request: r}, nil
 			}
-			return flowReply(r, rpc, quote([]any{"media-1", []any{"https://flow-content.google/video/media-1?sig=b"}})), nil
+			return flowReply(r, rpc, quote([]any{"media-1", nil, nil, nil, nil, nil, nil, []any{nil, nil, nil, nil, []any{nil, nil, "https://flow-content.google/video/media-1?sig=b"}}})), nil
 		}
 		t.Errorf("unexpected RPC %s", r.URL.RawQuery)
 		return nil, io.EOF
@@ -279,6 +289,16 @@ func TestGenerateVideosValidatesAndSelectsVariant(t *testing.T) {
 		if res := service.GenerateVideos(context.Background(), req); res.Success || res.Code != models.CodeInvalidArgument {
 			t.Errorf("%s: expected CodeInvalidArgument, got %+v", name, res)
 		}
+	}
+}
+
+func TestVideoFailureDetailExplainsFlowSafetyRejection(t *testing.T) {
+	detail := videoFailureDetail(`[3,"PUBLIC_ERROR_DANGER_FILTER"]`)
+	if !strings.Contains(detail, "Flow đã từ chối yêu cầu này") || strings.Contains(detail, publicErrorDangerFilter) {
+		t.Fatalf("safety rejection was not presented as a Flow response: %q", detail)
+	}
+	if got := videoFailureDetail("other Flow error"); got != "other Flow error" {
+		t.Fatalf("unmapped Flow error changed: %q", got)
 	}
 }
 

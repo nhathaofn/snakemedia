@@ -13,14 +13,23 @@ function makeStore(prompt: string) {
     prompt: string;
     setPrompt: (prompt: string) => void;
     isGenerating: boolean;
-    setIsGenerating: (generating: boolean) => void;
+    activeGenerations: number;
+    beginGeneration: () => void;
+    finishGeneration: () => void;
     items: Item[];
     addItems: (items: Item[]) => void;
   }>((set) => ({
     prompt,
     setPrompt: (next) => set({ prompt: next }),
     isGenerating: false,
-    setIsGenerating: (isGenerating) => set({ isGenerating }),
+    activeGenerations: 0,
+    beginGeneration: () =>
+      set((state) => ({ activeGenerations: state.activeGenerations + 1, isGenerating: true })),
+    finishGeneration: () =>
+      set((state) => {
+        const activeGenerations = Math.max(0, state.activeGenerations - 1);
+        return { activeGenerations, isGenerating: activeGenerations > 0 };
+      }),
     items: [],
     addItems: (items) => set((s) => ({ items: [...items, ...s.items] })),
   }));
@@ -84,12 +93,75 @@ describe('runGeneration', () => {
     expect(store.getState().prompt).toBe('a dog');
   });
 
-  it('ignores a second submit while one is running', async () => {
+  it('accepts another prompt while a request is running and tracks both', async () => {
     const store = makeStore('a cat');
-    store.getState().setIsGenerating(true);
-    const request = vi.fn(async () => ok([]));
-    await runGeneration(store, request, 'ảnh', vi.fn());
-    expect(request).not.toHaveBeenCalled();
-    expect(store.getState().prompt).toBe('a cat');
+    let finishFirst!: (response: ApiResponse<Item[]>) => void;
+    let finishSecond!: (response: ApiResponse<Item[]>) => void;
+    const firstRequest = vi.fn(
+      () => new Promise<ApiResponse<Item[]>>((resolve) => (finishFirst = resolve)),
+    );
+    const secondRequest = vi.fn(
+      () => new Promise<ApiResponse<Item[]>>((resolve) => (finishSecond = resolve)),
+    );
+
+    const first = runGeneration(store, firstRequest, 'ảnh', vi.fn());
+    expect(store.getState()).toMatchObject({
+      prompt: '',
+      activeGenerations: 1,
+      isGenerating: true,
+    });
+
+    store.getState().setPrompt('a dog');
+    const second = runGeneration(store, secondRequest, 'ảnh', vi.fn());
+    expect(firstRequest).toHaveBeenCalledOnce();
+    expect(secondRequest).toHaveBeenCalledOnce();
+    expect(store.getState()).toMatchObject({
+      prompt: '',
+      activeGenerations: 2,
+      isGenerating: true,
+    });
+
+    finishFirst(ok([{ id: '1' }]));
+    await first;
+    expect(store.getState()).toMatchObject({ activeGenerations: 1, isGenerating: true });
+
+    finishSecond(ok([{ id: '2' }]));
+    await second;
+    expect(store.getState()).toMatchObject({ activeGenerations: 0, isGenerating: false });
+    expect(store.getState().items.map((item) => item.id)).toEqual(['2', '1']);
+  });
+
+  it('restores only the last concurrent failure and reports earlier ones on their turns', async () => {
+    const store = makeStore('first prompt');
+    let failFirst!: (response: ApiResponse<Item[]>) => void;
+    let failSecond!: (response: ApiResponse<Item[]>) => void;
+    const firstLifecycle = { onFailure: vi.fn() };
+    const secondLifecycle = { onFailure: vi.fn() };
+
+    const first = runGeneration(
+      store,
+      () => new Promise<ApiResponse<Item[]>>((resolve) => (failFirst = resolve)),
+      'ảnh',
+      vi.fn(),
+      firstLifecycle,
+    );
+    store.getState().setPrompt('second prompt');
+    const second = runGeneration(
+      store,
+      () => new Promise<ApiResponse<Item[]>>((resolve) => (failSecond = resolve)),
+      'ảnh',
+      vi.fn(),
+      secondLifecycle,
+    );
+
+    failFirst(fail);
+    await first;
+    expect(firstLifecycle.onFailure).toHaveBeenCalledWith('boom', false);
+    expect(store.getState().prompt).toBe('');
+
+    failSecond(fail);
+    await second;
+    expect(secondLifecycle.onFailure).toHaveBeenCalledWith('boom', true);
+    expect(store.getState().prompt).toBe('second prompt');
   });
 });

@@ -1,13 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AlertCircle, FileVideo, RefreshCw } from 'lucide-react';
 import { Spinner } from '../../../components/ui';
 import { api } from '../../../services/api';
 import { useAppStore } from '../../../stores';
 import { formatBytes } from '../../../utils';
-import { clockLabel, selectedModelOf } from '../shared';
-import { MIN_TRIM_SECONDS, useFlowEditStore } from './store/flowEditStore';
-
-const TRIM_STEP_SECONDS = 0.1;
+import { clockLabel, selectedModelOf, useStudioConfig } from '../shared';
+import { useFlowEditStore } from './store/flowEditStore';
 
 /**
  * Source video of an edit: picked through the native dialog (the backend copies
@@ -15,15 +13,23 @@ const TRIM_STEP_SECONDS = 0.1;
  * The preview plays only the trimmed part.
  */
 export function SourceVideoPanel() {
+  const [previewError, setPreviewError] = useState<{ revision: number; message: string } | null>(
+    null,
+  );
   const addToast = useAppStore((s) => s.addToast);
+  const revision = useFlowEditStore((s) => s.sourceRevision);
+  const pickSequence = useRef(0);
+  const minimum = useFlowEditStore((s) => s.minTrimSeconds);
+  const step = useFlowEditStore((s) => s.trimStepSeconds);
+  const { config } = useStudioConfig();
   const source = useFlowEditStore((s) => s.source);
   const setSource = useFlowEditStore((s) => s.setSource);
   const isSourceLoading = useFlowEditStore((s) => s.isSourceLoading);
   const sourceLoadingMessage = useFlowEditStore((s) => s.sourceLoadingMessage);
   const sourceError = useFlowEditStore((s) => s.sourceError);
   const setSourceError = useFlowEditStore((s) => s.setSourceError);
-  const uploadedMediaId = useFlowEditStore((s) => s.uploadedMediaId);
-  const setUploadedMedia = useFlowEditStore((s) => s.setUploadedMedia);
+  const uploadedSourceID = useFlowEditStore((s) => s.uploadedSourceID);
+  const setUploadedSource = useFlowEditStore((s) => s.setUploadedSource);
   const duration = useFlowEditStore((s) => s.sourceDuration);
   const width = useFlowEditStore((s) => s.sourceWidth);
   const height = useFlowEditStore((s) => s.sourceHeight);
@@ -42,7 +48,9 @@ export function SourceVideoPanel() {
   }, [trimStart, duration]);
 
   const pick = async () => {
+    const selection = ++pickSequence.current;
     const res = await api.pickVideo();
+    if (selection !== pickSequence.current) return;
     if (!res.success || !res.data) {
       addToast({
         type: 'error',
@@ -52,21 +60,21 @@ export function SourceVideoPanel() {
       return;
     }
     if (!res.data.canceled) {
-      setSource(res.data);
+      const sourceRevision = setSource(res.data);
       // Immediately push source video to Google Flow via Scotty uploader
       const uploadRes = await api.uploadSourceVideo(res.data.localUrl);
       if (!uploadRes.success || !uploadRes.data) {
-        setSourceError(uploadRes.error ?? 'Không thể tải video lên Google Flow.');
+        setSourceError(uploadRes.error ?? 'Không thể tải video lên Google Flow.', sourceRevision);
         return;
       }
-      setUploadedMedia(uploadRes.data.mediaId, uploadRes.data.width, uploadRes.data.height);
+      setUploadedSource(uploadRes.data, sourceRevision);
     }
   };
 
   const keepInTrim = () => {
     const video = videoRef.current;
     if (!video || duration <= 0) return;
-    if (video.currentTime >= trimEnd || video.currentTime < trimStart - TRIM_STEP_SECONDS) {
+    if (video.currentTime >= trimEnd || video.currentTime < trimStart - step) {
       video.pause();
       video.currentTime = trimStart;
     }
@@ -83,12 +91,17 @@ export function SourceVideoPanel() {
           disabled={generating}
         >
           <FileVideo size={28} className="reference-dropzone-icon" />
-          <span className="reference-dropzone-text">Chọn video mp4, mov, webm hoặc m4v</span>
+          <span className="reference-dropzone-text">
+            Chọn video
+            {config?.videoExtensions.length ? ` ${config.videoExtensions.join(', ')}` : ''}
+          </span>
         </button>
       </div>
     );
   }
 
+  const visibleError =
+    sourceError || (previewError?.revision === revision ? previewError.message : null);
   const length = trimEnd - trimStart;
   const tooLong = maxInput > 0 && duration > maxInput;
 
@@ -113,13 +126,14 @@ export function SourceVideoPanel() {
             <span>{sourceLoadingMessage}</span>
           </div>
         )}
-        {sourceError && (
+        {visibleError && (
           <div className="flow-edit-preview-overlay flow-edit-preview-error">
             <AlertCircle size={24} />
-            <span>{sourceError}</span>
+            <span>{visibleError}</span>
           </div>
         )}
         <video
+          key={source.localUrl}
           ref={videoRef}
           src={source.localUrl}
           controls={!isSourceLoading && !sourceError}
@@ -127,13 +141,21 @@ export function SourceVideoPanel() {
           onLoadedMetadata={(e) => {
             const { duration: seconds, videoWidth, videoHeight } = e.currentTarget;
             if (Number.isFinite(seconds) && seconds > 0) {
-              setMetadata(seconds, videoWidth, videoHeight);
+              setMetadata(seconds, videoWidth, videoHeight, revision);
             } else {
-              setSourceError('Không thể lấy thời lượng của video.');
+              setPreviewError({
+                revision,
+                message:
+                  'Trình xem trước chưa đọc được video; thông số sẽ được kiểm tra từ tệp gốc.',
+              });
             }
           }}
           onError={() => {
-            setSourceError('Không thể giải mã hoặc đọc thông số video này.');
+            setPreviewError({
+              revision,
+              message:
+                'Trình xem trước không hỗ trợ codec này. Bạn vẫn có thể chỉnh sửa sau khi nguồn được kiểm tra.',
+            });
           }}
           onTimeUpdate={keepInTrim}
         />
@@ -142,7 +164,11 @@ export function SourceVideoPanel() {
         {source.fileName} · {formatBytes(source.size, 1)}
         {isSourceLoading && ' · Đang tải lên Flow...'}
         {!isSourceLoading && !sourceError && duration > 0 && ` · ${clockLabel(duration)}`}
-        {!isSourceLoading && !sourceError && width > 0 && height > 0 && ` · ${width}×${height}`}
+        {!isSourceLoading &&
+          !sourceError &&
+          width > 0 &&
+          height > 0 &&
+          ` · Flow: ${width}×${height}`}
       </p>
 
       {isSourceLoading && (
@@ -153,15 +179,15 @@ export function SourceVideoPanel() {
         </div>
       )}
 
-      {!isSourceLoading && !sourceError && uploadedMediaId && duration > 0 && (
+      {!isSourceLoading && !sourceError && uploadedSourceID && duration > 0 && (
         <div className="flow-edit-trim" role="group" aria-label="Đoạn video dùng để chỉnh sửa">
           <label className="flow-edit-trim-row">
             <span>Bắt đầu</span>
             <input
               type="range"
               min={0}
-              max={Math.max(0, duration - MIN_TRIM_SECONDS)}
-              step={TRIM_STEP_SECONDS}
+              max={Math.max(0, duration - Math.min(duration, minimum))}
+              step={step}
               value={trimStart}
               disabled={generating}
               // Moving the start keeps the chosen length where the video allows.
@@ -176,9 +202,9 @@ export function SourceVideoPanel() {
             <span>Kết thúc</span>
             <input
               type="range"
-              min={MIN_TRIM_SECONDS}
+              min={Math.min(duration, minimum)}
               max={duration}
-              step={TRIM_STEP_SECONDS}
+              step={step}
               value={trimEnd}
               disabled={generating}
               onChange={(e) => setTrim(trimStart, Number(e.target.value))}

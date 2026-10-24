@@ -22,10 +22,6 @@ import (
 // "upload, finalize" request carries the bytes and returns the media record.
 const (
 	videoUploadPath = "/upload/v1/flow/upload/video/"
-	// videoUploadAttempts and videoUploadRetryDelay mirror Flow's retry loop
-	// (two attempts, VIDEO_UPLOAD_RETRY_DELAY_MS = 500).
-	videoUploadAttempts   = 2
-	videoUploadRetryDelay = 500 * time.Millisecond
 	// xsrfCookie holds the token Flow sends as X-Framework-Xsrf-Token.
 	xsrfCookie = "XSRF-TOKEN"
 	// maxUploadReplyBytes bounds the JSON media record returned by Scotty.
@@ -63,13 +59,14 @@ func (f *FlowClient) UploadVideo(ctx context.Context, projectID, filePath, fileN
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	delay := time.Duration(f.uploadPolicy.UploadRetryDelayMS) * time.Millisecond
 	var lastErr error
-	for attempt := 1; attempt <= videoUploadAttempts; attempt++ {
+	for attempt := 1; attempt <= f.uploadPolicy.UploadAttempts; attempt++ {
 		if attempt > 1 {
 			select {
 			case <-ctx.Done():
 				return UploadedVideo{}, ctx.Err()
-			case <-time.After(videoUploadRetryDelay):
+			case <-time.After(delay):
 			}
 		}
 		video, err := f.uploadVideoOnce(ctx, projectID, filePath, info.Size(), fileName, contentType, trim)
@@ -78,6 +75,9 @@ func (f *FlowClient) UploadVideo(ctx context.Context, projectID, filePath, fileN
 		}
 		lastErr = err
 		var remote *HTTPError
+		if errors.As(err, &remote) {
+			delay = max(delay, remote.RetryAfter)
+		}
 		if ctx.Err() != nil || (errors.As(err, &remote) && remote.Status >= 400 && remote.Status < 500 && remote.Status != http.StatusRequestTimeout && remote.Status != http.StatusTooManyRequests) {
 			break
 		}

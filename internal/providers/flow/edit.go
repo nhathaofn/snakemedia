@@ -16,6 +16,7 @@ import (
 	"SnakeMedia/internal/models"
 	"SnakeMedia/internal/providers/flow/chrome"
 	"SnakeMedia/internal/providers/flow/session"
+	"SnakeMedia/pkg/utils"
 	"github.com/google/uuid"
 )
 
@@ -32,16 +33,13 @@ import (
 //   - the reply has the same layout as text-to-video, so it is followed by the
 //     same polling (runVideoJob).
 const (
-	// RPCEditVideo is /VideoFxService.BatchAsyncGenerateVideoEditVideo.
-	RPCEditVideo = "jIps6"
 	// capabilityVideoInput marks usages that take a source video (EDIT_VIDEO).
 	capabilityVideoInput = 20
 	// uploadedVideoFPS is the frame rate Flow assumes for uploaded videos (_.CP: Rd 30).
 	uploadedVideoFPS = 30
 	// editResolutionIndex is field 13 of an edit request item.
 	editResolutionIndex = 12
-	// maxSourceVideoBytes is Flow's upload limit for videos (1 GB).
-	maxSourceVideoBytes = 1 << 30
+
 	// videoAspectSquare is SO's code for 1:1, which no edit usage offers.
 	videoAspectSquare = 0
 )
@@ -73,24 +71,27 @@ type FlowEditModel struct {
 
 // UploadedSourceVideo describes a video successfully uploaded to Google Flow.
 type UploadedSourceVideo struct {
-	MediaID     string `json:"mediaId"`
-	WorkflowID  string `json:"workflowId"`
-	DisplayName string `json:"displayName"`
-	Width       int    `json:"width"`
-	Height      int    `json:"height"`
+	MinTrimSeconds  float64         `json:"minTrimSeconds"`
+	TrimStepSeconds float64         `json:"trimStepSeconds"`
+	SourceID        string          `json:"sourceId"`
+	DurationSeconds float64         `json:"durationSeconds"`
+	Models          []FlowEditModel `json:"models"`
+	DisplayName     string          `json:"displayName"`
+	Width           int             `json:"width"`
+	Height          int             `json:"height"`
 }
 
 // EditVideoRequest rewrites a video imported into the media store.
 type EditVideoRequest struct {
-	Prompt    string `json:"prompt"`
-	ModelID   string `json:"modelId"`
-	ProjectID string `json:"projectId,omitempty"`
+	SourceID   string `json:"sourceId,omitempty"`
+	RequestID  string `json:"requestId,omitempty"`
+	source     *sourceRecord
+	onAccepted func()
+	Prompt     string `json:"prompt"`
+	ModelID    string `json:"modelId"`
+	ProjectID  string `json:"projectId,omitempty"`
 	// SourceURL is the local URL of the imported source video.
 	SourceURL string `json:"sourceUrl"`
-	// MediaID is the Flow media ID if already uploaded.
-	MediaID string `json:"mediaId,omitempty"`
-	Width   int    `json:"width,omitempty"`
-	Height  int    `json:"height,omitempty"`
 	// TrimStartMS and TrimEndMS select part of the source; both 0 keeps it whole.
 	TrimStartMS int `json:"trimStartMs"`
 	TrimEndMS   int `json:"trimEndMs"`
@@ -183,7 +184,7 @@ func validateEditRequest(req EditVideoRequest) error {
 	if strings.TrimSpace(req.ModelID) == "" {
 		return errors.New("Chưa chọn model.")
 	}
-	if strings.TrimSpace(req.SourceURL) == "" {
+	if strings.TrimSpace(req.SourceURL) == "" && req.SourceID == "" {
 		return errors.New("Chưa chọn video gốc.")
 	}
 	if req.TrimStartMS != 0 || req.TrimEndMS != 0 {
@@ -218,7 +219,30 @@ func (s *Provider) UploadSourceVideo(ctx context.Context, localURL string) model
 			models.CodeUnavailable,
 		)
 	}
-	return models.SuccessResponse(uploaded)
+
+	if uploaded.Video.DurationSeconds <= 0 {
+		return models.ErrorResponse[UploadedSourceVideo]("Không đọc được thời lượng nguồn.", models.CodeInvalidArgument)
+	}
+	if len(uploaded.Video.Models) == 0 {
+		families, defaultID, err := s.videoFamiliesFor(ctx, *acc)
+		if err != nil {
+			return models.ErrorResponse[UploadedSourceVideo](err.Error(), models.CodeUnavailable)
+		}
+		uploaded.Video.Models = editModels(families, defaultID, accountTier(*acc))
+	}
+	if len(uploaded.Video.Models) == 0 {
+		return models.ErrorResponse[UploadedSourceVideo]("Tài khoản upload không có model Edit video.", models.CodeUnavailable)
+	}
+	uploaded.ID = uuid.NewString()
+	uploaded.AccountID = acc.ID
+	uploaded.LocalURL = localURL
+	uploaded.Video.SourceID = uploaded.ID
+	uploaded.Video.MinTrimSeconds = s.cfg.Get().Flow.MinTrimSeconds
+	uploaded.Video.TrimStepSeconds = s.cfg.Get().Flow.TrimStepSeconds
+	if err := s.saveState("sources", uploaded.ID, uploaded); err != nil {
+		return models.ErrorResponse[UploadedSourceVideo](err.Error(), models.CodeInternal)
+	}
+	return models.SuccessResponse(uploaded.Video)
 }
 
 // EditVideos uploads the source video and asks Flow to rewrite it with the
@@ -227,13 +251,64 @@ func (s *Provider) EditVideos(ctx context.Context, req EditVideoRequest) models.
 	if err := validateEditRequest(req); err != nil {
 		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeInvalidArgument)
 	}
+
+	if req.RequestID == "" {
+		req.RequestID = uuid.NewString()
+	}
+	if _, err := uuid.Parse(req.RequestID); err != nil {
+		return models.ErrorResponse[[]GeneratedVideoItem]("Mã yêu cầu không hợp lệ.", models.CodeInvalidArgument)
+	}
+	jobPath, _ := s.statePath("jobs", req.RequestID)
+	if _, err := os.Stat(jobPath); err == nil {
+		var saved editJob
+		if err := s.readState("jobs", req.RequestID, &saved); err != nil {
+			return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeInternal)
+		}
+		if !sameEditRequest(saved.Request, req) {
+			return models.ErrorResponse[[]GeneratedVideoItem]("Mã yêu cầu đã được dùng cho nội dung khác.", models.CodeInvalidArgument)
+		}
+		return s.ResumeVideoEdit(ctx, req.RequestID)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeInternal)
+	}
+	lock := s.jobLock(req.RequestID)
+	if !lock.TryLock() {
+		return models.ErrorResponse[[]GeneratedVideoItem]("Yêu cầu đang được xử lý.", models.CodeUnavailable)
+	}
+	defer lock.Unlock()
+	// Recheck after locking: a completed concurrent submission must not be repeated.
+	if _, err := os.Stat(jobPath); err == nil {
+		var job editJob
+		if err := s.readState("jobs", req.RequestID, &job); err != nil {
+			return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeInternal)
+		}
+		if !sameEditRequest(job.Request, req) {
+			return models.ErrorResponse[[]GeneratedVideoItem]("Mã yêu cầu đã được dùng cho nội dung khác.", models.CodeInvalidArgument)
+		}
+		return models.SuccessResponse(job.items())
+	}
+	record, err := s.loadSource(req)
+	if err != nil {
+		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeInvalidArgument)
+	}
+	if record != nil {
+		req.source = record
+		req.SourceURL = record.LocalURL
+		req.ProjectID = record.ProjectID
+	}
 	source, err := s.sourceVideo(req.SourceURL)
 	if err != nil {
 		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeInvalidArgument)
 	}
-	acc, release, err := s.readyAccount(ctx)
+	var acc *session.StoredAccount
+	var release func()
+	if record != nil {
+		acc, release, err = s.readyOwnedAccount(ctx, record.AccountID)
+	} else {
+		acc, release, err = s.readyAccount(ctx)
+	}
 	if err != nil {
-		return models.ErrorResponse[[]GeneratedVideoItem]("Không thể chỉnh sửa video: "+err.Error(), models.CodeUnavailable)
+		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeUnavailable)
 	}
 	defer release()
 
@@ -257,6 +332,9 @@ func (s *Provider) EditVideos(ctx context.Context, req EditVideoRequest) models.
 	family := families[slices.IndexFunc(families, func(f videoFamily) bool { return f.id == req.ModelID })]
 
 	videos, err := s.editLiveVideos(ctx, *acc, req, source, family)
+	if s.refreshLiveCredits != nil {
+		s.refreshLiveCredits(ctx, acc.ID)
+	}
 	if err != nil {
 		s.forgetProject(acc.ID)
 		return models.ErrorResponse[[]GeneratedVideoItem](
@@ -294,8 +372,11 @@ func (s *Provider) sourceVideo(localURL string) (localVideo, error) {
 	if err != nil {
 		return localVideo{}, errors.New("Không tìm thấy video gốc, hãy chọn lại.")
 	}
-	if info.Size() > maxSourceVideoBytes {
-		return localVideo{}, errors.New("Video gốc vượt quá giới hạn 1 GB của Flow.")
+	if !info.Mode().IsRegular() || info.Size() <= 0 {
+		return localVideo{}, errors.New("Tệp video rỗng hoặc không hợp lệ.")
+	}
+	if info.Size() > s.cfg.Get().Flow.MaxSourceBytes {
+		return localVideo{}, fmt.Errorf("Video gốc vượt giới hạn %s trong cấu hình.", utils.FormatBytes(uint64(s.cfg.Get().Flow.MaxSourceBytes)))
 	}
 	return localVideo{path: path, fileName: filepath.Base(path), contentType: contentType}, nil
 }
@@ -332,42 +413,90 @@ func BuildEditVideoRequest(prompt, projectID, variantKey, mediaID string, startF
 	return json.Marshal([]any{[]any{item}, flowContext(projectID, recaptchaToken), []any{clientID(), 2}})
 }
 
-// sourceFrames is the frame range Flow sends right after an upload: from the
-// first frame for its assumed clip length (8 s), capped by the usage's input limit.
-func sourceFrames(usage videoUsage) (int, int) {
-	return 0, min(videoDefaultDuration, usage.maxInputSeconds) * uploadedVideoFPS
+// editSourceFrames uses the actual duration and selected usage limit.
+// Flow normalizes uploaded sources to a 30 fps timeline, independently of file fps.
+func editSourceFrames(duration float64, startMS, endMS, maxSeconds int) (int, int, error) {
+	if duration <= 0 || math.IsNaN(duration) || math.IsInf(duration, 0) || maxSeconds <= 0 {
+		return 0, 0, errors.New("Thiếu thời lượng nguồn hoặc giới hạn model.")
+	}
+	start, end := float64(startMS)/1000, float64(endMS)/1000
+	if startMS == 0 && endMS == 0 {
+		end = math.Min(duration, float64(maxSeconds))
+	}
+	if start < 0 || end <= start || end > duration+1/float64(uploadedVideoFPS) || (endMS > 0 && endMS-startMS > maxSeconds*1000) {
+		return 0, 0, errors.New("Đoạn cắt vượt quá video gốc hoặc giới hạn model.")
+	}
+	first, last := int(math.Round(start*uploadedVideoFPS)), int(math.Round(math.Min(end, duration)*uploadedVideoFPS))
+	last = min(last, first+maxSeconds*uploadedVideoFPS)
+	if last <= first {
+		return 0, 0, errors.New("Đoạn cắt ngắn hơn một frame.")
+	}
+	return first, last, nil
 }
 
 // uploadVideoFromAccount uploads the source video to Flow via Scotty and returns its info.
-func (s *Provider) uploadVideoFromAccount(ctx context.Context, acc session.StoredAccount, source localVideo) (UploadedSourceVideo, error) {
+func (s *Provider) uploadVideoFromAccount(ctx context.Context, acc session.StoredAccount, source localVideo) (sourceRecord, error) {
+	return s.prepareSourceVideo(ctx, acc, source, "")
+}
+
+func (s *Provider) prepareSourceVideo(ctx context.Context, acc session.StoredAccount, source localVideo, requestedProject string) (sourceRecord, error) {
+	ctx, cancelUpload := context.WithTimeout(ctx, time.Duration(s.cfg.Get().Accounts.VideoGenerationTimeoutSeconds)*time.Second)
+	defer cancelUpload()
 	if s.accounts == nil {
-		return UploadedSourceVideo{}, errors.New("dịch vụ tài khoản chưa được khởi tạo")
+		return sourceRecord{}, errors.New("dịch vụ tài khoản chưa được khởi tạo")
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, time.Duration(s.cfg.Get().Accounts.RequestTimeoutSeconds)*time.Second)
+	metadata, err := media.ProbeVideo(probeCtx, source.path, s.cfg.Get().Flow)
+	cancel()
+	if err != nil {
+		return sourceRecord{}, err
+	}
+	if _, _, err := editAspect(metadata.Width, metadata.Height); err != nil {
+		return sourceRecord{}, err
 	}
 	limits := s.cfg.Get().Accounts
-	client, err := chrome.NewFlowClient(acc.Credentials, limits)
+	client, err := s.flowClient(ctx, acc, chrome.MethodProjects, chrome.MethodCreateProject)
 	if err != nil {
-		return UploadedSourceVideo{}, err
+		return sourceRecord{}, err
 	}
-	defer s.keepCredentials(acc, client)
+	defer func() {
+		if client != nil {
+			s.keepCredentials(acc, client)
+		}
+	}()
 
-	projectID, err := s.resolveProject(ctx, client, acc, "")
+	projectID, err := s.resolveProject(ctx, client, acc, requestedProject)
 	if err != nil {
-		return UploadedSourceVideo{}, err
+		return sourceRecord{}, err
 	}
 
+	client, err = s.editClient(ctx, acc, projectID)
+	if err != nil {
+		return sourceRecord{}, err
+	}
+	acc.Credentials = client.Credentials()
+	families, defaultID, err := s.videoFamiliesFor(ctx, acc)
+	if err != nil {
+		return sourceRecord{}, err
+	}
+	editable := editModels(families, defaultID, accountTier(acc))
+	if len(editable) == 0 {
+		return sourceRecord{}, errors.New("Tài khoản không có model Edit video.")
+	}
 	uploaded, err := client.UploadVideo(ctx, projectID, source.path, source.fileName, source.contentType, nil, time.Duration(limits.VideoGenerationTimeoutSeconds)*time.Second)
 	if err != nil {
 		s.forgetProject(acc.ID)
-		return UploadedSourceVideo{}, fmt.Errorf("không tải video gốc lên Flow được: %w", err)
+		return sourceRecord{}, fmt.Errorf("không tải video gốc lên Flow được: %w", err)
 	}
 
-	return UploadedSourceVideo{
-		MediaID:     uploaded.MediaID,
-		WorkflowID:  uploaded.WorkflowID,
-		DisplayName: uploaded.DisplayName,
-		Width:       uploaded.Width,
-		Height:      uploaded.Height,
-	}, nil
+	prepared, err := s.waitForUploadedSource(ctx, client, uploaded.MediaID)
+	if err != nil {
+		return sourceRecord{}, err
+	}
+	return sourceRecord{Original: metadata, ProjectID: projectID, MediaID: uploaded.MediaID, WorkflowID: uploaded.WorkflowID, Video: UploadedSourceVideo{
+		Models: editable, DurationSeconds: prepared.DurationSeconds, DisplayName: uploaded.DisplayName, Width: prepared.Width, Height: prepared.Height,
+	}}, nil
 }
 
 // editVideosFromAccount uploads the source, picks the variant for its size,
@@ -376,33 +505,39 @@ func (s *Provider) editVideosFromAccount(ctx context.Context, acc session.Stored
 	if s.accounts == nil {
 		return nil, errors.New("dịch vụ tài khoản chưa được khởi tạo")
 	}
-	limits := s.cfg.Get().Accounts
-	client, err := chrome.NewFlowClient(acc.Credentials, limits)
+
+	if req.source == nil {
+		uploaded, err := s.prepareSourceVideo(ctx, acc, source, req.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		uploaded.AccountID = acc.ID
+		uploaded.LocalURL = req.SourceURL
+		req.source = &uploaded
+	}
+
+	client, err := s.editClient(ctx, acc, req.source.ProjectID)
 	if err != nil {
 		return nil, err
 	}
 	defer s.keepCredentials(acc, client)
-
-	projectID, err := s.resolveProject(ctx, client, acc, req.ProjectID)
+	projectID := req.source.ProjectID
+	mediaID := req.source.MediaID
+	// Revalidate a cached source before any billable mutation, including sources
+	// restored after a restart or uploaded before readiness tracking existed.
+	readyCtx, cancelReady := context.WithTimeout(ctx, time.Duration(s.cfg.Get().Accounts.VideoGenerationTimeoutSeconds)*time.Second)
+	prepared, err := s.waitForUploadedSource(readyCtx, client, mediaID)
+	cancelReady()
 	if err != nil {
 		return nil, err
 	}
-
-	// 1. Resolve mediaID and dimensions: reuse if already uploaded, otherwise upload now.
-	mediaID := req.MediaID
-	width, height := req.Width, req.Height
-	if mediaID == "" {
-		var trim *chrome.VideoTrim
-		if req.TrimEndMS > 0 {
-			trim = &chrome.VideoTrim{StartMS: req.TrimStartMS, EndMS: req.TrimEndMS}
+	req.source.Video.Width, req.source.Video.Height, req.source.Video.DurationSeconds = prepared.Width, prepared.Height, prepared.DurationSeconds
+	if req.source.ID != "" {
+		if err := s.saveState("sources", req.source.ID, req.source); err != nil {
+			return nil, err
 		}
-		uploaded, err := client.UploadVideo(ctx, projectID, source.path, source.fileName, source.contentType, trim, time.Duration(limits.VideoGenerationTimeoutSeconds)*time.Second)
-		if err != nil {
-			return nil, fmt.Errorf("không tải video gốc lên Flow được: %w", err)
-		}
-		mediaID = uploaded.MediaID
-		width, height = uploaded.Width, uploaded.Height
 	}
+	width, height := req.source.Video.Width, req.source.Video.Height
 	ratio, aspect, err := editAspect(width, height)
 	if err != nil {
 		return nil, err
@@ -412,6 +547,10 @@ func (s *Provider) editVideosFromAccount(ctx context.Context, acc session.Stored
 		return nil, err
 	}
 
+	start, end, err := editSourceFrames(req.source.Video.DurationSeconds, req.TrimStartMS, req.TrimEndMS, usage.maxInputSeconds)
+	if err != nil {
+		return nil, err
+	}
 	// 2. Ensure headless browser and mint reCAPTCHA Enterprise token
 	var recaptchaToken string
 	if s.accounts == nil {
@@ -427,7 +566,7 @@ func (s *Provider) editVideosFromAccount(ctx context.Context, acc session.Stored
 	}
 
 	policy := s.cfg.Get().Accounts
-	tok, tErr := chrome.MintRecaptchaToken(ctx, browser.Port, policy, chrome.ActionVideoGeneration)
+	tok, tErr := chrome.MintRuntimeRecaptchaToken(ctx, browser.Port, policy, chrome.ActionVideoGeneration)
 	if tErr != nil {
 		return nil, fmt.Errorf("lỗi cấp token reCAPTCHA Enterprise từ trình duyệt: %w", tErr)
 	}
@@ -437,14 +576,12 @@ func (s *Provider) editVideosFromAccount(ctx context.Context, acc session.Stored
 	recaptchaToken = tok
 
 	// 3. Dispatch the edit (jIps6) and follow it like any other video.
-	start, end := sourceFrames(usage)
-	if req.TrimEndMS > req.TrimStartMS {
-		start = int(math.Round(float64(req.TrimStartMS) * float64(uploadedVideoFPS) / 1000.0))
-		end = int(math.Round(float64(req.TrimEndMS) * float64(uploadedVideoFPS) / 1000.0))
-	}
 	inner, err := BuildEditVideoRequest(req.Prompt, projectID, usage.key, mediaID, start, end, aspect, resolution, recaptchaToken)
 	if err != nil {
 		return nil, fmt.Errorf("không đóng gói được payload chỉnh sửa video: %w", err)
+	}
+	if cost, ok := usage.creditCost(accountTier(acc)); ok {
+		req.onAccepted = func() { s.recordVideoSpend(acc, cost) }
 	}
 	quality := ""
 	for name, code := range FlowVideoResolution {
@@ -452,5 +589,5 @@ func (s *Provider) editVideosFromAccount(ctx context.Context, acc session.Stored
 			quality = name
 		}
 	}
-	return s.runVideoJob(ctx, client, projectID, RPCEditVideo, inner, GeneratedVideoItem{Prompt: req.Prompt, Model: usage.key, AspectRatio: ratio, Duration: usage.duration, Resolution: quality})
+	return s.runEditVideoJob(ctx, client, acc, req, projectID, client.Credentials().RPCs.ID(chrome.MethodEditVideo), inner, GeneratedVideoItem{ModelName: displayName(family.name), Prompt: req.Prompt, Model: usage.key, AspectRatio: ratio, Duration: int(math.Round(float64(end-start) / uploadedVideoFPS)), Resolution: quality})
 }

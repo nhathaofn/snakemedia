@@ -36,6 +36,8 @@ export function LaunchLoginBrowser(arg1:string):Promise<models.Response_SnakeMed
 
 export function ListNodes():Promise<models.Response___SnakeMedia_internal_engine_Spec_>;
 
+export function ListVideoEditJobs():Promise<models.Response___SnakeMedia_internal_providers_flow_GeneratedVideoItem_>;
+
 export function OpenAccountBrowser(arg1:string):Promise<models.Response_SnakeMedia_internal_providers_flow_session_LoginProcessInfo_>;
 
 export function PickVideo():Promise<models.Response_SnakeMedia_internal_media_ImportResult_>;
@@ -43,6 +45,8 @@ export function PickVideo():Promise<models.Response_SnakeMedia_internal_media_Im
 export function RefreshAccount(arg1:string):Promise<models.Response_SnakeMedia_internal_providers_flow_session_AccountProfile_>;
 
 export function RemoveAccount(arg1:string):Promise<models.Response_bool_>;
+
+export function ResumeVideoEdit(arg1:string):Promise<models.Response___SnakeMedia_internal_providers_flow_GeneratedVideoItem_>;
 
 export function SaveMedia(arg1:string):Promise<models.Response_SnakeMedia_internal_media_SaveResult_>;
 

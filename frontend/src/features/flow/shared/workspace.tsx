@@ -1,56 +1,164 @@
-import { useRef } from 'react';
-import type { KeyboardEvent, ReactNode } from 'react';
-import { RefreshCw, Sparkles } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
+import { RefreshCw, Sparkles, Video, X } from 'lucide-react';
 import { cssAspectRatio } from './format';
+import { conversationItemKey } from './studioStore';
+import type { ConversationAttachment, ConversationTurn, StudioResult } from './studioStore';
 
-/** Gallery area with the empty state, loading placeholders and the generated items. */
-export function MediaGallery({
-  isEmpty,
+/** Shared prompt/result conversation used by the Image, Video and Edit studios. */
+export function ConversationGallery<TItem extends StudioResult>({
+  turns,
+  items,
   emptyTitle,
   emptyText,
-  pending,
-  pendingRatio,
-  pendingLabel,
-  gridClassName,
-  children,
+  renderItem,
 }: {
-  isEmpty: boolean;
+  turns: ConversationTurn[];
+  items: TItem[];
   emptyTitle: string;
   emptyText: string;
-  /** Number of outputs being generated, shown as placeholders before the results. */
-  pending: number;
-  pendingRatio: string;
-  pendingLabel: string;
-  gridClassName?: string;
-  children: ReactNode;
+  renderItem: (item: TItem, turn: ConversationTurn) => ReactNode;
 }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [preview, setPreview] = useState<ConversationAttachment | null>(null);
+  const itemByKey = new Map(items.map((item) => [conversationItemKey(item), item]));
+  const latest = turns.at(-1);
+  const scrollKey = latest ? `${latest.id}:${latest.resultKeys.length}:${latest.pendingCount}` : '';
+
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (element) element.scrollTo({ top: element.scrollHeight, behavior: 'smooth' });
+  }, [scrollKey]);
+
+  useEffect(() => {
+    if (!preview) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPreview(null);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [preview]);
+
   return (
-    <div className="flow-workspace-gallery">
-      {isEmpty && pending === 0 ? (
+    <div className="flow-workspace-gallery flow-conversation-gallery" ref={scrollRef}>
+      {turns.length === 0 ? (
         <div className="flow-gallery-empty">
           <Sparkles size={40} className="flow-empty-icon" />
           <h3>{emptyTitle}</h3>
           <p>{emptyText}</p>
         </div>
       ) : (
-        <div className={`flow-media-grid ${gridClassName ?? ''}`}>
-          {Array.from({ length: pending }).map((_, idx) => (
-            <div
-              key={`skeleton-${idx}`}
-              className="flow-media-card skeleton"
-              style={pendingRatio ? { aspectRatio: cssAspectRatio(pendingRatio) } : undefined}
-            >
-              <div className="skeleton-content">
-                <RefreshCw size={20} className="skeleton-spinner" />
-                <span>
-                  {pendingLabel} {idx + 1}/{pending}…
-                </span>
-              </div>
-            </div>
-          ))}
-          {children}
+        <div className="flow-chat-thread">
+          {turns.map((turn) => {
+            const results = turn.resultKeys
+              .map((key) => itemByKey.get(key))
+              .filter((item): item is TItem => item !== undefined);
+            return (
+              <article className="flow-chat-turn" key={turn.id}>
+                <div className="flow-chat-row flow-chat-user-row">
+                  <div className="flow-chat-user-message">
+                    <span className="flow-chat-role">Bạn</span>
+                    <p className="flow-chat-prompt">{turn.prompt}</p>
+                    {turn.attachments.length > 0 && (
+                      <div className="flow-chat-attachments">
+                        {turn.attachments.map((attachment) => (
+                          <button
+                            type="button"
+                            key={attachment.id}
+                            className="flow-chat-attachment"
+                            title={`Mở ${attachment.name}`}
+                            onClick={() => setPreview(attachment)}
+                          >
+                            <span className="flow-chat-attachment-preview">
+                              {attachment.kind === 'image' ? (
+                                <img src={attachment.url} alt={attachment.name} />
+                              ) : (
+                                <>
+                                  <video src={attachment.url} muted preload="metadata" />
+                                  <Video size={16} className="flow-chat-attachment-video-icon" />
+                                </>
+                              )}
+                            </span>
+                            <span className="flow-chat-attachment-name">{attachment.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {(results.length > 0 || turn.pendingCount > 0 || turn.error) && (
+                  <div className="flow-chat-row flow-chat-ai-row">
+                    <span className="flow-chat-ai-icon" aria-label="Google Flow">
+                      <Sparkles size={16} />
+                    </span>
+                    <div className="flow-chat-ai-message">
+                      <span className="flow-chat-role">Flow</span>
+                      <div className="flow-chat-results">
+                        {results.map((item) => (
+                          <div className="flow-chat-result" key={conversationItemKey(item)}>
+                            {renderItem(item, turn)}
+                          </div>
+                        ))}
+                        {Array.from({ length: turn.pendingCount }).map((_, index) => (
+                          <div
+                            key={`pending-${turn.id}-${index}`}
+                            className="flow-media-card flow-chat-pending skeleton"
+                            style={
+                              turn.pendingRatio
+                                ? { aspectRatio: cssAspectRatio(turn.pendingRatio) }
+                                : undefined
+                            }
+                          >
+                            <RefreshCw size={20} className="skeleton-spinner" />
+                            <span>
+                              {turn.pendingLabel} {index + 1}/{turn.pendingCount}…
+                            </span>
+                          </div>
+                        ))}
+                        {turn.error && (
+                          <p className="flow-chat-error" role="alert">
+                            {turn.error}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </article>
+            );
+          })}
         </div>
       )}
+      {preview &&
+        createPortal(
+          <div className="flow-chat-preview-overlay" onClick={() => setPreview(null)}>
+            <div
+              className="flow-chat-preview-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-label={preview.name}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                type="button"
+                className="flow-chat-preview-close"
+                aria-label="Đóng xem trước"
+                onClick={() => setPreview(null)}
+              >
+                <X size={16} />
+              </button>
+              {preview.kind === 'image' ? (
+                <img src={preview.url} alt={preview.name} />
+              ) : (
+                <video src={preview.url} controls preload="metadata" />
+              )}
+              <span className="flow-chat-preview-name">{preview.name}</span>
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
@@ -76,7 +184,7 @@ export function PromptBar({
   blockedReason?: string;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const disabled = generating || !!blockedReason || !prompt.trim();
+  const disabled = !!blockedReason || !prompt.trim();
 
   const insertNewLine = (el: HTMLTextAreaElement) => {
     const { selectionStart, selectionEnd } = el;
@@ -87,7 +195,7 @@ export function PromptBar({
     });
   };
 
-  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key !== 'Enter' || e.nativeEvent.isComposing || e.shiftKey) return;
     e.preventDefault();
     if (e.ctrlKey || e.metaKey) insertNewLine(e.currentTarget);
@@ -110,20 +218,13 @@ export function PromptBar({
           type="button"
           className="flow-generate-btn"
           disabled={disabled}
-          title={blockedReason}
+          title={
+            blockedReason ?? (generating ? 'Gửi prompt mới trong khi tác vụ đang chạy.' : undefined)
+          }
           onClick={onGenerate}
         >
-          {generating ? (
-            <>
-              <RefreshCw size={18} className="spin" />
-              <span>Đang tạo...</span>
-            </>
-          ) : (
-            <>
-              <Sparkles size={18} />
-              <span>Tạo</span>
-            </>
-          )}
+          <Sparkles size={18} />
+          <span>{generating ? 'Tạo tiếp' : 'Tạo'}</span>
         </button>
       </div>
       {blockedReason && <p className="flow-prompt-hint">{blockedReason}</p>}

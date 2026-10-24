@@ -65,7 +65,9 @@ interface GenerationState<TItem> {
   prompt: string;
   setPrompt: (prompt: string) => void;
   isGenerating: boolean;
-  setIsGenerating: (generating: boolean) => void;
+  activeGenerations: number;
+  beginGeneration: () => void;
+  finishGeneration: () => void;
   addItems: (items: TItem[]) => void;
 }
 
@@ -74,39 +76,50 @@ interface GenerationStore<TItem> {
   getState: () => GenerationState<TItem>;
 }
 
+export interface GenerationLifecycle<TItem> {
+  onStart?: () => void;
+  onSuccess?: (items: TItem[]) => void;
+  onFailure?: (message: string, promptRestored: boolean) => void;
+}
+
 type Notify = (toast: Omit<ToastNotification, 'id'>) => void;
 
 /**
  * Runs one generation like a chat message: the prompt box clears as soon as the
- * request is sent; if it fails, the prompt comes back so it can be retried,
- * unless the user has already typed something new. Double submits are ignored.
+ * request is sent; if it fails, the prompt comes back so it can be retried when
+ * no other request is active and the user has not typed something new. Further
+ * prompts can be submitted while earlier requests continue.
  * `noun` names the media in messages ("ảnh", "video").
  */
-export async function runGeneration<TItem extends { error?: string }>(
+export async function runGeneration<TItem extends { error?: string; pending?: boolean }>(
   store: GenerationStore<TItem>,
   request: () => Promise<ApiResponse<TItem[]>>,
   noun: string,
   notify: Notify,
+  lifecycle: GenerationLifecycle<TItem> = {},
 ): Promise<void> {
   const state = store.getState();
-  if (state.isGenerating) return;
   const submitted = state.prompt;
-  state.setIsGenerating(true);
+  state.beginGeneration();
   state.setPrompt('');
   let accepted = false;
+  let failureMessage = 'Không rõ lỗi.';
   try {
+    lifecycle.onStart?.();
     const res = await request();
     if (!res.success || !res.data) {
+      failureMessage = res.error ?? failureMessage;
       notify({
         type: 'error',
         title: `Không tạo được ${noun}`,
-        message: res.error ?? 'Không rõ lỗi.',
+        message: failureMessage,
       });
       return;
     }
     accepted = true;
     store.getState().addItems(res.data);
-    const failed = res.data.filter((item) => item.error).length;
+    lifecycle.onSuccess?.(res.data);
+    const failed = res.data.filter((item) => item.error && !item.pending).length;
     if (failed > 0) {
       notify({
         type: 'warning',
@@ -114,21 +127,31 @@ export async function runGeneration<TItem extends { error?: string }>(
         message: 'Xem lý do trên từng thẻ.',
       });
     }
+  } catch (error) {
+    failureMessage = error instanceof Error ? error.message : String(error);
+    throw error;
   } finally {
     const latest = store.getState();
-    latest.setIsGenerating(false);
-    if (!accepted && latest.prompt === '') latest.setPrompt(submitted);
+    const promptRestored = !accepted && latest.prompt === '' && latest.activeGenerations === 1;
+    try {
+      if (!accepted) lifecycle.onFailure?.(failureMessage, promptRestored);
+    } finally {
+      const current = store.getState();
+      current.finishGeneration();
+      if (promptRestored && current.prompt === '') current.setPrompt(submitted);
+    }
   }
 }
 
 /** Binds runGeneration to a studio store and the app's toasts. */
-export function useGeneration<TItem extends { error?: string }>(
+export function useGeneration<TItem extends { error?: string; pending?: boolean }>(
   store: GenerationStore<TItem>,
   noun: string,
 ) {
   const addToast = useAppStore((s) => s.addToast);
   return useCallback(
-    (request: () => Promise<ApiResponse<TItem[]>>) => runGeneration(store, request, noun, addToast),
+    (request: () => Promise<ApiResponse<TItem[]>>, lifecycle?: GenerationLifecycle<TItem>) =>
+      runGeneration(store, request, noun, addToast, lifecycle),
     [store, noun, addToast],
   );
 }
