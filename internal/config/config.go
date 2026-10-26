@@ -83,6 +83,7 @@ type AppConfig struct {
 	CdpPort  int           `json:"cdpPort"`
 	Accounts AccountConfig `json:"accounts"`
 	Flow     FlowConfig    `json:"flow"`
+	Muse     MuseConfig    `json:"muse"`
 }
 
 // DefaultConfig provides the fallback settings used on first run or when the file is unusable.
@@ -94,6 +95,7 @@ func DefaultConfig() AppConfig {
 		CdpPort:     DefaultCdpPort,
 		Accounts:    DefaultAccountConfig(),
 		Flow:        DefaultFlowConfig(),
+		Muse:        DefaultMuseConfig(),
 	}
 }
 
@@ -117,6 +119,9 @@ func (c AppConfig) Validate() error {
 		errs = append(errs, err)
 	}
 	if err := c.Flow.Validate(); err != nil {
+		errs = append(errs, err)
+	}
+	if err := c.Muse.Validate(); err != nil {
 		errs = append(errs, err)
 	}
 	if len(errs) > 0 {

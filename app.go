@@ -21,6 +21,7 @@ import (
 	"SnakeMedia/internal/providers"
 	"SnakeMedia/internal/providers/flow"
 	"SnakeMedia/internal/providers/flow/session"
+	"SnakeMedia/internal/providers/muse"
 	"SnakeMedia/internal/services"
 	"SnakeMedia/internal/window"
 )
@@ -35,6 +36,7 @@ type App struct {
 	settings             *services.SettingsService
 	account              *session.Service
 	flow                 *flow.Provider
+	muse                 *muse.Provider
 	media                *media.Store
 	imageOutputDirectory string
 	nodes                *engine.Registry
@@ -65,8 +67,9 @@ func NewApp(info buildinfo.Info) (*App, error) {
 	accounts := session.NewService(p, cfgManager)
 	store := media.NewStore(p.MediaDir)
 	flowProvider := flow.New(accounts, cfgManager, store, info.ProductName)
+	museProvider := muse.New(p.DataDir, cfgManager, store)
 	nodes := engine.NewRegistry()
-	for _, provider := range []providers.Provider{flowProvider} {
+	for _, provider := range []providers.Provider{flowProvider, museProvider} {
 		if err := nodes.Register(provider.Nodes()...); err != nil {
 			return nil, err
 		}
@@ -81,6 +84,7 @@ func NewApp(info buildinfo.Info) (*App, error) {
 		settings:             services.NewSettingsService(cfgManager),
 		account:              accounts,
 		flow:                 flowProvider,
+		muse:                 museProvider,
 		media:                store,
 		imageOutputDirectory: p.ImageOutputDir,
 		nodes:                nodes,
@@ -105,6 +109,7 @@ func (a *App) initialConfig() config.AppConfig {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.dispatcher = events.NewDispatcher(ctx)
+	a.muse.Start(ctx, func(event events.Event, data any) { a.dispatcher.Emit(event, data) })
 }
 
 func (a *App) domReady(ctx context.Context) {
@@ -138,6 +143,7 @@ func (a *App) showMainWindow(ctx context.Context) {
 }
 
 func (a *App) shutdown(_ context.Context) {
+	a.muse.Close()
 	a.account.Close()
 	logger.Get().Info("shutting down")
 	_ = logger.Close()
@@ -380,4 +386,226 @@ func (a *App) ResumeVideoEdit(id string) models.Response[[]flow.GeneratedVideoIt
 // with the same request ID; nothing is billed twice.
 func (a *App) CancelGeneration(requestID string) models.Response[bool] {
 	return models.SuccessResponse(a.requests.Cancel(requestID))
+}
+
+// GetMuseOptions returns the ratios and limits of the Muse create screen.
+func (a *App) GetMuseOptions() models.Response[muse.MuseOptions] {
+	return a.muse.GetOptions()
+}
+
+// GetMuseAccounts lists saved Muse accounts.
+func (a *App) GetMuseAccounts() models.Response[[]muse.MuseAccount] {
+	return logged("GetMuseAccounts", a.muse.GetAccounts())
+}
+
+// AddMuseAccount saves a Muse account and opens Chrome for the user to sign in.
+func (a *App) AddMuseAccount(name string) models.Response[muse.MuseAccount] {
+	return logged("AddMuseAccount", a.muse.AddAccount(a.ctx, name))
+}
+
+// ImportMuseCookies saves a Muse account from cookies exported on muse.ai.
+func (a *App) ImportMuseCookies(name, cookies string) models.Response[muse.MuseAccount] {
+	return logged("ImportMuseCookies", a.muse.ImportCookies(name, cookies))
+}
+
+// ReplaceMuseCookies stores a new cookie export for an existing Muse account.
+func (a *App) ReplaceMuseCookies(id, cookies string) models.Response[muse.MuseAccount] {
+	return logged("ReplaceMuseCookies", a.muse.ReplaceCookies(id, cookies))
+}
+
+// CheckMuseAccount confirms an account's Muse session and reads its quota.
+func (a *App) CheckMuseAccount(id string) models.Response[muse.MuseAccount] {
+	return logged("CheckMuseAccount", a.muse.CheckAccount(a.ctx, id))
+}
+
+// OpenMuseAccountBrowser shows the account's Chrome on muse.ai.
+func (a *App) OpenMuseAccountBrowser(id string) models.Response[muse.MuseAccount] {
+	return logged("OpenMuseAccountBrowser", a.muse.OpenAccountBrowser(a.ctx, id))
+}
+
+// SetMuseAccountEnabled includes or excludes an account from the Muse queue.
+func (a *App) SetMuseAccountEnabled(id string, enabled bool) models.Response[muse.MuseAccount] {
+	return logged("SetMuseAccountEnabled", a.muse.SetAccountEnabled(id, enabled))
+}
+
+// RemoveMuseAccount deletes a Muse account and its Chrome profile.
+func (a *App) RemoveMuseAccount(id string) models.Response[bool] {
+	return logged("RemoveMuseAccount", a.muse.RemoveAccount(id))
+}
+
+// PickMuseReferences asks the user for reference images and imports them.
+func (a *App) PickMuseReferences() models.Response[[]muse.MuseReference] {
+	paths, err := runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:   "Chọn ảnh tham chiếu",
+		Filters: []runtime.FileFilter{{DisplayName: "Ảnh", Pattern: strings.Join(muse.LocalImageTypes(), ";")}},
+	})
+	if err != nil {
+		return models.ErrorResponse[[]muse.MuseReference]("Không mở được hộp thoại chọn ảnh: "+err.Error(), models.CodeInternal)
+	}
+	return logged("PickMuseReferences", a.muse.ImportReferences(paths))
+}
+
+// SubmitMuseJobs queues one Muse job per prompt.
+func (a *App) SubmitMuseJobs(req muse.MuseJobRequest) models.Response[[]muse.MuseJob] {
+	return logged("SubmitMuseJobs", a.muse.SubmitJobs(req))
+}
+
+// ListMuseJobs returns the Muse queue, newest first.
+func (a *App) ListMuseJobs() models.Response[[]muse.MuseJob] {
+	return a.muse.ListJobs()
+}
+
+// CancelMuseJob stops a queued or running Muse job.
+func (a *App) CancelMuseJob(id string) models.Response[muse.MuseJob] {
+	return logged("CancelMuseJob", a.muse.CancelJob(id))
+}
+
+// RetryMuseJob sends a failed or cancelled Muse job again in a new chat.
+func (a *App) RetryMuseJob(id string) models.Response[muse.MuseJob] {
+	return logged("RetryMuseJob", a.muse.RetryJob(id))
+}
+
+// RemoveMuseJob deletes a Muse job that is not running.
+func (a *App) RemoveMuseJob(id string) models.Response[bool] {
+	return logged("RemoveMuseJob", a.muse.RemoveJob(id))
+}
+
+// RunMuseJobs starts queued jobs that were placed on hold.
+func (a *App) RunMuseJobs(ids []string) models.Response[int] {
+	return logged("RunMuseJobs", a.muse.RunJobs(ids))
+}
+
+// HoldMuseQueued puts all queued jobs on hold.
+func (a *App) HoldMuseQueued() models.Response[int] {
+	return logged("HoldMuseQueued", a.muse.HoldQueued())
+}
+
+// RetryMuseFailed restarts all failed or cancelled jobs.
+func (a *App) RetryMuseFailed() models.Response[int] {
+	return logged("RetryMuseFailed", a.muse.RetryFailed())
+}
+
+// ClearMuseFinished clears all succeeded jobs from the queue.
+func (a *App) ClearMuseFinished() models.Response[int] {
+	return logged("ClearMuseFinished", a.muse.ClearFinished())
+}
+
+// RemoveMuseJobs deletes multiple jobs from the queue.
+func (a *App) RemoveMuseJobs(ids []string) models.Response[int] {
+	return logged("RemoveMuseJobs", a.muse.RemoveJobs(ids))
+}
+
+// EditAndRetryMuseJob modifies a job prompt and re-queues it.
+func (a *App) EditAndRetryMuseJob(id, prompt string) models.Response[muse.MuseJob] {
+	return logged("EditAndRetryMuseJob", a.muse.EditAndRetry(id, prompt))
+}
+
+// OpenMuseOutputFolder opens the folder where completed files are saved.
+func (a *App) OpenMuseOutputFolder() models.Response[bool] {
+	return logged("OpenMuseOutputFolder", a.muse.OpenOutputFolder())
+}
+
+// RevealMuseFile opens the system file manager and selects the file.
+func (a *App) RevealMuseFile(path string) models.Response[bool] {
+	return logged("RevealMuseFile", a.muse.RevealFile(path))
+}
+
+// GetMuseProxies returns the raw proxy list text.
+func (a *App) GetMuseProxies() models.Response[string] {
+	return a.muse.GetProxies()
+}
+
+// SaveMuseProxies saves the raw proxy list text.
+func (a *App) SaveMuseProxies(text string) models.Response[bool] {
+	return logged("SaveMuseProxies", a.muse.SaveProxies(text))
+}
+
+// CheckMuseProxies tests all proxies in the list.
+func (a *App) CheckMuseProxies() models.Response[[]muse.ProxyCheckResult] {
+	return logged("CheckMuseProxies", a.muse.CheckProxies(a.ctx))
+}
+
+// SetMuseAccountProxy configures a specific proxy for an account ("" for auto, "none" for direct).
+func (a *App) SetMuseAccountProxy(id, proxyLine string) models.Response[muse.MuseAccount] {
+	return logged("SetMuseAccountProxy", a.muse.SetAccountProxy(id, proxyLine))
+}
+
+// RotateMuseAccountIP requests a new IP for a rotating proxy assigned to an account.
+func (a *App) RotateMuseAccountIP(id string) models.Response[muse.ProxyCheckResult] {
+	return logged("RotateMuseAccountIP", a.muse.RotateAccountIP(a.ctx, id))
+}
+
+// GetMuseStudio returns studio projects, tagged assets and templates.
+func (a *App) GetMuseStudio() models.Response[muse.StudioData] {
+	return a.muse.GetStudio()
+}
+
+// SaveMuseStudio saves studio projects, tagged assets and templates.
+func (a *App) SaveMuseStudio(data muse.StudioData) models.Response[bool] {
+	return logged("SaveMuseStudio", a.muse.SaveStudio(data))
+}
+
+// CreateMuseStudioProject creates a new studio project.
+func (a *App) CreateMuseStudioProject(name string) models.Response[muse.StudioProject] {
+	return logged("CreateMuseStudioProject", a.muse.CreateStudioProject(name))
+}
+
+// SetMuseProjectPaused pauses or resumes execution for a project.
+func (a *App) SetMuseProjectPaused(id string, paused bool) models.Response[bool] {
+	return logged("SetMuseProjectPaused", a.muse.SetProjectPaused(id, paused))
+}
+
+// SetMuseActiveProject sets the current active project.
+func (a *App) SetMuseActiveProject(id string) models.Response[bool] {
+	return logged("SetMuseActiveProject", a.muse.SetActiveProject(id))
+}
+
+// AddMuseStudioAsset adds a tagged reference image asset to the studio.
+func (a *App) AddMuseStudioAsset(asset muse.StudioAsset) models.Response[muse.StudioAsset] {
+	return logged("AddMuseStudioAsset", a.muse.AddStudioAsset(asset))
+}
+
+// RemoveMuseStudioAsset removes an asset from the studio.
+func (a *App) RemoveMuseStudioAsset(id string) models.Response[bool] {
+	return logged("RemoveMuseStudioAsset", a.muse.RemoveStudioAsset(id))
+}
+
+// UpdateMuseStudioAsset modifies an existing asset in the studio.
+func (a *App) UpdateMuseStudioAsset(asset muse.StudioAsset) models.Response[muse.StudioAsset] {
+	return logged("UpdateMuseStudioAsset", a.muse.UpdateStudioAsset(asset))
+}
+
+// MergeMuseVideos combines multiple video files into one output.
+func (a *App) MergeMuseVideos(videoPaths []string, customName string) models.Response[string] {
+	return logged("MergeMuseVideos", a.muse.MergeVideos(a.ctx, videoPaths, customName))
+}
+
+// SubmitMuseProduction queues a new multi-scene production.
+func (a *App) SubmitMuseProduction(prod muse.Production) models.Response[muse.Production] {
+	return logged("SubmitMuseProduction", a.muse.SubmitProduction(prod))
+}
+
+// ListMuseProductions returns all saved productions.
+func (a *App) ListMuseProductions() models.Response[[]muse.Production] {
+	return a.muse.ListProductions()
+}
+
+// ApproveMuseProductionBoard approves a storyboard under review.
+func (a *App) ApproveMuseProductionBoard(id string) models.Response[bool] {
+	return logged("ApproveMuseProductionBoard", a.muse.ApproveProductionBoard(id))
+}
+
+// RetryMuseProduction restarts failed stages of a production.
+func (a *App) RetryMuseProduction(id string) models.Response[bool] {
+	return logged("RetryMuseProduction", a.muse.RetryProduction(id))
+}
+
+// RedrawMuseProductionBoard clears current storyboard and draws again.
+func (a *App) RedrawMuseProductionBoard(id string) models.Response[bool] {
+	return logged("RedrawMuseProductionBoard", a.muse.RedrawProductionBoard(id))
+}
+
+// RemoveMuseProduction removes a production from queue.
+func (a *App) RemoveMuseProduction(id string) models.Response[bool] {
+	return logged("RemoveMuseProduction", a.muse.RemoveProduction(id))
 }

@@ -81,3 +81,19 @@ the intended edit, then run
 `SNAKEMEDIA_LIVE_OUTPUT` optionally retains the result and job records in a chosen
 folder. This test uploads a real file and can consume Flow credits; it does not
 substitute simulated server results.
+
+## Muse
+
+The **Muse** tab queues image and video jobs on muse.ai and spreads them over
+the Muse accounts saved under **Muse > Tài khoản Muse**. Each account has its
+own Chrome profile under `%AppData%\SnakeMedia\muse\profiles`; add one by
+signing in through Chrome or by pasting cookies exported from a signed-in
+muse.ai page. Accounts and imported cookies are stored DPAPI-encrypted in
+`muse/accounts.json`; the queue is journaled in `muse/jobs.json`.
+
+A job that Muse already accepted is only checked again in its own chat, also
+after a restart, so an interruption never spends a second generation. Timing,
+retry and thread limits live under `muse` in `config.json`.
+
+To open muse.ai anonymously in a real Chrome and check the page script, run
+`SNAKEMEDIA_TEST_MUSE=1 go test ./internal/providers/muse -run TestLiveAnonymousPage -v`.

@@ -1,0 +1,111 @@
+.muse-lib-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.muse-lib-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  background-color: var(--bg-elevated);
+  border-radius: 0.5rem;
+  border: 1px solid var(--border-color);
+}
+
+.muse-lib-filters {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.muse-lib-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.muse-lib-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border-radius: 0.5rem;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  overflow: hidden;
+  transition:
+    transform 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.muse-lib-item:hover {
+  border-color: var(--primary);
+}
+
+.muse-lib-item.selected {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--feedback-primary-border);
+}
+
+.muse-lib-preview-box {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: var(--media-letterbox);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.muse-lib-media {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.muse-lib-check {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 2;
+  cursor: pointer;
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+.muse-lib-badge {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  background: var(--media-overlay);
+  padding: 0.15rem 0.4rem;
+  border-radius: 0.25rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-on-media);
+}
+
+.muse-lib-meta {
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.muse-lib-title {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.muse-lib-actions {
+  display: flex;
+  gap: 0.375rem;
+}

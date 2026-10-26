@@ -15,6 +15,7 @@ import (
 	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/models"
 	"SnakeMedia/internal/providers/flow/chrome"
+	"SnakeMedia/internal/secure"
 	"SnakeMedia/pkg/utils"
 	"github.com/google/uuid"
 )
@@ -45,7 +46,7 @@ func (s *Service) loadAccountsUnsafe() ([]StoredAccount, error) {
 	}
 	legacy := !bytes.HasPrefix(data, []byte(accountStoreHeader))
 	if !legacy {
-		data, err = unprotectAccounts(data[len(accountStoreHeader):])
+		data, err = secure.Unprotect(data[len(accountStoreHeader):])
 		if err != nil {
 			return nil, errors.New("Không giải mã được dữ liệu tài khoản cho người dùng hệ điều hành hiện tại.")
 		}
@@ -100,7 +101,7 @@ func (s *Service) saveAccountsUnsafe(accounts []StoredAccount) error {
 	if err != nil {
 		return err
 	}
-	data, err = protectAccounts(data)
+	data, err = secure.Protect(data)
 	if err != nil {
 		return err
 	}

@@ -106,6 +106,9 @@
   --flow-edit-preview-max-height: 240px;
   --flow-edit-trim-label-width: 56px;
   --account-avatar-size: 40px;
+  --muse-thumb-size: 64px;
+  --muse-result-width: 240px;
+  --muse-result-max-height: 320px;
   --account-email-max-width: 170px;
   --account-detail-max-width: 220px;
   --empty-state-min-height: 160px;
@@ -127,15 +130,22 @@
   --media-overlay: rgba(15, 23, 42, 0.8);
   --media-overlay-strong: rgba(15, 23, 42, 0.88);
   --media-letterbox: #000;
+  /* Text drawn on --media-overlay (always dark). */
+  --text-on-media: #f8fafc;
   --lightbox-backdrop: rgba(0, 0, 0, 0.85);
   --empty-state-bg: var(--bg-secondary);
   --animation-spin-duration: 1s;
   --animation-spin-fast-duration: 0.8s;
   --animation-spin-slow-duration: 1.2s;
   --rotation-full: 360deg;
+
+  /* Native controls (select popups, checkboxes, scrollbars) follow the theme. */
+  color-scheme: dark;
 }
 
 [data-theme='light'] {
+  color-scheme: light;
+
   --bg-primary: #f8fafc;
   --bg-secondary: #ffffff;
   --bg-tertiary: #f1f5f9;

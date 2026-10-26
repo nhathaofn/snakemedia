@@ -1,5 +1,6 @@
 import { flowSection } from '../features/flow/section';
 import { homeSection } from '../features/home/section';
+import { museSection } from '../features/muse/section';
 import { settingsSection } from '../features/settings/section';
 import type { AppSection, FeatureRoute, NavigationItem, SectionPlacement } from '../types';
 
@@ -13,7 +14,7 @@ import type { AppSection, FeatureRoute, NavigationItem, SectionPlacement } from 
  *
  * Display order follows this array within each placement.
  */
-const SECTIONS = [homeSection, flowSection, settingsSection] as const;
+const SECTIONS = [homeSection, flowSection, museSection, settingsSection] as const;
 
 export const APP_SECTIONS: readonly AppSection[] = SECTIONS;
 

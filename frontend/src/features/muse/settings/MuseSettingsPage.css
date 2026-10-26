@@ -1,0 +1,95 @@
+.muse-settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: var(--space-6);
+  max-width: 900px;
+}
+
+.muse-settings-title {
+  font-size: var(--font-size-page-title);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.muse-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.muse-settings-section-title {
+  font-size: var(--font-size-dialog-title);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.muse-settings-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.muse-settings-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-4);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.muse-settings-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.muse-settings-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1;
+}
+
+.muse-settings-row-label {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.muse-settings-row-hint {
+  font-size: var(--font-size-small);
+  color: var(--text-secondary);
+}
+
+.muse-settings-input {
+  width: 120px;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-small);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  text-align: right;
+}
+
+.muse-settings-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.muse-settings-input-wide {
+  width: 320px;
+  text-align: left;
+}
+
+.muse-settings-picker-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}

@@ -15,6 +15,7 @@ type LaunchOptions struct {
 	Port       int
 	TargetURL  string
 	Headless   bool
+	ExtraArgs  []string
 }
 
 // BuildArgs constructs realistic command-line flags.
@@ -29,6 +30,9 @@ func BuildArgs(opts LaunchOptions) []string {
 	}
 	if opts.Headless {
 		args = append(args, "--headless=new", "--hide-scrollbars", "--mute-audio")
+	}
+	if len(opts.ExtraArgs) > 0 {
+		args = append(args, opts.ExtraArgs...)
 	}
 	if opts.TargetURL != "" {
 		args = append(args, opts.TargetURL)

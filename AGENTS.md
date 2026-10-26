@@ -44,6 +44,8 @@ Production desktop application scaffold built with Go and Wails v2, using Vite +
 | `internal/providers/flow/` | Google Flow provider: rotation, projects, model catalogue, image/video generation, video edit, job journals, nodes | `provider.go`, `generation_jobs.go`, `generation_prep.go`, `edit.go` |
 | `internal/providers/flow/session/` | Google account sessions: Chrome profiles, DPAPI store, session sync | `account.go` |
 | `internal/providers/flow/chrome/` | Chrome/CDP, Flow HTTP client, Scotty video upload, reCAPTCHA (do not edit recaptcha.go) | `batch.go`, `upload.go` |
+| `internal/providers/muse/` | Muse provider: accounts (DPAPI store, cookie import), job queue and scheduler, chat-client runner, page script (`page.js`), proxy manager & local bridge, studio & @tag manifest, multi-scene production & FFmpeg pipeline | `provider.go`, `runner.go`, `scheduler.go`, `page.go`, `proxy.go`, `bridge.go`, `studio.go`, `production.go`, `ffmpeg.go` |
+| `internal/secure/` | DPAPI protection for local stores (Flow and Muse accounts) | `protect_windows.go` |
 | `pkg/utils/` | Reusable utilities (atomic writes, file checks, byte formatting) | `fileutils.go` |
 | `tools/gofmtcheck/` | Cross-platform gofmt gate used by CI and verify | — |
 | `frontend/src/components/` | UI primitives (`ui/`), desktop shell (`layout/`: TitleBar, Header, Sidebar), feedback (`feedback/`) | — |
@@ -73,6 +75,7 @@ Production desktop application scaffold built with Go and Wails v2, using Vite +
 - Chrome launched by the app is tied to the app process (Windows job object), so a crash or dev reload does not leave a signed-in browser behind.
 - Video metadata for MP4/MOV/M4V is read from the file header (`internal/media/mp4probe.go`); ffprobe is only needed for WebM or unusual files.
 - `wails dev` builds run without the single-instance lock (`instance_lock_dev.go`), so a rebuild never hands off to the stale window.
+- A Muse job with a `SessionID` is only re-checked in that chat, never re-sent; a send whose answer was lost fails instead of retrying (ADR 0008).
 - Fast checks defined in `.agents/verify.json` must pass before finishing any development task.
 
 ## Boundaries
@@ -87,6 +90,7 @@ Production desktop application scaffold built with Go and Wails v2, using Vite +
 - 0005 Flow Image reCAPTCHA Enterprise Token Minting and Image-to-Image Pipeline → docs/decisions/0005-flow-image-recaptcha-and-image-to-image.md
 - 0006 Providers, Engine Nodes and a Shared Media Store → docs/decisions/0006-provider-engine-modules.md
 - 0007 Flow Video Editing: Scotty Upload and jIps6 → docs/decisions/0007-flow-video-edit.md
+- 0008 Muse Provider: Chat-Client Jobs, a Durable Queue and Many Accounts → docs/decisions/0008-muse-provider.md
 
 ## Deeper docs
 - Decisions: `docs/decisions/README.md`

@@ -17,6 +17,7 @@ import (
 	"SnakeMedia/internal/providers/flow"
 	"SnakeMedia/internal/providers/flow/chrome"
 	"SnakeMedia/internal/providers/flow/session"
+	"SnakeMedia/internal/providers/muse"
 )
 
 //go:embed all:frontend/dist
@@ -83,6 +84,11 @@ func run() error {
 			chrome.AllTiers,
 			flow.AllImageQualities,
 			flow.AllImageProjectModes,
+			config.AllMuseModes,
+			muse.AllMuseAccountStatuses,
+			muse.AllMuseAccountSources,
+			muse.AllMuseJobKinds,
+			muse.AllMuseJobStatuses,
 		},
 	})
 }

@@ -5,7 +5,16 @@
  * Never redeclare these shapes by hand: change the Go type, then run `wails dev`,
  * `wails build` or `wails generate module` to regenerate.
  */
-import { chrome, config, engine, events, flow, models, session } from '../../wailsjs/go/models';
+import {
+  chrome,
+  config,
+  engine,
+  events,
+  flow,
+  models,
+  muse,
+  session,
+} from '../../wailsjs/go/models';
 import type { buildinfo, media, services } from '../../wailsjs/go/models';
 
 export type AppInfo = buildinfo.Info;
@@ -52,6 +61,122 @@ export const AccountStatus = session.AccountStatus;
 export type AccountStatus = session.AccountStatus;
 export const AccountTier = chrome.Tier;
 export type AccountTier = chrome.Tier;
+
+export type MuseAccount = muse.MuseAccount;
+export type MuseQuota = muse.MuseQuota;
+export type MuseJob = muse.MuseJob;
+export type MuseOptions = muse.MuseOptions;
+export type MuseReference = muse.MuseReference;
+export type MuseRatioOption = muse.RatioOption;
+export type MuseJobRequest = muse.MuseJobRequest;
+export const MuseJobRequest = muse.MuseJobRequest;
+export const MuseJobKind = muse.MuseJobKind;
+export type MuseJobKind = muse.MuseJobKind;
+export const MuseJobStatus = muse.MuseJobStatus;
+export type MuseJobStatus = muse.MuseJobStatus;
+export const MuseAccountStatus = muse.MuseAccountStatus;
+export type MuseAccountStatus = muse.MuseAccountStatus;
+export const MuseAccountSource = muse.MuseAccountSource;
+export type MuseAccountSource = muse.MuseAccountSource;
+export type ProxyCheckResult = muse.ProxyCheckResult;
+
+export interface StudioProject {
+  id: string;
+  name: string;
+  paused: boolean;
+  createdAt: string;
+}
+
+export interface StudioAsset {
+  id: string;
+  tag: string;
+  name: string;
+  role: string;
+  lockNotes?: string;
+  images: string[];
+  projectId?: string;
+  createdAt: string;
+}
+
+export interface PromptTemplate {
+  id: string;
+  name: string;
+  text: string;
+}
+
+export interface StudioModelConfig {
+  on: boolean;
+  images: string[];
+}
+
+export interface StudioRotateConfig {
+  on: boolean;
+  images: string[];
+  index: number;
+}
+
+export interface StudioData {
+  activeProject: string;
+  projects: StudioProject[];
+  assets: StudioAsset[];
+  promptTemplates: PromptTemplate[];
+  modelConfig: StudioModelConfig;
+  rotateConfig: StudioRotateConfig;
+}
+
+export interface SceneItem {
+  text: string;
+  voiceover?: string;
+  img?: string;
+  product?: string;
+}
+
+export interface ScriptConfig {
+  prefix: string;
+  ratio: string;
+  duration: string;
+  voice: string;
+  host: string;
+  style: string;
+  audio: string;
+  merge: boolean;
+  music: boolean;
+  board: string;
+  characterTag?: string;
+}
+
+export interface VoiceOption {
+  value: string;
+  label: string;
+  gender: string;
+}
+
+export interface Production {
+  id: string;
+  title: string;
+  config: ScriptConfig;
+  scenes: SceneItem[];
+  refs: string[];
+  status: string;
+  step?: string;
+  error?: string;
+  boardFiles?: string[];
+  threadSessionId?: string;
+  threadAccountId?: string;
+  currentSceneIdx: number;
+  sceneVideoFiles?: string[];
+  finalVideoFile?: string;
+  boardJobId?: string;
+  currentJobId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type MuseConfig = config.MuseConfig;
+export const MuseConfig = config.MuseConfig;
+
+export const MuseMode = config.MuseMode;
+export type MuseMode = config.MuseMode;
 
 export const Theme = config.Theme;
 export type Theme = config.Theme;

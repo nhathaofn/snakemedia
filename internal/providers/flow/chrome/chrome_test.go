@@ -11,6 +11,7 @@ func TestBuildArgs_IncludesRealisticFlags(t *testing.T) {
 		ProfileDir: "C:\\mock\\profile",
 		Port:       9999,
 		TargetURL:  "https://flow.google.com",
+		ExtraArgs:  []string{"--proxy-server=http://127.0.0.1:8888"},
 	}
 
 	args := BuildArgs(opts)
@@ -22,6 +23,7 @@ func TestBuildArgs_IncludesRealisticFlags(t *testing.T) {
 		"--remote-debugging-address=127.0.0.1",
 		"--no-first-run",
 		"--no-default-browser-check",
+		"--proxy-server=http://127.0.0.1:8888",
 		"https://flow.google.com",
 	}
 

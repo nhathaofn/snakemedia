@@ -9,3 +9,5 @@
 | [0005](0005-flow-image-recaptcha-and-image-to-image.md) | Flow Image reCAPTCHA Enterprise Token Minting and Image-to-Image Pipeline | Accepted | 2026-10-23 |
 | [0006](0006-provider-engine-modules.md) | Providers, Engine Nodes and a Shared Media Store | Accepted | 2026-10-23 |
 | [0007](0007-flow-video-edit.md) | Flow Video Editing: Scotty Upload and jIps6 | Accepted | 2026-10-23 |
+| [0008](0008-muse-provider.md) | Muse Provider: Chat-Client Jobs, a Durable Queue and Many Accounts | Accepted | 2026-10-26 |
+| [0009](0009-muse-queue-proxy-studio-production.md) | Muse Provider: Advanced Queue Controls, Proxy Bridge, Studio Assets & Multi-Scene Production | Accepted | 2026-10-26 |

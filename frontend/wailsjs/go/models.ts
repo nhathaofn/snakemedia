@@ -75,6 +75,10 @@ export namespace config {
 	    Info = "info",
 	    Warn = "warn",
 	}
+	export enum MuseMode {
+	    Rotate = "rotate",
+	    Sequential = "sequential",
+	}
 	export enum Theme {
 	    Dark = "dark",
 	    Light = "light",
@@ -120,6 +124,70 @@ export namespace config {
 	        this.rpcCacheSeconds = source["rpcCacheSeconds"];
 	    }
 	}
+	export class MuseConfig {
+	    headless: boolean;
+	    maxAttempts: number;
+	    imageTimeoutMinutes: number;
+	    videoTimeoutMinutes: number;
+	    pollIntervalMs: number;
+	    pollErrorLimit: number;
+	    sendGapMinSeconds: number;
+	    sendGapMaxSeconds: number;
+	    sendTimeoutSeconds: number;
+	    pageReadySeconds: number;
+	    loginTimeoutMinutes: number;
+	    maxAttachmentBytes: number;
+	    maxDownloadBytes: number;
+	    maxJobs: number;
+	    maxAccounts: number;
+	    totalThreads: number;
+	    threadsPerAccount: number;
+	    mode: MuseMode;
+	    useTopup: boolean;
+	    keepGoing: boolean;
+	    usagePauseMinutes: number;
+	    autoSave: boolean;
+	    outputDir: string;
+	    ffmpegPath: string;
+	    maxSourceVideoBytes: number;
+	    stopAfterFailures: number;
+	    maxRechecks: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.headless = source["headless"];
+	        this.maxAttempts = source["maxAttempts"];
+	        this.imageTimeoutMinutes = source["imageTimeoutMinutes"];
+	        this.videoTimeoutMinutes = source["videoTimeoutMinutes"];
+	        this.pollIntervalMs = source["pollIntervalMs"];
+	        this.pollErrorLimit = source["pollErrorLimit"];
+	        this.sendGapMinSeconds = source["sendGapMinSeconds"];
+	        this.sendGapMaxSeconds = source["sendGapMaxSeconds"];
+	        this.sendTimeoutSeconds = source["sendTimeoutSeconds"];
+	        this.pageReadySeconds = source["pageReadySeconds"];
+	        this.loginTimeoutMinutes = source["loginTimeoutMinutes"];
+	        this.maxAttachmentBytes = source["maxAttachmentBytes"];
+	        this.maxDownloadBytes = source["maxDownloadBytes"];
+	        this.maxJobs = source["maxJobs"];
+	        this.maxAccounts = source["maxAccounts"];
+	        this.totalThreads = source["totalThreads"];
+	        this.threadsPerAccount = source["threadsPerAccount"];
+	        this.mode = source["mode"];
+	        this.useTopup = source["useTopup"];
+	        this.keepGoing = source["keepGoing"];
+	        this.usagePauseMinutes = source["usagePauseMinutes"];
+	        this.autoSave = source["autoSave"];
+	        this.outputDir = source["outputDir"];
+	        this.ffmpegPath = source["ffmpegPath"];
+	        this.maxSourceVideoBytes = source["maxSourceVideoBytes"];
+	        this.stopAfterFailures = source["stopAfterFailures"];
+	        this.maxRechecks = source["maxRechecks"];
+	    }
+	}
 	export class FlowConfig {
 	    probePath: string;
 	    maxSourceBytes: number;
@@ -161,6 +229,7 @@ export namespace config {
 	    cdpPort: number;
 	    accounts: AccountConfig;
 	    flow: FlowConfig;
+	    muse: MuseConfig;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -174,6 +243,7 @@ export namespace config {
 	        this.cdpPort = source["cdpPort"];
 	        this.accounts = this.convertValues(source["accounts"], AccountConfig);
 	        this.flow = this.convertValues(source["flow"], FlowConfig);
+	        this.muse = this.convertValues(source["muse"], MuseConfig);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -194,6 +264,7 @@ export namespace config {
 		    return a;
 		}
 	}
+	
 
 }
 
@@ -303,6 +374,9 @@ export namespace events {
 	    AppReady = "app:ready",
 	    ConfigUpdated = "config:updated",
 	    ErrorOccurred = "error:occurred",
+	    MuseAccountsUpdated = "muse:accounts-updated",
+	    MuseJobUpdated = "muse:job-updated",
+	    MuseJobsChanged = "muse:jobs-changed",
 	}
 
 }
@@ -1206,6 +1280,294 @@ export namespace models {
 		    return a;
 		}
 	}
+	export class Response_SnakeMedia_internal_providers_muse_MuseAccount_ {
+	    success: boolean;
+	    data: muse.MuseAccount;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_muse_MuseAccount_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.MuseAccount);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_muse_MuseJob_ {
+	    success: boolean;
+	    data: muse.MuseJob;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_muse_MuseJob_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.MuseJob);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_muse_MuseOptions_ {
+	    success: boolean;
+	    data: muse.MuseOptions;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_muse_MuseOptions_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.MuseOptions);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_muse_Production_ {
+	    success: boolean;
+	    data: muse.Production;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_muse_Production_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.Production);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_muse_ProxyCheckResult_ {
+	    success: boolean;
+	    data: muse.ProxyCheckResult;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_muse_ProxyCheckResult_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.ProxyCheckResult);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_muse_StudioAsset_ {
+	    success: boolean;
+	    data: muse.StudioAsset;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_muse_StudioAsset_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.StudioAsset);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_muse_StudioData_ {
+	    success: boolean;
+	    data: muse.StudioData;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_muse_StudioData_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.StudioData);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_muse_StudioProject_ {
+	    success: boolean;
+	    data: muse.StudioProject;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_muse_StudioProject_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.StudioProject);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Response_SnakeMedia_internal_services_SystemInfo_ {
 	    success: boolean;
 	    data: services.SystemInfo;
@@ -1566,6 +1928,186 @@ export namespace models {
 		    return a;
 		}
 	}
+	export class Response___SnakeMedia_internal_providers_muse_MuseAccount_ {
+	    success: boolean;
+	    data: muse.MuseAccount[];
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response___SnakeMedia_internal_providers_muse_MuseAccount_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.MuseAccount);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response___SnakeMedia_internal_providers_muse_MuseJob_ {
+	    success: boolean;
+	    data: muse.MuseJob[];
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response___SnakeMedia_internal_providers_muse_MuseJob_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.MuseJob);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response___SnakeMedia_internal_providers_muse_MuseReference_ {
+	    success: boolean;
+	    data: muse.MuseReference[];
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response___SnakeMedia_internal_providers_muse_MuseReference_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.MuseReference);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response___SnakeMedia_internal_providers_muse_Production_ {
+	    success: boolean;
+	    data: muse.Production[];
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response___SnakeMedia_internal_providers_muse_Production_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.Production);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response___SnakeMedia_internal_providers_muse_ProxyCheckResult_ {
+	    success: boolean;
+	    data: muse.ProxyCheckResult[];
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response___SnakeMedia_internal_providers_muse_ProxyCheckResult_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.ProxyCheckResult);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Response_bool_ {
 	    success: boolean;
 	    data: boolean;
@@ -1620,6 +2162,603 @@ export namespace models {
 	        this.code = source["code"];
 	    }
 	}
+
+}
+
+export namespace muse {
+	
+	export enum MuseAccountSource {
+	    Browser = "browser",
+	    Cookies = "cookies",
+	}
+	export enum MuseAccountStatus {
+	    Error = "error",
+	    SignedIn = "signed_in",
+	    SignedOut = "signed_out",
+	    SigningIn = "signing_in",
+	    Unverified = "unverified",
+	}
+	export enum MuseJobKind {
+	    Image = "image",
+	    V2V = "v2v",
+	    Video = "video",
+	}
+	export enum MuseJobStatus {
+	    Cancelled = "cancelled",
+	    Failed = "failed",
+	    Processing = "processing",
+	    Queued = "queued",
+	    Succeeded = "succeeded",
+	}
+	export class MuseQuota {
+	    percentUsed: number;
+	    resetsAt?: string;
+	    status: string;
+	    tier: string;
+	    paid: boolean;
+	    topupBalance: number;
+	    topupTotal: number;
+	    label: string;
+	    subtitle: string;
+	    checkedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseQuota(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.percentUsed = source["percentUsed"];
+	        this.resetsAt = source["resetsAt"];
+	        this.status = source["status"];
+	        this.tier = source["tier"];
+	        this.paid = source["paid"];
+	        this.topupBalance = source["topupBalance"];
+	        this.topupTotal = source["topupTotal"];
+	        this.label = source["label"];
+	        this.subtitle = source["subtitle"];
+	        this.checkedAt = source["checkedAt"];
+	    }
+	}
+	export class MuseAccount {
+	    id: string;
+	    name: string;
+	    source: MuseAccountSource;
+	    profileDir: string;
+	    status: MuseAccountStatus;
+	    enabled: boolean;
+	    quota?: MuseQuota;
+	    proxy?: string;
+	    proxyAuto?: string;
+	    proxyStatus?: string;
+	    proxyIp?: string;
+	    pausedUntil?: string;
+	    message?: string;
+	    lastCheckedAt?: string;
+	    lastSentAt?: string;
+	    createdAt: string;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseAccount(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.source = source["source"];
+	        this.profileDir = source["profileDir"];
+	        this.status = source["status"];
+	        this.enabled = source["enabled"];
+	        this.quota = this.convertValues(source["quota"], MuseQuota);
+	        this.proxy = source["proxy"];
+	        this.proxyAuto = source["proxyAuto"];
+	        this.proxyStatus = source["proxyStatus"];
+	        this.proxyIp = source["proxyIp"];
+	        this.pausedUntil = source["pausedUntil"];
+	        this.message = source["message"];
+	        this.lastCheckedAt = source["lastCheckedAt"];
+	        this.lastSentAt = source["lastSentAt"];
+	        this.createdAt = source["createdAt"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class MuseJob {
+	    id: string;
+	    kind: MuseJobKind;
+	    prompt: string;
+	    ratio: string;
+	    count: number;
+	    label?: string;
+	    projectId: string;
+	    references: string[];
+	    manifest?: string;
+	    sourceVideo?: string;
+	    keepAudio?: boolean;
+	    v2vTurn?: number;
+	    thread?: string;
+	    pinAccount?: string;
+	    threadError?: string;
+	    productionId?: string;
+	    productionPart?: string;
+	    historyBase?: number;
+	    seenPaths?: string[];
+	    rechecks?: number;
+	    held?: boolean;
+	    status: MuseJobStatus;
+	    step?: string;
+	    accountId?: string;
+	    sessionId?: string;
+	    sending?: boolean;
+	    attempts: number;
+	    error?: string;
+	    files: string[];
+	    savedFiles?: string[];
+	    createdAt: string;
+	    startedAt?: string;
+	    finishedAt?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseJob(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.kind = source["kind"];
+	        this.prompt = source["prompt"];
+	        this.ratio = source["ratio"];
+	        this.count = source["count"];
+	        this.label = source["label"];
+	        this.projectId = source["projectId"];
+	        this.references = source["references"];
+	        this.manifest = source["manifest"];
+	        this.sourceVideo = source["sourceVideo"];
+	        this.keepAudio = source["keepAudio"];
+	        this.v2vTurn = source["v2vTurn"];
+	        this.thread = source["thread"];
+	        this.pinAccount = source["pinAccount"];
+	        this.threadError = source["threadError"];
+	        this.productionId = source["productionId"];
+	        this.productionPart = source["productionPart"];
+	        this.historyBase = source["historyBase"];
+	        this.seenPaths = source["seenPaths"];
+	        this.rechecks = source["rechecks"];
+	        this.held = source["held"];
+	        this.status = source["status"];
+	        this.step = source["step"];
+	        this.accountId = source["accountId"];
+	        this.sessionId = source["sessionId"];
+	        this.sending = source["sending"];
+	        this.attempts = source["attempts"];
+	        this.error = source["error"];
+	        this.files = source["files"];
+	        this.savedFiles = source["savedFiles"];
+	        this.createdAt = source["createdAt"];
+	        this.startedAt = source["startedAt"];
+	        this.finishedAt = source["finishedAt"];
+	    }
+	}
+	export class MuseJobRequest {
+	    kind: MuseJobKind;
+	    prompts: string[];
+	    ratio: string;
+	    count: number;
+	    references: string[];
+	    sourceVideo: string;
+	    keepAudio: boolean;
+	    held: boolean;
+	    projectId: string;
+	    label: string;
+	    pairMode: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseJobRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.prompts = source["prompts"];
+	        this.ratio = source["ratio"];
+	        this.count = source["count"];
+	        this.references = source["references"];
+	        this.sourceVideo = source["sourceVideo"];
+	        this.keepAudio = source["keepAudio"];
+	        this.held = source["held"];
+	        this.projectId = source["projectId"];
+	        this.label = source["label"];
+	        this.pairMode = source["pairMode"];
+	    }
+	}
+	export class VoiceOption {
+	    value: string;
+	    label: string;
+	    gender: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new VoiceOption(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.value = source["value"];
+	        this.label = source["label"];
+	        this.gender = source["gender"];
+	    }
+	}
+	export class RatioOption {
+	    value: string;
+	    label: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RatioOption(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.value = source["value"];
+	        this.label = source["label"];
+	    }
+	}
+	export class MuseOptions {
+	    ratios: RatioOption[];
+	    maxImagesPerJob: number;
+	    maxReferences: number;
+	    maxPromptLength: number;
+	    maxPromptsPerRun: number;
+	    maxAttachmentBytes: number;
+	    imageExtensions: string[];
+	    voices: VoiceOption[];
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseOptions(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ratios = this.convertValues(source["ratios"], RatioOption);
+	        this.maxImagesPerJob = source["maxImagesPerJob"];
+	        this.maxReferences = source["maxReferences"];
+	        this.maxPromptLength = source["maxPromptLength"];
+	        this.maxPromptsPerRun = source["maxPromptsPerRun"];
+	        this.maxAttachmentBytes = source["maxAttachmentBytes"];
+	        this.imageExtensions = source["imageExtensions"];
+	        this.voices = this.convertValues(source["voices"], VoiceOption);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class MuseReference {
+	    localUrl: string;
+	    fileName: string;
+	    size: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseReference(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.localUrl = source["localUrl"];
+	        this.fileName = source["fileName"];
+	        this.size = source["size"];
+	    }
+	}
+	export class SceneItem {
+	    text: string;
+	    voiceover?: string;
+	    img?: string;
+	    product?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SceneItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.text = source["text"];
+	        this.voiceover = source["voiceover"];
+	        this.img = source["img"];
+	        this.product = source["product"];
+	    }
+	}
+	export class ScriptConfig {
+	    prefix: string;
+	    ratio: string;
+	    duration: string;
+	    voice: string;
+	    host: string;
+	    style: string;
+	    audio: string;
+	    merge: boolean;
+	    music: boolean;
+	    board: string;
+	    characterTag?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ScriptConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.prefix = source["prefix"];
+	        this.ratio = source["ratio"];
+	        this.duration = source["duration"];
+	        this.voice = source["voice"];
+	        this.host = source["host"];
+	        this.style = source["style"];
+	        this.audio = source["audio"];
+	        this.merge = source["merge"];
+	        this.music = source["music"];
+	        this.board = source["board"];
+	        this.characterTag = source["characterTag"];
+	    }
+	}
+	export class Production {
+	    id: string;
+	    title: string;
+	    config: ScriptConfig;
+	    scenes: SceneItem[];
+	    refs: string[];
+	    status: string;
+	    step?: string;
+	    error?: string;
+	    boardFiles?: string[];
+	    threadSessionId?: string;
+	    threadAccountId?: string;
+	    currentSceneIdx: number;
+	    sceneVideoFiles?: string[];
+	    finalVideoFile?: string;
+	    boardJobId?: string;
+	    currentJobId?: string;
+	    createdAt: string;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Production(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.config = this.convertValues(source["config"], ScriptConfig);
+	        this.scenes = this.convertValues(source["scenes"], SceneItem);
+	        this.refs = source["refs"];
+	        this.status = source["status"];
+	        this.step = source["step"];
+	        this.error = source["error"];
+	        this.boardFiles = source["boardFiles"];
+	        this.threadSessionId = source["threadSessionId"];
+	        this.threadAccountId = source["threadAccountId"];
+	        this.currentSceneIdx = source["currentSceneIdx"];
+	        this.sceneVideoFiles = source["sceneVideoFiles"];
+	        this.finalVideoFile = source["finalVideoFile"];
+	        this.boardJobId = source["boardJobId"];
+	        this.currentJobId = source["currentJobId"];
+	        this.createdAt = source["createdAt"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class PromptTemplate {
+	    id: string;
+	    name: string;
+	    text: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PromptTemplate(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.text = source["text"];
+	    }
+	}
+	export class ProxyCheckResult {
+	    raw: string;
+	    status: string;
+	    ok: boolean;
+	    ip?: string;
+	    port?: number;
+	    latencyMs?: number;
+	    message?: string;
+	    nextChangeSeconds?: number;
+	    checkedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProxyCheckResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.raw = source["raw"];
+	        this.status = source["status"];
+	        this.ok = source["ok"];
+	        this.ip = source["ip"];
+	        this.port = source["port"];
+	        this.latencyMs = source["latencyMs"];
+	        this.message = source["message"];
+	        this.nextChangeSeconds = source["nextChangeSeconds"];
+	        this.checkedAt = source["checkedAt"];
+	    }
+	}
+	
+	
+	
+	export class StudioAsset {
+	    id: string;
+	    tag: string;
+	    name: string;
+	    role: string;
+	    lockNotes?: string;
+	    images: string[];
+	    projectId?: string;
+	    createdAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StudioAsset(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.tag = source["tag"];
+	        this.name = source["name"];
+	        this.role = source["role"];
+	        this.lockNotes = source["lockNotes"];
+	        this.images = source["images"];
+	        this.projectId = source["projectId"];
+	        this.createdAt = source["createdAt"];
+	    }
+	}
+	export class StudioRotateConfig {
+	    on: boolean;
+	    images: string[];
+	    index: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new StudioRotateConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.on = source["on"];
+	        this.images = source["images"];
+	        this.index = source["index"];
+	    }
+	}
+	export class StudioModelConfig {
+	    on: boolean;
+	    images: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new StudioModelConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.on = source["on"];
+	        this.images = source["images"];
+	    }
+	}
+	export class StudioProject {
+	    id: string;
+	    name: string;
+	    paused: boolean;
+	    createdAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StudioProject(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.paused = source["paused"];
+	        this.createdAt = source["createdAt"];
+	    }
+	}
+	export class StudioData {
+	    activeProject: string;
+	    projects: StudioProject[];
+	    assets: StudioAsset[];
+	    promptTemplates: PromptTemplate[];
+	    modelConfig: StudioModelConfig;
+	    rotateConfig: StudioRotateConfig;
+	
+	    static createFrom(source: any = {}) {
+	        return new StudioData(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.activeProject = source["activeProject"];
+	        this.projects = this.convertValues(source["projects"], StudioProject);
+	        this.assets = this.convertValues(source["assets"], StudioAsset);
+	        this.promptTemplates = this.convertValues(source["promptTemplates"], PromptTemplate);
+	        this.modelConfig = this.convertValues(source["modelConfig"], StudioModelConfig);
+	        this.rotateConfig = this.convertValues(source["rotateConfig"], StudioRotateConfig);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	
 
 }
 

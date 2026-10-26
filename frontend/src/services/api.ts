@@ -1,4 +1,5 @@
 import * as Backend from '../../wailsjs/go/main/App';
+import type { muse } from '../../wailsjs/go/models';
 import { ResponseCode } from '../types';
 import type {
   AccountProfile,
@@ -21,9 +22,19 @@ import type {
   LoginProcessInfo,
   LoginStatusInfo,
   MediaDirectoryResult,
+  MuseAccount,
+  MuseJob,
+  MuseJobRequest,
+  MuseOptions,
+  MuseReference,
   NodeSpec,
+  Production,
+  ProxyCheckResult,
   SaveMediaResult,
+  StudioAsset,
   StudioConfig,
+  StudioData,
+  StudioProject,
   SystemInfo,
   UploadedSourceVideo,
 } from '../types';
@@ -170,4 +181,85 @@ export const api = {
     invoke<SaveMediaResult>('SaveImageToTaskFolder', () =>
       Backend.SaveImageToTaskFolder(localUrl, outputDir, taskId),
     ),
+
+  getMuseOptions: () => invoke<MuseOptions>('GetMuseOptions', Backend.GetMuseOptions),
+  getMuseAccounts: () => invoke<MuseAccount[]>('GetMuseAccounts', Backend.GetMuseAccounts),
+  addMuseAccount: (name: string) =>
+    invoke<MuseAccount>('AddMuseAccount', () => Backend.AddMuseAccount(name)),
+  importMuseCookies: (name: string, cookies: string) =>
+    invoke<MuseAccount>('ImportMuseCookies', () => Backend.ImportMuseCookies(name, cookies)),
+  replaceMuseCookies: (id: string, cookies: string) =>
+    invoke<MuseAccount>('ReplaceMuseCookies', () => Backend.ReplaceMuseCookies(id, cookies)),
+  checkMuseAccount: (id: string) =>
+    invoke<MuseAccount>('CheckMuseAccount', () => Backend.CheckMuseAccount(id)),
+  openMuseAccountBrowser: (id: string) =>
+    invoke<MuseAccount>('OpenMuseAccountBrowser', () => Backend.OpenMuseAccountBrowser(id)),
+  setMuseAccountEnabled: (id: string, enabled: boolean) =>
+    invoke<MuseAccount>('SetMuseAccountEnabled', () => Backend.SetMuseAccountEnabled(id, enabled)),
+  removeMuseAccount: (id: string) =>
+    invoke<boolean>('RemoveMuseAccount', () => Backend.RemoveMuseAccount(id)),
+  pickMuseReferences: () =>
+    invoke<MuseReference[]>('PickMuseReferences', Backend.PickMuseReferences),
+  submitMuseJobs: (req: MuseJobRequest) =>
+    invoke<MuseJob[]>('SubmitMuseJobs', () => Backend.SubmitMuseJobs(req)),
+  listMuseJobs: () => invoke<MuseJob[]>('ListMuseJobs', Backend.ListMuseJobs),
+  cancelMuseJob: (id: string) => invoke<MuseJob>('CancelMuseJob', () => Backend.CancelMuseJob(id)),
+  retryMuseJob: (id: string) => invoke<MuseJob>('RetryMuseJob', () => Backend.RetryMuseJob(id)),
+  removeMuseJob: (id: string) => invoke<boolean>('RemoveMuseJob', () => Backend.RemoveMuseJob(id)),
+  runMuseJobs: (ids: string[]) => invoke<number>('RunMuseJobs', () => Backend.RunMuseJobs(ids)),
+  holdMuseQueued: () => invoke<number>('HoldMuseQueued', Backend.HoldMuseQueued),
+  retryMuseFailed: () => invoke<number>('RetryMuseFailed', Backend.RetryMuseFailed),
+  clearMuseFinished: () => invoke<number>('ClearMuseFinished', Backend.ClearMuseFinished),
+  removeMuseJobs: (ids: string[]) =>
+    invoke<number>('RemoveMuseJobs', () => Backend.RemoveMuseJobs(ids)),
+  editAndRetryMuseJob: (id: string, prompt: string) =>
+    invoke<MuseJob>('EditAndRetryMuseJob', () => Backend.EditAndRetryMuseJob(id, prompt)),
+  openMuseOutputFolder: () => invoke<boolean>('OpenMuseOutputFolder', Backend.OpenMuseOutputFolder),
+  revealMuseFile: (path: string) =>
+    invoke<boolean>('RevealMuseFile', () => Backend.RevealMuseFile(path)),
+  getMuseProxies: () => invoke<string>('GetMuseProxies', Backend.GetMuseProxies),
+  saveMuseProxies: (text: string) =>
+    invoke<boolean>('SaveMuseProxies', () => Backend.SaveMuseProxies(text)),
+  checkMuseProxies: () => invoke<ProxyCheckResult[]>('CheckMuseProxies', Backend.CheckMuseProxies),
+  setMuseAccountProxy: (id: string, proxyLine: string) =>
+    invoke<MuseAccount>('SetMuseAccountProxy', () => Backend.SetMuseAccountProxy(id, proxyLine)),
+  rotateMuseAccountIP: (id: string) =>
+    invoke<ProxyCheckResult>('RotateMuseAccountIP', () => Backend.RotateMuseAccountIP(id)),
+  getMuseStudio: () => invoke<StudioData>('GetMuseStudio', Backend.GetMuseStudio),
+  saveMuseStudio: (data: StudioData) =>
+    invoke<boolean>('SaveMuseStudio', () =>
+      Backend.SaveMuseStudio(data as unknown as muse.StudioData),
+    ),
+  createMuseStudioProject: (name: string) =>
+    invoke<StudioProject>('CreateMuseStudioProject', () => Backend.CreateMuseStudioProject(name)),
+  setMuseProjectPaused: (id: string, paused: boolean) =>
+    invoke<boolean>('SetMuseProjectPaused', () => Backend.SetMuseProjectPaused(id, paused)),
+  setMuseActiveProject: (id: string) =>
+    invoke<boolean>('SetMuseActiveProject', () => Backend.SetMuseActiveProject(id)),
+  addMuseStudioAsset: (asset: StudioAsset) =>
+    invoke<StudioAsset>('AddMuseStudioAsset', () =>
+      Backend.AddMuseStudioAsset(asset as unknown as muse.StudioAsset),
+    ),
+  removeMuseStudioAsset: (id: string) =>
+    invoke<boolean>('RemoveMuseStudioAsset', () => Backend.RemoveMuseStudioAsset(id)),
+  updateMuseStudioAsset: (asset: StudioAsset) =>
+    invoke<StudioAsset>('UpdateMuseStudioAsset', () =>
+      Backend.UpdateMuseStudioAsset(asset as unknown as muse.StudioAsset),
+    ),
+  mergeMuseVideos: (videoPaths: string[], customName: string) =>
+    invoke<string>('MergeMuseVideos', () => Backend.MergeMuseVideos(videoPaths, customName)),
+  submitMuseProduction: (prod: Production) =>
+    invoke<Production>('SubmitMuseProduction', () =>
+      Backend.SubmitMuseProduction(prod as unknown as muse.Production),
+    ),
+  listMuseProductions: () =>
+    invoke<Production[]>('ListMuseProductions', Backend.ListMuseProductions),
+  approveMuseProductionBoard: (id: string) =>
+    invoke<boolean>('ApproveMuseProductionBoard', () => Backend.ApproveMuseProductionBoard(id)),
+  retryMuseProduction: (id: string) =>
+    invoke<boolean>('RetryMuseProduction', () => Backend.RetryMuseProduction(id)),
+  redrawMuseProductionBoard: (id: string) =>
+    invoke<boolean>('RedrawMuseProductionBoard', () => Backend.RedrawMuseProductionBoard(id)),
+  removeMuseProduction: (id: string) =>
+    invoke<boolean>('RemoveMuseProduction', () => Backend.RemoveMuseProduction(id)),
 };

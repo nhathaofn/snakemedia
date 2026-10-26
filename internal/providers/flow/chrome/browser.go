@@ -184,6 +184,10 @@ func StartBrowser(ctx context.Context, opts LaunchOptions, policy config.Account
 	}
 }
 
+// Adopted reports whether this handle attached to a browser an earlier run
+// launched instead of starting it; its command-line flags are then unknown.
+func (b *Browser) Adopted() bool { return b != nil && b.cmd == nil }
+
 // Close requests a graceful browser shutdown so Chrome flushes its profile. Only
 // a process launched by this handle may be forcibly terminated on timeout.
 func (b *Browser) Close(policy config.AccountConfig) error {

@@ -17,6 +17,13 @@ const (
 	EventAppReady      Event = "app:ready"
 	EventConfigUpdated Event = "config:updated"
 	EventErrorOccurred Event = "error:occurred"
+	// EventMuseJobUpdated carries one muse.MuseJob whenever its state changes.
+	EventMuseJobUpdated Event = "muse:job-updated"
+	// EventMuseJobsChanged has no payload: several jobs changed at once (bulk
+	// removal), so listeners reload the job list.
+	EventMuseJobsChanged Event = "muse:jobs-changed"
+	// EventMuseAccountsUpdated carries the full []muse.MuseAccount list.
+	EventMuseAccountsUpdated Event = "muse:accounts-updated"
 )
 
 // AllEvents is bound to the frontend as a TypeScript enum (events.Event).
@@ -27,6 +34,9 @@ var AllEvents = []struct {
 	{EventAppReady, "AppReady"},
 	{EventConfigUpdated, "ConfigUpdated"},
 	{EventErrorOccurred, "ErrorOccurred"},
+	{EventMuseJobUpdated, "MuseJobUpdated"},
+	{EventMuseJobsChanged, "MuseJobsChanged"},
+	{EventMuseAccountsUpdated, "MuseAccountsUpdated"},
 }
 
 // Dispatcher broadcasts events to the Wails frontend.
