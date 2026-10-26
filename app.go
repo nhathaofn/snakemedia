@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -40,6 +39,7 @@ type App struct {
 	imageOutputDirectory string
 	nodes                *engine.Registry
 	dispatcher           *events.Dispatcher
+	requests             *services.RequestRegistry
 }
 
 // NewApp resolves storage paths, loads configuration and initialises logging.
@@ -63,7 +63,7 @@ func NewApp(info buildinfo.Info) (*App, error) {
 		"name", info.Name, "version", info.Version, "commit", info.Commit, "dataDir", p.DataDir)
 
 	accounts := session.NewService(p, cfgManager)
-	store := media.NewStore(filepath.Join(p.DataDir, "media"))
+	store := media.NewStore(p.MediaDir)
 	flowProvider := flow.New(accounts, cfgManager, store, info.ProductName)
 	nodes := engine.NewRegistry()
 	for _, provider := range []providers.Provider{flowProvider} {
@@ -82,9 +82,19 @@ func NewApp(info buildinfo.Info) (*App, error) {
 		account:              accounts,
 		flow:                 flowProvider,
 		media:                store,
-		imageOutputDirectory: filepath.Join(p.DataDir, "generated-images"),
+		imageOutputDirectory: p.ImageOutputDir,
 		nodes:                nodes,
+		requests:             services.NewRequestRegistry(),
 	}, nil
+}
+
+// logged records a failed provider call. The frontend shows the message, but
+// without this the log file would never say why Flow or an account failed.
+func logged[T any](method string, res models.Response[T]) models.Response[T] {
+	if !res.Success {
+		logger.Get().Warn("request failed", "method", method, "code", res.Code, "error", res.Error)
+	}
+	return res
 }
 
 // initialConfig returns the configuration used to build window options.
@@ -169,12 +179,12 @@ func (a *App) UpdateConfig(newCfg config.AppConfig) models.Response[config.AppCo
 
 // LaunchLoginBrowser launches a dedicated Chrome instance for Google sign-in.
 func (a *App) LaunchLoginBrowser(sessionID string) models.Response[session.LoginProcessInfo] {
-	return a.account.LaunchLoginBrowser(a.ctx, sessionID)
+	return logged("LaunchLoginBrowser", a.account.LaunchLoginBrowser(a.ctx, sessionID))
 }
 
 // OpenAccountBrowser launches Chrome with a specific account's saved profile directory.
 func (a *App) OpenAccountBrowser(id string) models.Response[session.LoginProcessInfo] {
-	return a.account.OpenAccountBrowser(a.ctx, id)
+	return logged("OpenAccountBrowser", a.account.OpenAccountBrowser(a.ctx, id))
 }
 
 // CheckLoginStatus queries the Chrome CDP port to report browser connection and page status.
@@ -183,27 +193,27 @@ func (a *App) CheckLoginStatus(sessionID string) models.Response[session.LoginSt
 }
 
 func (a *App) CancelLogin(sessionID string) models.Response[bool] {
-	return a.account.CancelLogin(sessionID)
+	return logged("CancelLogin", a.account.CancelLogin(sessionID))
 }
 
 // GetAccounts returns the list of saved accounts.
 func (a *App) GetAccounts() models.Response[[]session.AccountProfile] {
-	return a.account.GetAccounts(a.ctx)
+	return logged("GetAccounts", a.account.GetAccounts(a.ctx))
 }
 
 // RemoveAccount deletes an account by id.
 func (a *App) RemoveAccount(id string) models.Response[bool] {
-	return a.account.RemoveAccount(a.ctx, id)
+	return logged("RemoveAccount", a.account.RemoveAccount(a.ctx, id))
 }
 
 // RefreshAccount queries latest credits and cookies from the active Flow tab.
 func (a *App) RefreshAccount(id string) models.Response[session.AccountProfile] {
-	return a.account.RefreshAccount(a.ctx, id)
+	return logged("RefreshAccount", a.account.RefreshAccount(a.ctx, id))
 }
 
 // GetImageModels queries available image generation models from Google Flow using the rotated account pool.
 func (a *App) GetImageModels() models.Response[[]flow.FlowModel] {
-	return a.flow.GetImageModels(a.ctx)
+	return logged("GetImageModels", a.flow.GetImageModels(a.ctx))
 }
 
 // GetActiveRotationCount returns the number of connected accounts with valid cookies available for rotation.
@@ -213,7 +223,21 @@ func (a *App) GetActiveRotationCount() models.Response[int] {
 
 // GenerateImages dispatches image generation using a rotated account.
 func (a *App) GenerateImages(req flow.GenerateImageRequest) models.Response[[]flow.GeneratedImageItem] {
-	return a.flow.GenerateImages(a.ctx, req)
+	ctx, done := a.requests.Start(a.ctx, req.RequestID)
+	defer done()
+	return logged("GenerateImages", a.flow.GenerateImages(ctx, req))
+}
+
+// ResumeImageGeneration checks a persisted Flow image request without creating another job.
+func (a *App) ResumeImageGeneration(id string) models.Response[[]flow.GeneratedImageItem] {
+	ctx, done := a.requests.Start(a.ctx, id)
+	defer done()
+	return logged("ResumeImageGeneration", a.flow.ResumeImageGeneration(ctx, id))
+}
+
+// ListPendingImageGenerations restores one studio's image jobs that can be reconciled after a restart.
+func (a *App) ListPendingImageGenerations(mode flow.ImageProjectMode) models.Response[[]flow.GeneratedImageItem] {
+	return a.flow.ListPendingImageGenerations(mode)
 }
 
 // SaveMedia asks the user for a folder and copies a downloaded image or video there.
@@ -259,33 +283,47 @@ func (a *App) SaveImageToTaskFolder(localURL, outputDir, taskID string) models.R
 
 // GetStudioConfig returns the choices and limits shared by the Flow studios.
 func (a *App) GetStudioConfig() models.Response[flow.StudioConfig] {
-	return a.flow.GetStudioConfig(a.ctx)
+	return logged("GetStudioConfig", a.flow.GetStudioConfig(a.ctx))
 }
 
 // ListFlowImageProjects lists projects from connected Flow accounts for the
 // image reference library.
 func (a *App) ListFlowImageProjects(mode flow.ImageProjectMode) models.Response[[]flow.FlowImageProject] {
-	return a.flow.ListImageProjects(a.ctx, mode)
+	return logged("ListImageProjects", a.flow.ListImageProjects(a.ctx, mode))
 }
 
 // ListFlowProjectImages lists image files in one Flow project.
 func (a *App) ListFlowProjectImages(accountID, projectID string, mode flow.ImageProjectMode) models.Response[[]flow.FlowProjectImage] {
-	return a.flow.ListProjectImages(a.ctx, accountID, projectID, mode)
+	return logged("ListProjectImages", a.flow.ListProjectImages(a.ctx, accountID, projectID, mode))
 }
 
 // GetFlowProjectImageReference downloads one Flow project image for generation.
 func (a *App) GetFlowProjectImageReference(accountID, projectID string, mode flow.ImageProjectMode, mediaID string) models.Response[flow.FlowProjectImageReference] {
-	return a.flow.GetProjectImageReference(a.ctx, accountID, projectID, mode, mediaID)
+	return logged("GetProjectImageReference", a.flow.GetProjectImageReference(a.ctx, accountID, projectID, mode, mediaID))
 }
 
 // GetVideoModels lists the text-to-video model families of the next account in rotation.
 func (a *App) GetVideoModels() models.Response[[]flow.FlowVideoModel] {
-	return a.flow.GetVideoModels(a.ctx)
+	return logged("GetVideoModels", a.flow.GetVideoModels(a.ctx))
 }
 
 // GenerateVideos creates videos from a prompt and waits for Flow to finish them.
 func (a *App) GenerateVideos(req flow.GenerateVideoRequest) models.Response[[]flow.GeneratedVideoItem] {
-	return a.flow.GenerateVideos(a.ctx, req)
+	ctx, done := a.requests.Start(a.ctx, req.RequestID)
+	defer done()
+	return logged("GenerateVideos", a.flow.GenerateVideos(ctx, req))
+}
+
+// ResumeVideoGeneration checks a persisted Flow video request without creating another job.
+func (a *App) ResumeVideoGeneration(id string) models.Response[[]flow.GeneratedVideoItem] {
+	ctx, done := a.requests.Start(a.ctx, id)
+	defer done()
+	return logged("ResumeVideoGeneration", a.flow.ResumeVideoGeneration(ctx, id))
+}
+
+// ListPendingVideoGenerations restores video jobs that can be reconciled after a restart.
+func (a *App) ListPendingVideoGenerations() models.Response[[]flow.GeneratedVideoItem] {
+	return a.flow.ListPendingVideoGenerations()
 }
 
 // PickVideo asks the user for a video file and copies it into the media folder.
@@ -305,17 +343,19 @@ func (a *App) PickVideo() models.Response[media.ImportResult] {
 
 // UploadSourceVideo uploads an imported source video to Google Flow via Scotty.
 func (a *App) UploadSourceVideo(localURL string) models.Response[flow.UploadedSourceVideo] {
-	return a.flow.UploadSourceVideo(a.ctx, localURL)
+	return logged("UploadSourceVideo", a.flow.UploadSourceVideo(a.ctx, localURL))
 }
 
 // GetEditModels lists the model families that can edit a video for the next account.
 func (a *App) GetEditModels() models.Response[[]flow.FlowEditModel] {
-	return a.flow.GetEditModels(a.ctx)
+	return logged("GetEditModels", a.flow.GetEditModels(a.ctx))
 }
 
 // EditVideos rewrites an imported video with a prompt and waits for Flow to finish.
 func (a *App) EditVideos(req flow.EditVideoRequest) models.Response[[]flow.GeneratedVideoItem] {
-	return a.flow.EditVideos(a.ctx, req)
+	ctx, done := a.requests.Start(a.ctx, req.RequestID)
+	defer done()
+	return logged("EditVideos", a.flow.EditVideos(ctx, req))
 }
 
 // ListNodes describes every node type the engine can run (for the node editor).
@@ -325,10 +365,19 @@ func (a *App) ListNodes() models.Response[[]engine.Spec] {
 
 // ListVideoEditJobs exposes the persisted edit journal for explicit recovery.
 func (a *App) ListVideoEditJobs() models.Response[[]flow.GeneratedVideoItem] {
-	return a.flow.ListVideoEditJobs(a.ctx)
+	return logged("ListVideoEditJobs", a.flow.ListVideoEditJobs(a.ctx))
 }
 
 // ResumeVideoEdit follows an existing mutation without submitting another edit.
 func (a *App) ResumeVideoEdit(id string) models.Response[[]flow.GeneratedVideoItem] {
-	return a.flow.ResumeVideoEdit(a.ctx, id)
+	ctx, done := a.requests.Start(a.ctx, id)
+	defer done()
+	return logged("ResumeVideoEdit", a.flow.ResumeVideoEdit(ctx, id))
+}
+
+// CancelGeneration stops waiting on a running generate, edit or resume call.
+// A job Flow already accepted keeps running there and can be checked again
+// with the same request ID; nothing is billed twice.
+func (a *App) CancelGeneration(requestID string) models.Response[bool] {
+	return models.SuccessResponse(a.requests.Cancel(requestID))
 }

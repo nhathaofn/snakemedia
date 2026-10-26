@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { create } from 'zustand';
-import { api } from '../../../services/api';
+import { FLOW_SHARED_REQUEST_REUSE_MS } from '../../../constants';
+import { api, isTransportFailure } from '../../../services/api';
 import { useAppStore } from '../../../stores';
 import type { ApiResponse, StudioConfig, ToastNotification } from '../../../types';
 
@@ -32,7 +33,45 @@ export function useStudioConfig(): { config: StudioConfig | null; error: string 
   return { config, error };
 }
 
-/** Loads a studio's model catalogue into its store once per mount. */
+const sharedRequests = new WeakMap<
+  () => Promise<ApiResponse<unknown>>,
+  { at: number; promise: Promise<ApiResponse<unknown>> }
+>();
+
+/**
+ * Runs fetch, sharing one in-flight or recent successful call between the
+ * panels that ask for the same thing. Failures are never reused.
+ */
+export function sharedRequest<T>(fetch: () => Promise<ApiResponse<T>>): Promise<ApiResponse<T>> {
+  const key = fetch as () => Promise<ApiResponse<unknown>>;
+  const cached = sharedRequests.get(key);
+  if (cached && Date.now() - cached.at < FLOW_SHARED_REQUEST_REUSE_MS) {
+    return cached.promise as Promise<ApiResponse<T>>;
+  }
+  const promise = fetch().then((res) => {
+    if (!res.success) sharedRequests.delete(key);
+    return res;
+  });
+  sharedRequests.set(key, { at: Date.now(), promise });
+  return promise;
+}
+
+/** Number of connected accounts that take turns generating (0 until loaded). */
+export function useRotationCount(): number {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    let active = true;
+    void sharedRequest(api.getActiveRotationCount).then((res) => {
+      if (active && res.success && typeof res.data === 'number') setCount(res.data);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+  return count;
+}
+
+/** Loads a studio's model catalogue into its store on mount. */
 export function useModelCatalog<T>(
   fetchModels: () => Promise<ApiResponse<T[]>>,
   setModels: (models: T[]) => void,
@@ -42,7 +81,7 @@ export function useModelCatalog<T>(
 
   useEffect(() => {
     let active = true;
-    void fetchModels().then((res) => {
+    void sharedRequest(fetchModels).then((res) => {
       if (!active) return;
       if (res.success && res.data) {
         setModels(res.data);
@@ -80,6 +119,7 @@ export interface GenerationLifecycle<TItem> {
   onStart?: () => void;
   onSuccess?: (items: TItem[]) => void;
   onFailure?: (message: string, promptRestored: boolean) => void;
+  onUncertainFailure?: (message: string, promptRestored: boolean) => void;
 }
 
 type Notify = (toast: Omit<ToastNotification, 'id'>) => void;
@@ -103,10 +143,14 @@ export async function runGeneration<TItem extends { error?: string; pending?: bo
   state.beginGeneration();
   state.setPrompt('');
   let accepted = false;
+  let responseReceived = false;
+  let thrown = false;
   let failureMessage = 'Không rõ lỗi.';
   try {
     lifecycle.onStart?.();
     const res = await request();
+    // A bridge failure is not an answer from Go: the job may already be running.
+    responseReceived = !isTransportFailure(res);
     if (!res.success || !res.data) {
       failureMessage = res.error ?? failureMessage;
       notify({
@@ -129,17 +173,108 @@ export async function runGeneration<TItem extends { error?: string; pending?: bo
     }
   } catch (error) {
     failureMessage = error instanceof Error ? error.message : String(error);
+    thrown = true;
     throw error;
   } finally {
     const latest = store.getState();
     const promptRestored = !accepted && latest.prompt === '' && latest.activeGenerations === 1;
     try {
-      if (!accepted) lifecycle.onFailure?.(failureMessage, promptRestored);
+      if (!accepted) {
+        const failed =
+          thrown || !responseReceived ? lifecycle.onUncertainFailure : lifecycle.onFailure;
+        failed?.(failureMessage, promptRestored);
+      }
     } finally {
       const current = store.getState();
       current.finishGeneration();
       if (promptRestored && current.prompt === '') current.setPrompt(submitted);
     }
+  }
+}
+
+/** Shown when a generation may have reached Flow although no reply came back. */
+export const UNCERTAIN_RETRY_HINT =
+  'Yêu cầu có thể đã tới Flow; gửi lại đúng nội dung này để đối soát thay vì tạo job mới.';
+
+/** Request IDs this process has sent and not yet settled. */
+const inFlightRequestIDs = new Set<string>();
+
+/**
+ * Keeps one Flow request ID for identical unresolved submissions across retries
+ * and restarts, so an attempt whose outcome is unknown is reconciled instead of
+ * billed twice. Sending the same content again while that ID is still in
+ * flight is a deliberate new generation and gets its own, unpersisted ID.
+ */
+export async function beginGenerationAttempt(
+  kind: 'image' | 'video',
+  request: unknown,
+): Promise<{ requestId: string; settle: (pending: boolean) => void }> {
+  const serialized = JSON.stringify(request);
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(serialized));
+  const fingerprint = Array.from(new Uint8Array(digest), (value) =>
+    value.toString(16).padStart(2, '0'),
+  ).join('');
+  const key = `flow:generation:${kind}:${fingerprint}`;
+  const savedIDs = generationRequestIDs();
+  let requestId: string | null = null;
+  try {
+    requestId = localStorage.getItem(key);
+  } catch {
+    // Keep the ID for this process if host storage is disabled.
+  }
+  requestId ??= savedIDs.get(key) ?? null;
+  if (requestId !== null && inFlightRequestIDs.has(requestId)) {
+    const fresh = crypto.randomUUID();
+    inFlightRequestIDs.add(fresh);
+    return { requestId: fresh, settle: () => inFlightRequestIDs.delete(fresh) };
+  }
+  requestId ??= crypto.randomUUID();
+  const sentID = requestId;
+  inFlightRequestIDs.add(sentID);
+  savedIDs.set(key, requestId);
+  try {
+    localStorage.setItem(key, requestId);
+  } catch {
+    // The active request still has a stable ID.
+  }
+  return {
+    requestId,
+    settle: (pending) => {
+      inFlightRequestIDs.delete(sentID);
+      if (pending) return;
+      try {
+        if (localStorage.getItem(key) === requestId) localStorage.removeItem(key);
+      } catch {
+        // Storage may be disabled by the host webview.
+      }
+      if (savedIDs.get(key) === requestId) savedIDs.delete(key);
+    },
+  };
+}
+
+const generationRequestIDs = (): Map<string, string> => {
+  const root = globalThis as typeof globalThis & {
+    __flowGenerationRequestIDs?: Map<string, string>;
+  };
+  root.__flowGenerationRequestIDs ??= new Map();
+  return root.__flowGenerationRequestIDs;
+};
+
+/** Clears the browser-side key after a pending job is explicitly resumed to completion. */
+export function clearGenerationAttempt(requestId: string): void {
+  const savedIDs = generationRequestIDs();
+  for (const [key, value] of savedIDs) {
+    if (value === requestId) savedIDs.delete(key);
+  }
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key?.startsWith('flow:generation:') && localStorage.getItem(key) === requestId) {
+        localStorage.removeItem(key);
+      }
+    }
+  } catch {
+    // Storage may be disabled by the host webview.
   }
 }
 

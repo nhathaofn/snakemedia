@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
-import { RefreshCw, Sparkles, Video, X } from 'lucide-react';
+import { RefreshCw, Sparkles, Square, Video, X } from 'lucide-react';
 import { cssAspectRatio } from './format';
 import { conversationItemKey } from './studioStore';
 import type { ConversationAttachment, ConversationTurn, StudioResult } from './studioStore';
@@ -13,12 +13,15 @@ export function ConversationGallery<TItem extends StudioResult>({
   emptyTitle,
   emptyText,
   renderItem,
+  onStopTurn,
 }: {
   turns: ConversationTurn[];
   items: TItem[];
   emptyTitle: string;
   emptyText: string;
   renderItem: (item: TItem, turn: ConversationTurn) => ReactNode;
+  /** Stops waiting on a running turn (its ID is the request ID). */
+  onStopTurn?: (turnId: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [preview, setPreview] = useState<ConversationAttachment | null>(null);
@@ -117,6 +120,17 @@ export function ConversationGallery<TItem extends StudioResult>({
                             </span>
                           </div>
                         ))}
+                        {turn.pendingCount > 0 && onStopTurn && (
+                          <button
+                            type="button"
+                            className="flow-card-action-btn flow-card-text-btn flow-chat-stop"
+                            title="Dừng chờ. Job Flow đã nhận vẫn chạy và có thể kiểm tra tiếp."
+                            onClick={() => onStopTurn(turn.id)}
+                          >
+                            <Square size={12} />
+                            Dừng
+                          </button>
+                        )}
                         {turn.error && (
                           <p className="flow-chat-error" role="alert">
                             {turn.error}

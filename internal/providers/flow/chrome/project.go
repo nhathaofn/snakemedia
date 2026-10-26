@@ -3,7 +3,6 @@ package chrome
 import (
 	"context"
 	"errors"
-	"net/url"
 	"time"
 
 	"SnakeMedia/internal/config"
@@ -24,8 +23,8 @@ func OpenProject(ctx context.Context, port int, projectID string, policy config.
 		return err
 	}
 	for _, page := range pages {
-		u, err := url.Parse(page.URL)
-		if err != nil || page.Type != "page" || u.Scheme != "https" || u.Host != "flow.google.com" {
+		u, ok := page.flowPage()
+		if !ok {
 			continue
 		}
 		if u.Path == "/project/"+projectID {

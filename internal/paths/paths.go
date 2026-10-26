@@ -8,8 +8,10 @@ import (
 )
 
 const (
-	configFileName = "config.json"
-	logsDirName    = "logs"
+	configFileName     = "config.json"
+	logsDirName        = "logs"
+	mediaDirName       = "media"
+	imageOutputDirName = "generated-images"
 )
 
 // Paths groups the resolved on-disk locations for one application.
@@ -17,6 +19,10 @@ type Paths struct {
 	DataDir    string
 	ConfigFile string
 	LogDir     string
+	// MediaDir holds downloaded and imported media served at /flow-media/.
+	MediaDir string
+	// ImageOutputDir is the default folder Image > All saves batches into.
+	ImageOutputDir string
 }
 
 // Resolve returns the standard per-user locations for appName, rooted at the
@@ -32,8 +38,10 @@ func Resolve(appName string) (Paths, error) {
 // ForRoot returns the layout for an explicit data directory (useful in tests).
 func ForRoot(dataDir string) Paths {
 	return Paths{
-		DataDir:    dataDir,
-		ConfigFile: filepath.Join(dataDir, configFileName),
-		LogDir:     filepath.Join(dataDir, logsDirName),
+		DataDir:        dataDir,
+		ConfigFile:     filepath.Join(dataDir, configFileName),
+		LogDir:         filepath.Join(dataDir, logsDirName),
+		MediaDir:       filepath.Join(dataDir, mediaDirName),
+		ImageOutputDir: filepath.Join(dataDir, imageOutputDirName),
 	}
 }

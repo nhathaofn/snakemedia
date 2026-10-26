@@ -60,3 +60,10 @@ body {
   max-width: var(--content-max-width);
   margin: 0 auto;
 }
+
+/* The one spin animation every spinner shares. */
+@keyframes spin {
+  to {
+    transform: rotate(var(--rotation-full));
+  }
+}

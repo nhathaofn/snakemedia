@@ -40,12 +40,16 @@ type Provider struct {
 	rrIndex             uint64
 	jobLocks            sync.Map
 	balanceRefreshLocks sync.Map
-	mu                  sync.Mutex
-	rotationMu          sync.Mutex
-	rotationAccounts    map[string]*rotationAccountState
-	videoCurrent        map[string]float64
-	imageCursor         uint64
-	rotationChanged     chan struct{}
+	projectResolveLocks sync.Map // account ID -> serialises resolveProject
+	// undiscoverableBuilds remembers Flow builds whose project page lacked
+	// the BatchGenerateImages descriptor.
+	undiscoverableBuilds map[string]bool
+	mu                   sync.Mutex
+	rotationMu           sync.Mutex
+	rotationAccounts     map[string]*rotationAccountState
+	videoCurrent         map[string]float64
+	imageCursor          uint64
+	rotationChanged      chan struct{}
 	// Both caches are keyed by account ID: catalogue defaults depend on the
 	// account tier, and projects belong to one account.
 	models               map[string]modelCache
@@ -89,7 +93,11 @@ func New(accounts Accounts, cfg *config.Manager, store *media.Store, productName
 	s.fetchLiveModels = s.queryModelsFromAccount
 	s.generateLiveImages = s.generateImagesFromAccount
 	s.fetchModelsPayload = s.fetchModelsPayloadFromAccount
-	s.refreshLiveCredits = s.refreshAccountCredits
+	// The balance query must not delay the generation reply; its activity epoch
+	// check already drops a result made stale by a newer request.
+	s.refreshLiveCredits = func(ctx context.Context, id string) {
+		go s.refreshAccountCredits(context.WithoutCancel(ctx), id)
+	}
 	s.generateLiveVideos = s.generateVideosFromAccount
 	s.uploadLiveVideo = s.uploadVideoFromAccount
 	s.editLiveVideos = s.editVideosFromAccount
@@ -138,7 +146,7 @@ func (s *Provider) readyAccountFrom(ctx context.Context, valid []session.StoredA
 		valid = removeAccount(valid, acc.ID)
 	}
 	if len(skipped) > 0 {
-		return nil, nil, fmt.Errorf("các tài khoản đã đăng xuất khỏi Google (%s); hãy đăng nhập lại ở mục Account", strings.Join(skipped, ", "))
+		return nil, nil, fmt.Errorf("các tài khoản đã đăng xuất khỏi Google (%s); hãy đăng nhập lại ở mục Tài khoản", strings.Join(skipped, ", "))
 	}
 	_, err := s.NextAccount() // reports that no account is usable
 	return nil, nil, err
@@ -256,6 +264,7 @@ type StudioConfig struct {
 	VideoExtensions    []string `json:"videoExtensions"`
 	ImageAspectRatios  []string `json:"imageAspectRatios"`
 	DefaultImageRatio  string   `json:"defaultImageRatio"`
+	DefaultBatchRatio  string   `json:"defaultBatchRatio"`
 	MaxImages          int      `json:"maxImages"`
 	MaxVideos          int      `json:"maxVideos"`
 	MaxReferenceBytes  int      `json:"maxReferenceBytes"`
@@ -268,6 +277,7 @@ func (s *Provider) GetStudioConfig(_ context.Context) models.Response[StudioConf
 		VideoExtensions:    media.SupportedVideoExtensions(),
 		ImageAspectRatios:  ImageAspectRatios,
 		DefaultImageRatio:  DefaultImageAspectRatio,
+		DefaultBatchRatio:  DefaultBatchImageAspectRatio,
 		MaxImages:          MaxImagesPerRequest,
 		MaxVideos:          MaxVideosPerRequest,
 		MaxReferenceBytes:  MaxReferenceImageBytes,

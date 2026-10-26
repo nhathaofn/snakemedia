@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"SnakeMedia/internal/config"
 	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/models"
 	"SnakeMedia/internal/providers/flow/chrome"
@@ -21,10 +22,9 @@ import (
 )
 
 const (
-	// RPCBatchGenerateImages is the verified synchronous image generation RPC identifier on Google Flow.
-	RPCBatchGenerateImages = "ogiZ0b"
-	// RPCBatchAsyncGenerateImages is the asynchronous image generation RPC identifier on Google Flow.
-	RPCBatchAsyncGenerateImages = "Z9cAtf"
+	// fallbackGenerateImagesRPC is the last verified ID of BatchGenerateImages,
+	// used only when the running Flow build does not expose its descriptor.
+	fallbackGenerateImagesRPC = "ogiZ0b"
 	// RPCUploadImage is the image upload registration RPC identifier on Google Flow.
 	RPCUploadImage = "maseQ"
 	// FlowSurfaceID represents Google Flow Studio's internal surface identifier (22).
@@ -35,10 +35,6 @@ const (
 	MaxImagesPerRequest = 4
 	// MaxReferenceImageBytes is the largest reference image accepted for upload.
 	MaxReferenceImageBytes = 10 << 20
-	// maxGeneratedImageBytes bounds one downloaded generated image.
-	maxGeneratedImageBytes = 32 << 20
-	// modelCacheTTL bounds how long an account's model catalogue is reused.
-	modelCacheTTL = 5 * time.Minute
 	// projectTitleLayout matches the date titles Flow gives new projects ("Oct 17 - 13:11").
 	projectTitleLayout = "Jan 02 - 15:04"
 )
@@ -64,6 +60,9 @@ var ImageAspectRatios = []string{"16:9", "4:3", "1:1", "3:4", "9:16"}
 
 // DefaultImageAspectRatio is the ratio a new image request starts with.
 const DefaultImageAspectRatio = "1:1"
+
+// DefaultBatchImageAspectRatio is the starting ratio of the Image > All queue.
+const DefaultBatchImageAspectRatio = "16:9"
 
 // ImageQuality is the requested output resolution in Flow's image editor.
 type ImageQuality string
@@ -103,6 +102,23 @@ var FlowImageAspect = map[string]int{
 // based on reverse-engineered JSPB AST from Google Flow web client. Every argument is
 // required; nothing is replaced by a default.
 func BuildImageBatchRequest(prompt string, projectID string, ratio string, modelID string, count int, recaptchaToken string, refMediaIDs ...[]string) ([]byte, error) {
+	var refs []string
+	if len(refMediaIDs) > 0 {
+		refs = refMediaIDs[0]
+	}
+	return buildImageBatchRequest(prompt, projectID, ratio, modelID, count, recaptchaToken, refs, nil)
+}
+
+// BuildImageBatchRequestWithClientIDs builds the same generation payload while
+// supplying stable Flow client IDs that can be looked up after a lost reply.
+func BuildImageBatchRequestWithClientIDs(prompt, projectID, ratio, modelID string, count int, recaptchaToken string, refMediaIDs, clientIDs []string) ([]byte, error) {
+	if len(clientIDs) != count {
+		return nil, errors.New("số client ID không khớp số ảnh yêu cầu")
+	}
+	return buildImageBatchRequest(prompt, projectID, ratio, modelID, count, recaptchaToken, refMediaIDs, clientIDs)
+}
+
+func buildImageBatchRequest(prompt, projectID, ratio, modelID string, count int, recaptchaToken string, refMediaIDs, clientIDs []string) ([]byte, error) {
 	if count < 1 || count > MaxImagesPerRequest {
 		return nil, fmt.Errorf("số lượng ảnh phải từ 1 đến %d", MaxImagesPerRequest)
 	}
@@ -118,8 +134,8 @@ func BuildImageBatchRequest(prompt string, projectID string, ratio string, model
 	}
 
 	var refs []any
-	if len(refMediaIDs) > 0 && len(refMediaIDs[0]) > 0 {
-		for _, mid := range refMediaIDs[0] {
+	if len(refMediaIDs) > 0 {
+		for _, mid := range refMediaIDs {
 			refs = append(refs, []any{mid, nil, nil, nil, RefTypeImage})
 		}
 	}
@@ -130,6 +146,9 @@ func BuildImageBatchRequest(prompt string, projectID string, ratio string, model
 	for i := 0; i < count; i++ {
 		seed := rand.Intn(999999999) + 1
 		clientUUID := strings.ToUpper(uuid.NewString())
+		if len(clientIDs) > 0 {
+			clientUUID = strings.ToUpper(clientIDs[i])
+		}
 		// Item structure (14 elements):
 		item := []any{
 			nil,
@@ -221,7 +240,7 @@ func BuildImageUpsampleRequest(mediaID string, quality ImageQuality, projectID s
 // protobuf bytes field. The batchexecute JSON envelope can contain that field at
 // different nesting depths, so candidates are accepted only when their decoded
 // bytes have a supported raster image content type.
-func ParseUpsampledImageBytes(payload string) ([]byte, string, error) {
+func ParseUpsampledImageBytes(payload string, maxBytes int64) ([]byte, string, error) {
 	var root any
 	if err := json.Unmarshal([]byte(payload), &root); err != nil {
 		return nil, "", fmt.Errorf("phản hồi nâng độ phân giải không phải JSON hợp lệ: %w", err)
@@ -235,7 +254,7 @@ func ParseUpsampledImageBytes(payload string) ([]byte, string, error) {
 		}
 		switch item := value.(type) {
 		case []any:
-			if data, ok := numericImageBytes(item); ok {
+			if data, ok := numericImageBytes(item, maxBytes); ok {
 				imageData, contentType = data, detectedImageType(data)
 				return
 			}
@@ -273,7 +292,7 @@ func ParseUpsampledImageBytes(payload string) ([]byte, string, error) {
 				base64.RawURLEncoding,
 			} {
 				data, err := decoder.DecodeString(candidate)
-				if err != nil || len(data) == 0 || len(data) > maxGeneratedImageBytes {
+				if err != nil || len(data) == 0 || int64(len(data)) > maxBytes {
 					continue
 				}
 				if detected := detectedImageType(data); detected != "" {
@@ -290,8 +309,8 @@ func ParseUpsampledImageBytes(payload string) ([]byte, string, error) {
 	return imageData, contentType, nil
 }
 
-func numericImageBytes(values []any) ([]byte, bool) {
-	if len(values) == 0 || len(values) > maxGeneratedImageBytes {
+func numericImageBytes(values []any, maxBytes int64) ([]byte, bool) {
+	if len(values) == 0 || int64(len(values)) > maxBytes {
 		return nil, false
 	}
 	data := make([]byte, len(values))
@@ -418,6 +437,7 @@ type ReferenceImage struct {
 
 // GenerateImageRequest represents the payload for generating images.
 type GenerateImageRequest struct {
+	RequestID   string           `json:"requestId,omitempty"`
 	Prompt      string           `json:"prompt"`
 	ModelID     string           `json:"modelId"`
 	AspectRatio string           `json:"aspectRatio"`
@@ -426,10 +446,15 @@ type GenerateImageRequest struct {
 	Count       int              `json:"count"`
 	References  []ReferenceImage `json:"references,omitempty"`
 	ProjectID   string           `json:"projectId,omitempty"`
+	fingerprint string
+	onSubmit    func(projectID string, clientIDs []string) error
+	onAccepted  func(images []GeneratedImageItem) error
 }
 
 // GeneratedImageItem represents an image returned from generation.
 type GeneratedImageItem struct {
+	JobID       string `json:"jobId,omitempty"`
+	Pending     bool   `json:"pending,omitempty"`
 	ID          string `json:"id"`
 	URL         string `json:"url"`
 	Prompt      string `json:"prompt"`
@@ -524,6 +549,39 @@ func (s *Provider) GenerateImages(ctx context.Context, req GenerateImageRequest)
 	if err := validateGenerateRequest(req); err != nil {
 		return models.ErrorResponse[[]GeneratedImageItem](err.Error(), models.CodeInvalidArgument)
 	}
+	requestID, err := prepareRequestID(req.RequestID)
+	if err != nil {
+		return models.ErrorResponse[[]GeneratedImageItem](err.Error(), models.CodeInvalidArgument)
+	}
+	req.RequestID = requestID
+	fingerprintReq := req
+	fingerprintReq.RequestID = ""
+	fingerprintReq.fingerprint = ""
+	fingerprintReq.onSubmit = nil
+	fingerprintReq.onAccepted = nil
+	fingerprint, err := requestFingerprint(fingerprintReq)
+	if err != nil {
+		return models.ErrorResponse[[]GeneratedImageItem](err.Error(), models.CodeInternal)
+	}
+	lock := s.jobLock(req.RequestID)
+	if !lock.TryLock() {
+		return models.SuccessResponse(pendingImageItems(newGenerationJob(req.RequestID, generationJobImage, fingerprint, ""), req))
+	}
+	defer lock.Unlock()
+	job, exists, jobErr := s.checkGenerationJob(req.RequestID, generationJobImage, fingerprint)
+	if jobErr != nil {
+		return models.ErrorResponse[[]GeneratedImageItem](jobErr.Error(), models.CodeInvalidArgument)
+	}
+	if exists {
+		switch job.Phase {
+		case generationComplete:
+			return models.SuccessResponse(job.ImageResult)
+		case generationRejected:
+			return models.ErrorResponse[[]GeneratedImageItem](job.Message, models.CodeUnavailable)
+		default:
+			return s.resumeImageGeneration(ctx, job, req)
+		}
+	}
 
 	choices, code, err := s.imageGenerationChoices(ctx, req)
 	if err != nil {
@@ -539,7 +597,7 @@ func (s *Provider) GenerateImages(ctx context.Context, req GenerateImageRequest)
 	if err != nil {
 		return models.ErrorResponse[[]GeneratedImageItem]("Không thể tạo ảnh: "+err.Error(), models.CodeUnavailable)
 	}
-	defer release()
+	defer func() { release() }()
 
 	var model FlowModel
 	for _, choice := range choices {
@@ -551,12 +609,40 @@ func (s *Provider) GenerateImages(ctx context.Context, req GenerateImageRequest)
 	if model.ID == "" {
 		return models.ErrorResponse[[]GeneratedImageItem]("Không tìm lại được model ảnh tương thích cho tài khoản đã chọn.", models.CodeInternal)
 	}
+	req.fingerprint = fingerprint
+	req.onSubmit = func(projectID string, clientIDs []string) error {
+		job := newGenerationJob(req.RequestID, generationJobImage, fingerprint, acc.ID)
+		job.Phase, job.ProjectID, job.ClientIDs = generationSubmitting, projectID, append([]string(nil), clientIDs...)
+		job.ImageTemplate = imageGenerationTemplate{Prompt: req.Prompt, ModelID: req.ModelID, ModelName: model.Name, AspectRatio: req.AspectRatio, Quality: req.Quality, ProjectMode: req.ProjectMode}
+		return s.saveGenerationJob(job)
+	}
+	req.onAccepted = func(images []GeneratedImageItem) error {
+		job, err := s.loadGenerationJob(req.RequestID)
+		if err != nil {
+			return err
+		}
+		job.Phase, job.Images = generationAccepted, append([]GeneratedImageItem(nil), images...)
+		return s.saveGenerationJob(job)
+	}
 
 	images, err := s.generateLiveImages(ctx, *acc, req)
 	if s.refreshLiveCredits != nil {
 		s.refreshLiveCredits(ctx, acc.ID)
 	}
 	if err != nil {
+		job, readErr := s.loadGenerationJob(req.RequestID)
+		if readErr == nil && job.Phase == generationSubmitting {
+			if definiteMutationRejection(err) {
+				job.Phase, job.Message = generationRejected, err.Error()
+				if saveErr := s.saveGenerationJob(job); saveErr != nil {
+					return models.ErrorResponse[[]GeneratedImageItem](saveErr.Error(), models.CodeInternal)
+				}
+				return models.ErrorResponse[[]GeneratedImageItem](fmt.Sprintf("Lỗi khi tạo ảnh từ Google Flow (%s): %s", acc.Email, err.Error()), models.CodeUnavailable)
+			}
+			release()
+			release = func() {}
+			return s.resumeImageGeneration(ctx, job, req)
+		}
 		// A removed or inaccessible project must be resolved again next time.
 		s.forgetProject(acc.ID)
 		s.forgetDailyImageProjects(acc.ID)
@@ -568,8 +654,27 @@ func (s *Provider) GenerateImages(ctx context.Context, req GenerateImageRequest)
 
 	for i := range images {
 		images[i].ModelName = model.Name
+		images[i].JobID = req.RequestID
+		images[i].Pending = false
+	}
+	if job, readErr := s.loadGenerationJob(req.RequestID); readErr == nil {
+		job.Phase, job.ImageResult = imageJobPhase(images), append([]GeneratedImageItem(nil), images...)
+		if err := s.saveGenerationJob(job); err != nil {
+			return models.ErrorResponse[[]GeneratedImageItem](err.Error(), models.CodeInternal)
+		}
 	}
 	return models.SuccessResponse(images)
+}
+
+// imageJobPhase keeps a job open while a generated image could not be
+// downloaded, so resuming it retries the download instead of freezing the error.
+func imageJobPhase(images []GeneratedImageItem) string {
+	for _, image := range images {
+		if image.LocalURL == "" && image.URL != "" {
+			return generationAccepted
+		}
+	}
+	return generationComplete
 }
 
 func validateGenerateRequest(req GenerateImageRequest) error {
@@ -655,6 +760,7 @@ func (s *Provider) generateImagesFromAccount(ctx context.Context, acc session.St
 	if err != nil {
 		return nil, err
 	}
+	client = s.withImageGenerationRPC(ctx, acc, client, methods)
 	defer s.keepCredentials(acc, client)
 
 	// Resolve the account's real project; the GetProjects call also proves Flow
@@ -672,109 +778,72 @@ func (s *Provider) generateImagesFromAccount(ctx context.Context, acc session.St
 		finishProjectReservation(generatedMediaCount)
 	}()
 
-	// 1. Ensure headless browser and mint reCAPTCHA Enterprise token
-	var recaptchaToken string
-	var refMediaIDs []string
-	if s.accounts == nil {
-		return nil, errors.New("dịch vụ tài khoản chưa được liên kết để cấp token reCAPTCHA")
+	// 1. Upload references, then mint the generation token last so it is fresh.
+	browser, err := s.generationBrowser(ctx, acc)
+	if err != nil {
+		return nil, err
 	}
-
-	browser, bErr := s.accounts.EnsureAccountHeadlessBrowser(ctx, acc)
-	if bErr != nil {
-		return nil, fmt.Errorf("không khởi động được trình duyệt Chrome để cấp bảo mật: %w", bErr)
-	}
-	if browser == nil {
-		return nil, errors.New("trình duyệt Chrome chưa được khởi tạo")
-	}
-
 	policy := s.cfg.Get().Accounts
-	tok, tErr := chrome.MintRecaptchaToken(ctx, browser.Port, policy, chrome.ActionImageGeneration)
-	if tErr != nil {
-		return nil, fmt.Errorf("lỗi cấp token reCAPTCHA Enterprise từ trình duyệt: %w", tErr)
+	refMediaIDs, err := s.uploadReferences(ctx, client, acc, browser, policy, req.References, projectID)
+	if err != nil {
+		return nil, err
 	}
-	if tok == "" {
-		return nil, errors.New("token reCAPTCHA Enterprise trả về rỗng")
-	}
-	recaptchaToken = tok
-
-	// 3. If reference images are supplied, upload each one via RPC maseQ
-	for _, ref := range req.References {
-		uploadToken, uErrToken := chrome.MintRecaptchaToken(ctx, browser.Port, policy, chrome.ActionImageGeneration)
-		if uErrToken != nil || uploadToken == "" {
-			uploadToken = recaptchaToken
-		}
-		mediaID, uErr := s.UploadReferenceImage(ctx, client, acc, ref.Base64, ref.MimeType, ref.FileName, uploadToken, projectID)
-		if uErr != nil {
-			return nil, fmt.Errorf("không tải ảnh tham chiếu %q lên được: %w", ref.FileName, uErr)
-		}
-		refMediaIDs = append(refMediaIDs, mediaID)
+	recaptchaToken, err := mintGenerationToken(ctx, browser, policy, chrome.ActionImageGeneration)
+	if err != nil {
+		return nil, err
 	}
 
 	// 4. Dispatch verified image generation RPC ogiZ0b (BatchGenerateImages)
-	innerPayload, err := BuildImageBatchRequest(req.Prompt, projectID, req.AspectRatio, req.ModelID, req.Count, recaptchaToken, refMediaIDs)
+	clientIDs := newGenerationClientIDs(req.Count)
+	innerPayload, err := BuildImageBatchRequestWithClientIDs(req.Prompt, projectID, req.AspectRatio, req.ModelID, req.Count, recaptchaToken, refMediaIDs, clientIDs)
 	if err != nil {
 		return nil, fmt.Errorf("không đóng gói được payload tạo ảnh: %w", err)
 	}
 
-	rpcID := RPCBatchGenerateImages
+	rpcID := client.Credentials().RPCs.ID(chrome.MethodGenerateImages)
+	if rpcID == "" {
+		rpcID = fallbackGenerateImagesRPC
+	}
 	genFReq, err := BuildBatchEnvelope(rpcID, innerPayload)
 	if err != nil {
 		return nil, fmt.Errorf("không đóng gói được envelope tạo ảnh: %w", err)
 	}
-
-	genBody, err := client.Do(ctx, rpcID, genFReq, time.Duration(limits.GenerationTimeoutSeconds)*time.Second)
-	if err != nil {
-		var responseError *chrome.HTTPError
-		requestSubmitted = !errors.As(err, &responseError)
+	if req.onSubmit != nil {
+		if err := req.onSubmit(projectID, clientIDs); err != nil {
+			return nil, fmt.Errorf("không lưu được mã request trước khi gửi Flow: %w", err)
+		}
 	}
+
+	requestSubmitted = true
+	genBody, err := client.Do(ctx, rpcID, genFReq, time.Duration(limits.GenerationTimeoutSeconds)*time.Second)
 	if bytes.Contains(genBody, []byte("PUBLIC_ERROR_UNUSUAL_ACTIVITY")) {
 		requestSubmitted = false
-		return nil, errors.New("Google Flow yêu cầu xác thực reCAPTCHA Enterprise token (action: IMAGE_GENERATION). Phiên cần được cấp token qua trình duyệt trước khi tạo ảnh.")
+		return nil, &mutationRejection{cause: errors.New("Google Flow yêu cầu xác thực reCAPTCHA Enterprise token (action: IMAGE_GENERATION). Phiên cần được cấp token qua trình duyệt trước khi tạo ảnh.")}
 	}
 	if err != nil {
+		if definiteMutationRejection(err) {
+			requestSubmitted = false
+		}
 		return nil, fmt.Errorf("lỗi khi gọi %s: %w", rpcID, err)
 	}
 
 	payload, err := chrome.ParseRPCPayload(string(genBody), rpcID)
 	if err != nil {
+		if definiteMutationRejection(err) {
+			requestSubmitted = false
+		}
 		return nil, fmt.Errorf("Google Flow từ chối yêu cầu tạo ảnh: %w", err)
 	}
 	images := ParseGeneratedImages(payload, req.Prompt, req.ModelID, req.AspectRatio)
-	requestSubmitted = false
 	if len(images) > 0 {
 		generatedMediaCount = len(images)
-		for i := range images {
-			data, contentType, fetchErr := client.FetchMedia(ctx, images[i].URL, []string{"image/"}, maxGeneratedImageBytes, time.Duration(limits.GenerationTimeoutSeconds)*time.Second)
-			if fetchErr == nil {
-				images[i].LocalURL, fetchErr = s.media.Put(images[i].ID, contentType, ".png", data)
+		if req.onAccepted != nil {
+			if err := req.onAccepted(images); err != nil {
+				return nil, fmt.Errorf("không lưu được kết quả Flow đã nhận: %w", err)
 			}
-			if fetchErr != nil {
-				images[i].Error = "Không tải được ảnh để hiển thị: " + fetchErr.Error()
-				logger.Get().Warn("cannot download generated image", "media", images[i].ID, "error", fetchErr)
-				continue
-			}
-
-			if req.Quality == ImageQuality1K {
-				continue
-			}
-			upscaleToken, tokenErr := chrome.MintRecaptchaToken(ctx, browser.Port, policy, chrome.ActionImageGeneration)
-			if tokenErr != nil || upscaleToken == "" {
-				if tokenErr == nil {
-					tokenErr = errors.New("token reCAPTCHA Enterprise trả về rỗng")
-				}
-				images[i].Error = fmt.Sprintf("Không nâng được ảnh lên %s: %v", req.Quality, tokenErr)
-				logger.Get().Warn("cannot mint image upsample token", "media", images[i].ID, "error", tokenErr)
-				continue
-			}
-			upscaledURL, upsampleErr := s.upsampleGeneratedImage(ctx, client, projectID, images[i].ID, req.Quality, upscaleToken)
-			if upsampleErr != nil {
-				images[i].Error = fmt.Sprintf("Không nâng được ảnh lên %s: %v", req.Quality, upsampleErr)
-				logger.Get().Warn("cannot upsample generated image", "media", images[i].ID, "quality", req.Quality, "error", upsampleErr)
-				continue
-			}
-			images[i].LocalURL = upscaledURL
 		}
-		return images, nil
+		requestSubmitted = false
+		return s.materializeGeneratedImages(ctx, client, browser, policy, projectID, req, images), nil
 	}
 
 	limit := len(payload)
@@ -782,6 +851,160 @@ func (s *Provider) generateImagesFromAccount(ctx context.Context, acc session.St
 		limit = 200
 	}
 	return nil, fmt.Errorf("Google Flow chưa trả về ảnh hợp lệ (phản hồi: %s)", payload[:limit])
+}
+
+func (s *Provider) materializeGeneratedImages(ctx context.Context, client *chrome.FlowClient, browser *chrome.Browser, policy config.AccountConfig, projectID string, req GenerateImageRequest, images []GeneratedImageItem) []GeneratedImageItem {
+	limits := s.cfg.Get().Accounts
+	for i := range images {
+		data, contentType, err := client.FetchMedia(ctx, images[i].URL, []string{"image/"}, s.cfg.Get().Flow.MaxImageBytes, time.Duration(limits.GenerationTimeoutSeconds)*time.Second)
+		if err == nil {
+			images[i].LocalURL, err = s.media.Put(images[i].ID, contentType, ".png", data)
+		}
+		if err != nil {
+			images[i].Error = "Không tải được ảnh để hiển thị: " + err.Error()
+			logger.Get().Warn("cannot download generated image", "media", images[i].ID, "error", err)
+			continue
+		}
+		if req.Quality == ImageQuality1K {
+			continue
+		}
+		if browser == nil {
+			images[i].Error = fmt.Sprintf("Không nâng được ảnh lên %s: Chrome chưa sẵn sàng.", req.Quality)
+			continue
+		}
+		upscaleToken, tokenErr := chrome.MintRecaptchaToken(ctx, browser.Port, policy, chrome.ActionImageGeneration)
+		if tokenErr != nil || upscaleToken == "" {
+			if tokenErr == nil {
+				tokenErr = errors.New("token reCAPTCHA Enterprise trả về rỗng")
+			}
+			images[i].Error = fmt.Sprintf("Không nâng được ảnh lên %s: %v", req.Quality, tokenErr)
+			logger.Get().Warn("cannot mint image upsample token", "media", images[i].ID, "error", tokenErr)
+			continue
+		}
+		upscaledURL, err := s.upsampleGeneratedImage(ctx, client, projectID, images[i].ID, req.Quality, upscaleToken)
+		if err != nil {
+			images[i].Error = fmt.Sprintf("Không nâng được ảnh lên %s: %v", req.Quality, err)
+			logger.Get().Warn("cannot upsample generated image", "media", images[i].ID, "quality", req.Quality, "error", err)
+			continue
+		}
+		images[i].LocalURL = upscaledURL
+	}
+	return images
+}
+
+func (s *Provider) resumeImageGeneration(ctx context.Context, job generationJob, req GenerateImageRequest) models.Response[[]GeneratedImageItem] {
+	pending := pendingImageItems(job, req)
+	if job.ProjectID == "" || len(job.ClientIDs) == 0 || job.AccountID == "" {
+		return models.SuccessResponse(pending)
+	}
+	acc, release, err := s.readyOwnedAccount(ctx, job.AccountID)
+	if err != nil {
+		return models.SuccessResponse(pending)
+	}
+	defer release()
+	methods := []string{chrome.MethodProjectContents, chrome.MethodMedia}
+	if req.Quality != ImageQuality1K {
+		methods = append(methods, chrome.MethodUpsampleImage)
+	}
+	client, err := s.flowClient(ctx, *acc, methods...)
+	if err != nil {
+		return models.SuccessResponse(pending)
+	}
+	defer s.keepCredentials(*acc, client)
+	listing, err := s.projectContentsPayload(ctx, client, job.ProjectID)
+	if err != nil {
+		return models.SuccessResponse(pending)
+	}
+
+	var browser *chrome.Browser
+	if req.Quality != ImageQuality1K {
+		browser, err = s.accounts.EnsureAccountHeadlessBrowser(ctx, *acc)
+		if err != nil || browser == nil {
+			return models.SuccessResponse(pending)
+		}
+	}
+	limits := s.cfg.Get().Accounts
+	var found []GeneratedImageItem
+	foundClientIDs := make(map[string]bool, len(job.ClientIDs))
+	for _, clientID := range job.ClientIDs {
+		match := mediaForClient(listing, clientID)
+		if match.name == "" {
+			continue
+		}
+		payload, err := s.getProjectMedia(ctx, client, match.name)
+		if err != nil {
+			continue
+		}
+		items := ParseGeneratedImages(payload, req.Prompt, req.ModelID, req.AspectRatio)
+		if len(items) == 0 {
+			continue
+		}
+		item := items[0]
+		item.JobID = job.ID
+		item.ModelName = job.ImageTemplate.ModelName
+		if item.ModelName == "" {
+			item.ModelName = req.ModelID
+		}
+		found = append(found, item)
+		foundClientIDs[strings.ToLower(clientID)] = true
+	}
+	if len(found) == 0 && s.submissionLost(job) {
+		err := s.rejectLostSubmission(job)
+		return models.ErrorResponse[[]GeneratedImageItem](err.Error(), models.CodeUnavailable)
+	}
+	if len(found) == 0 {
+		job.Message = pending[0].Error
+		_ = s.saveGenerationJob(job)
+		return models.SuccessResponse(pending)
+	}
+	found = s.materializeGeneratedImages(ctx, client, browser, limits, job.ProjectID, req, found)
+	results := found
+	for i, clientID := range job.ClientIDs {
+		if !foundClientIDs[strings.ToLower(clientID)] {
+			waiting := pendingImageItems(job, req)
+			if i < len(waiting) {
+				results = append(results, waiting[i])
+			}
+		}
+	}
+	job.Images = append([]GeneratedImageItem(nil), found...)
+	if len(foundClientIDs) == len(job.ClientIDs) {
+		job.Phase, job.ImageResult, job.Message = imageJobPhase(results), append([]GeneratedImageItem(nil), results...), ""
+	} else {
+		job.Phase = generationAccepted
+	}
+	if err := s.saveGenerationJob(job); err != nil {
+		return models.ErrorResponse[[]GeneratedImageItem](err.Error(), models.CodeInternal)
+	}
+	return models.SuccessResponse(results)
+}
+
+// ResumeImageGeneration reconciles a saved image request without sending a
+// second generation mutation to Flow.
+func (s *Provider) ResumeImageGeneration(ctx context.Context, id string) models.Response[[]GeneratedImageItem] {
+	if _, err := uuid.Parse(id); err != nil {
+		return models.ErrorResponse[[]GeneratedImageItem]("Mã yêu cầu không hợp lệ.", models.CodeInvalidArgument)
+	}
+	lock := s.jobLock(id)
+	if !lock.TryLock() {
+		return models.SuccessResponse([]GeneratedImageItem{{JobID: id, ID: id, Pending: true, Error: "Job đang được đối soát."}})
+	}
+	defer lock.Unlock()
+	job, err := s.loadGenerationJob(id)
+	if err != nil {
+		return models.ErrorResponse[[]GeneratedImageItem](err.Error(), models.CodeNotFound)
+	}
+	if job.Kind != generationJobImage {
+		return models.ErrorResponse[[]GeneratedImageItem]("Mã này không phải job tạo ảnh.", models.CodeInvalidArgument)
+	}
+	if job.Phase == generationComplete {
+		return models.SuccessResponse(job.ImageResult)
+	}
+	if job.Phase == generationRejected {
+		return models.ErrorResponse[[]GeneratedImageItem](job.Message, models.CodeUnavailable)
+	}
+	req := GenerateImageRequest{RequestID: id, Prompt: job.ImageTemplate.Prompt, ModelID: job.ImageTemplate.ModelID, AspectRatio: job.ImageTemplate.AspectRatio, Quality: job.ImageTemplate.Quality, Count: len(job.ClientIDs)}
+	return s.resumeImageGeneration(ctx, job, req)
 }
 
 func (s *Provider) upsampleGeneratedImage(ctx context.Context, client *chrome.FlowClient, projectID, mediaID string, quality ImageQuality, recaptchaToken string) (string, error) {
@@ -809,7 +1032,7 @@ func (s *Provider) upsampleGeneratedImage(ctx context.Context, client *chrome.Fl
 	if err != nil {
 		return "", fmt.Errorf("Google Flow từ chối yêu cầu nâng độ phân giải: %w", err)
 	}
-	data, contentType, err := ParseUpsampledImageBytes(payload)
+	data, contentType, err := ParseUpsampledImageBytes(payload, s.cfg.Get().Flow.MaxImageBytes)
 	if err != nil {
 		return "", err
 	}

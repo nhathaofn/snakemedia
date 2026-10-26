@@ -52,6 +52,17 @@ export interface QueuedImagePrompt {
   savedLocalURLs: string[];
   error?: string;
   saveError?: string;
+  /**
+   * Flow request ID of the last attempt whose outcome is unknown (no reply or
+   * still pending). The next run reuses it so Flow reconciles that job instead
+   * of billing a new one; cleared once Flow answers or the request changes.
+   */
+  requestId?: string;
+  /**
+   * Read back from the backend after a restart. Its references are gone, so it
+   * is only ever checked again by request ID, never sent as a new request.
+   */
+  restored?: boolean;
 }
 
 export interface FlowImageState extends StudioSlice<FlowModel, GeneratedImageItem>, ReferenceSlice {
@@ -80,6 +91,8 @@ export interface FlowImageState extends StudioSlice<FlowModel, GeneratedImageIte
     count: number,
     references: QueuedImageReference[],
   ) => void;
+  /** Adds unfinished All jobs saved by the backend as failed tasks to check again. */
+  restoreAllPrompts: (jobs: GeneratedImageItem[], quality: FlowImageQualityType) => void;
   updateAllPrompt: (
     id: string,
     update: Partial<
@@ -92,6 +105,8 @@ export interface FlowImageState extends StudioSlice<FlowModel, GeneratedImageIte
         | 'outputDirectory'
         | 'savedLocalURLs'
         | 'saveError'
+        | 'requestId'
+        | 'restored'
       >
     >,
   ) => void;
@@ -109,7 +124,8 @@ export interface FlowImageState extends StudioSlice<FlowModel, GeneratedImageIte
 export const useFlowImageStore = create<FlowImageState>()((set) => ({
   ...createStudioSlice<FlowModel, GeneratedImageItem, FlowImageState>(set),
   ...createReferenceSlice<FlowImageState>(set),
-  allAspectRatio: '16:9',
+  // Filled from StudioConfig.defaultBatchRatio once the studio config loads.
+  allAspectRatio: '',
   setAllAspectRatio: (allAspectRatio) => set({ allAspectRatio }),
   allImageQuality: FlowImageQuality.OneK,
   setAllImageQuality: (allImageQuality) => set({ allImageQuality }),
@@ -155,9 +171,47 @@ export const useFlowImageStore = create<FlowImageState>()((set) => ({
       ],
     }));
   },
+  restoreAllPrompts: (jobs, quality) =>
+    set((state) => {
+      const known = new Set(state.allPrompts.map((task) => task.requestId));
+      const byJob = new Map<string, GeneratedImageItem[]>();
+      for (const item of jobs) {
+        if (!item.jobId || known.has(item.jobId)) continue;
+        byJob.set(item.jobId, [...(byJob.get(item.jobId) ?? []), item]);
+      }
+      if (byJob.size === 0) return {};
+      const batchId = crypto.randomUUID();
+      const restored: QueuedImagePrompt[] = [...byJob].map(([jobId, items]) => ({
+        id: crypto.randomUUID(),
+        batchId,
+        prompt: items[0].prompt,
+        modelId: items[0].model,
+        aspectRatio: items[0].aspectRatio,
+        quality,
+        count: items.length,
+        references: [],
+        status: 'failed',
+        results: items,
+        savedLocalURLs: [],
+        error: items[0].error ?? 'Flow chưa xác nhận kết quả của job này.',
+        requestId: jobId,
+        restored: true,
+      }));
+      return { allPrompts: [...restored, ...state.allPrompts] };
+    }),
   updateAllPrompt: (id, update) =>
     set((state) => ({
-      allPrompts: state.allPrompts.map((item) => (item.id === id ? { ...item, ...update } : item)),
+      allPrompts: state.allPrompts.map((item) => {
+        if (item.id !== id) return item;
+        // New references make a new request: an old request ID would be rejected,
+        // and a restored job becomes an ordinary task to send.
+        const changed = update.references !== undefined && update.requestId === undefined;
+        return {
+          ...item,
+          ...update,
+          ...(changed ? { requestId: undefined, restored: false } : {}),
+        };
+      }),
     })),
   removeAllPrompts: (ids) =>
     set((state) =>

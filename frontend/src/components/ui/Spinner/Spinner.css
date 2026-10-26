@@ -5,11 +5,5 @@
   border: 2px solid var(--border-color);
   border-top-color: var(--primary);
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+  animation: spin var(--animation-spin-fast-duration) linear infinite;
 }

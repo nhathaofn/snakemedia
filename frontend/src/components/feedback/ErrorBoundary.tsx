@@ -26,10 +26,10 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.error) {
       return (
         <div className="error-boundary" role="alert">
-          <h2>Something went wrong</h2>
+          <h2>Đã xảy ra lỗi</h2>
           <p className="error-boundary-message">{this.state.error.message}</p>
           <Button variant="primary" onClick={() => this.setState({ error: null })}>
-            Try Again
+            Thử lại
           </Button>
         </div>
       );

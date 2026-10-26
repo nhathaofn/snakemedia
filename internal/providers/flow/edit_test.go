@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -276,5 +277,38 @@ func TestMaterializedOutputURLMatchesLiveGetMedia(t *testing.T) {
 	descriptor[8] = "https://lh3.googleusercontent.com/thumbnail"
 	if got := videoOutputURL(record); got != "" {
 		t.Fatal("thumbnail treated as output")
+	}
+}
+
+func TestEditCandidatesReserveTheMostAnEditCosts(t *testing.T) {
+	accounts := testAccountService(t)
+	seedFlowAccount(t, accounts, "edit@example.invalid", true)
+	service := testFlowService(accounts)
+	service.fetchModelsPayload = func(context.Context, session.StoredAccount) (string, error) { return editModelsPayload, nil }
+	valid, err := service.GetValidConnectedAccounts()
+	if err != nil || len(valid) != 1 {
+		t.Fatalf("seeded account not usable: %v", err)
+	}
+	acc := valid[0]
+
+	families, defaultID, err := parseVideoFamilies(editModelsPayload, accountTier(acc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := 0
+	for _, m := range editModels(families, defaultID, accountTier(acc)) {
+		want = max(want, m.MaxCredits)
+	}
+	if want == 0 {
+		t.Fatal("the fixture must price its edit usages")
+	}
+	candidates := service.editCandidates(context.Background(), []session.StoredAccount{acc})
+	if len(candidates) != 1 || candidates[0].account.ID != acc.ID || candidates[0].cost != want {
+		t.Fatalf("want one candidate costing %d, got %+v", want, candidates)
+	}
+	service.fetchModelsPayload = func(context.Context, session.StoredAccount) (string, error) { return "", errors.New("offline") }
+	service = testFlowService(accounts)
+	if got := service.editCandidates(context.Background(), []session.StoredAccount{acc}); len(got) != 0 {
+		t.Fatalf("an account without a catalogue must not be offered: %+v", got)
 	}
 }

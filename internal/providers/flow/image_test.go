@@ -351,12 +351,12 @@ func TestParseUpsampledImageBytesAcceptsSupportedImagePayloads(t *testing.T) {
 		`["` + pngBase64 + `"]`,
 		`{"image":{"bytes":"` + pngBase64 + `"}}`,
 	} {
-		data, contentType, err := ParseUpsampledImageBytes(payload)
+		data, contentType, err := ParseUpsampledImageBytes(payload, 32<<20)
 		if err != nil || len(data) == 0 || contentType != "image/png" {
 			t.Fatalf("unexpected image decode: type=%q bytes=%d error=%v", contentType, len(data), err)
 		}
 	}
-	if _, _, err := ParseUpsampledImageBytes(`{"image":"not-an-image"}`); err == nil {
+	if _, _, err := ParseUpsampledImageBytes(`{"image":"not-an-image"}`, 32<<20); err == nil {
 		t.Fatal("expected invalid image data to be rejected")
 	}
 }

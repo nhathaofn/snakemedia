@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"SnakeMedia/internal/logger"
@@ -132,6 +133,11 @@ func (s *Provider) resolveProject(ctx context.Context, client *chrome.FlowClient
 	if requested != "" {
 		return requested, nil
 	}
+	// Serialize per account so two first requests cannot both create a project.
+	lockValue, _ := s.projectResolveLocks.LoadOrStore(acc.ID, &sync.Mutex{})
+	resolveLock := lockValue.(*sync.Mutex)
+	resolveLock.Lock()
+	defer resolveLock.Unlock()
 	s.mu.Lock()
 	cached := s.projects[acc.ID]
 	s.mu.Unlock()

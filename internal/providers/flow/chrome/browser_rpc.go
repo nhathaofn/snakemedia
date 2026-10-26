@@ -25,8 +25,7 @@ func (f *FlowClient) DoFromBrowser(ctx context.Context, port int, rpcID, fReq st
 		return nil, err
 	}
 	for _, page := range pages {
-		u, err := url.Parse(page.URL)
-		if err != nil || page.Type != "page" || u.Scheme != "https" || u.Host != "flow.google.com" {
+		if _, ok := page.flowPage(); !ok {
 			continue
 		}
 		if !localWebSocket(page.WebSocketDebuggerURL, port) {

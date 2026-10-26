@@ -21,6 +21,14 @@ type AccountConfig struct {
 	VideoGenerationTimeoutSeconds int `json:"videoGenerationTimeoutSeconds"`
 	// VideoPollIntervalMS is the delay between video status checks.
 	VideoPollIntervalMS int `json:"videoPollIntervalMs"`
+	// MaxConcurrentRequestsPerAccount caps generations one account runs at once.
+	MaxConcurrentRequestsPerAccount int `json:"maxConcurrentRequestsPerAccount"`
+	// SignedOutReads is how many consecutive anonymous Flow page reads count as
+	// signed out, so a page still filling in its session is not misread.
+	SignedOutReads int `json:"signedOutReads"`
+	// RPCCacheSeconds is how long a failed RPC discovery result is reused
+	// before the scripts are scanned again.
+	RPCCacheSeconds int `json:"rpcCacheSeconds"`
 }
 
 func DefaultAccountConfig() AccountConfig {
@@ -28,12 +36,15 @@ func DefaultAccountConfig() AccountConfig {
 		PollIntervalMS: 1500, PollMaxIntervalMS: 15000,
 		LoginTimeoutSeconds: 300, RequestTimeoutSeconds: 15,
 		BrowserStartupTimeoutSeconds: 30, RefreshCooldownSeconds: 15,
-		MaxResponseBytes:              4 << 20,
-		MaxDiscoveryScripts:           16,
-		MaxDiscoveryBytes:             16 << 20,
-		GenerationTimeoutSeconds:      120,
-		VideoGenerationTimeoutSeconds: 600,
-		VideoPollIntervalMS:           5000,
+		MaxResponseBytes:                4 << 20,
+		MaxDiscoveryScripts:             16,
+		MaxDiscoveryBytes:               16 << 20,
+		GenerationTimeoutSeconds:        120,
+		VideoGenerationTimeoutSeconds:   600,
+		VideoPollIntervalMS:             5000,
+		MaxConcurrentRequestsPerAccount: 2,
+		SignedOutReads:                  3,
+		RPCCacheSeconds:                 15,
 	}
 }
 
@@ -61,6 +72,12 @@ func (c AccountConfig) Validate() error {
 	}
 	if c.MaxDiscoveryScripts < 1 || c.MaxDiscoveryScripts > 128 {
 		return fmt.Errorf("accounts: discovery script limit must be between 1 and 128")
+	}
+	if c.MaxConcurrentRequestsPerAccount < 1 || c.MaxConcurrentRequestsPerAccount > 10 {
+		return fmt.Errorf("accounts: concurrent requests per account must be between 1 and 10")
+	}
+	if c.SignedOutReads < 1 || c.SignedOutReads > 20 || c.RPCCacheSeconds < 1 || c.RPCCacheSeconds > 3600 {
+		return fmt.Errorf("accounts: invalid signed-out read count or RPC cache duration")
 	}
 	return nil
 }

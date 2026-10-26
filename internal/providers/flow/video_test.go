@@ -1,9 +1,9 @@
 package flow
 
 import (
-	"SnakeMedia/internal/providers/flow/session"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -12,6 +12,7 @@ import (
 
 	"SnakeMedia/internal/models"
 	"SnakeMedia/internal/providers/flow/chrome"
+	"SnakeMedia/internal/providers/flow/session"
 )
 
 // videoModelsPayload follows the captured HTrJv payload, trimmed to video fields.
@@ -292,6 +293,38 @@ func TestGenerateVideosValidatesAndSelectsVariant(t *testing.T) {
 	}
 }
 
+func TestGenerateVideosReconcilesAnUncertainRequestInsteadOfResubmitting(t *testing.T) {
+	accounts := testAccountService(t)
+	acc := seedFlowAccount(t, accounts, "first@example.invalid", true)
+	service := testFlowService(accounts)
+	request := GenerateVideoRequest{RequestID: "fc2dd555-f48a-4cf2-8572-71d1c285b7e1", Prompt: "a fox", ModelID: "veo_3_1_fast", AspectRatio: "16:9", Duration: 8, Resolution: "720p", Count: 1}
+	fingerprintRequest := request
+	fingerprintRequest.RequestID = ""
+	fingerprint, err := requestFingerprint(fingerprintRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := newGenerationJob(request.RequestID, generationJobVideo, fingerprint, acc.ID)
+	job.Phase, job.ProjectID = generationSubmitting, "project-accepted-by-flow"
+	job.ClientIDs = []string{"C3EE093D-76E2-40A2-A044-A00908E70FA0"}
+	job.VideoTemplate = GeneratedVideoItem{JobID: job.ID, Prompt: request.Prompt, Model: "veo_3_1_t2v_fast_landscape", AspectRatio: request.AspectRatio, Duration: request.Duration, Resolution: request.Resolution}
+	if err := service.saveGenerationJob(job); err != nil {
+		t.Fatal(err)
+	}
+	dispatches := 0
+	service.generateLiveVideos = func(context.Context, session.StoredAccount, GenerateVideoRequest, string) ([]GeneratedVideoItem, error) {
+		dispatches++
+		return nil, errors.New("must not dispatch a second request")
+	}
+	result := service.GenerateVideos(context.Background(), request)
+	if !result.Success || len(result.Data) != 1 || !result.Data[0].Pending {
+		t.Fatalf("uncertain request must stay pending while reconciliation is unavailable: %+v", result)
+	}
+	if dispatches != 0 {
+		t.Fatalf("reconciliation dispatched %d new generation requests", dispatches)
+	}
+}
+
 func TestVideoFailureDetailExplainsFlowSafetyRejection(t *testing.T) {
 	detail := videoFailureDetail(`[3,"PUBLIC_ERROR_DANGER_FILTER"]`)
 	if !strings.Contains(detail, "Flow đã từ chối yêu cầu này") || strings.Contains(detail, publicErrorDangerFilter) {
@@ -299,6 +332,25 @@ func TestVideoFailureDetailExplainsFlowSafetyRejection(t *testing.T) {
 	}
 	if got := videoFailureDetail("other Flow error"); got != "other Flow error" {
 		t.Fatalf("unmapped Flow error changed: %q", got)
+	}
+}
+
+func TestCollectVideoItemsUsesEditBehaviourOnlyForEdits(t *testing.T) {
+	service := testFlowService(testAccountService(t))
+	failed := []pendingVideo{{name: "media-1", status: 3, errMsg: `[3,"PUBLIC_ERROR_DANGER_FILTER"]`}}
+	// Journaled generations carry a JobID too; it must not switch to edit wording.
+	template := GeneratedVideoItem{JobID: "fc2dd555-f48a-4cf2-8572-71d1c285b7e1", Prompt: "a fox", Duration: 8}
+
+	generated := service.collectVideoItems(context.Background(), nil, failed, template, false)
+	if len(generated) != 1 || !strings.Contains(generated[0].Error, "Flow đã từ chối yêu cầu này") {
+		t.Fatalf("generated video used the wrong failure wording: %+v", generated)
+	}
+	edited := service.collectVideoItems(context.Background(), nil, failed, template, true)
+	if len(edited) != 1 || !strings.Contains(edited[0].Error, "video nguồn") {
+		t.Fatalf("edited video used the wrong failure wording: %+v", edited)
+	}
+	if generated[0].JobID != template.JobID || generated[0].Duration != 8 {
+		t.Fatalf("template settings were not carried into the item: %+v", generated[0])
 	}
 }
 
@@ -369,5 +421,12 @@ func TestGenerateVideosEnforcesReferenceLimit(t *testing.T) {
 	req.References = []ReferenceImage{{Base64: "AAAA", MimeType: "image/gif", FileName: "a.gif"}}
 	if res := service.GenerateVideos(context.Background(), req); res.Success || res.Code != models.CodeInvalidArgument {
 		t.Fatalf("an unsupported reference format was accepted: %+v", res)
+	}
+}
+
+func TestRedactSignedURLsKeepsPathButDropsSignature(t *testing.T) {
+	got := redactSignedURLs(`["https://storage.googleapis.com/v/abc.mp4?GoogleAccessId=x&Signature=secret",2]`)
+	if strings.Contains(got, "secret") || !strings.Contains(got, "https://storage.googleapis.com/v/abc.mp4?<redacted>") {
+		t.Fatalf("signature not redacted: %s", got)
 	}
 }

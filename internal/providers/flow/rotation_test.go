@@ -92,8 +92,8 @@ func TestAccountRotationQueuesAtTwoConcurrentRequests(t *testing.T) {
 	provider.rotationMu.Lock()
 	active := provider.rotationAccounts[account.ID].active
 	provider.rotationMu.Unlock()
-	if active != maxConcurrentRequestsPerAccount {
-		t.Fatalf("active requests = %d; want cap %d", active, maxConcurrentRequestsPerAccount)
+	if active != provider.accountConcurrency() {
+		t.Fatalf("active requests = %d; want cap %d", active, provider.accountConcurrency())
 	}
 }
 

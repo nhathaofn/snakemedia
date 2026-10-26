@@ -28,6 +28,7 @@ const (
 	MethodProjectContents         = "/FlowService.GetProjectContents"
 	MethodMedia                   = "/FlowService.GetMedia"
 	MethodUploadImage             = "/FlowService.UploadImage"
+	MethodGenerateImages          = "/FlowService.BatchGenerateImages"
 	MethodUpsampleImage           = "/FlowService.UpsampleImage"
 	MethodGenerateVideoText       = "/VideoFxService.BatchAsyncGenerateVideoText"
 	MethodGenerateVideoReferences = "/VideoFxService.BatchAsyncGenerateVideoReferenceImages"
@@ -42,6 +43,7 @@ type RPCRegistry struct {
 	ProjectContents         string `json:"projectContents,omitempty"`
 	Media                   string `json:"media,omitempty"`
 	UploadImage             string `json:"uploadImage,omitempty"`
+	GenerateImages          string `json:"generateImages,omitempty"`
 	UpsampleImage           string `json:"upsampleImage,omitempty"`
 	GenerateVideoText       string `json:"generateVideoText,omitempty"`
 	GenerateVideoReferences string `json:"generateVideoReferences,omitempty"`
@@ -71,7 +73,7 @@ func scriptOrigin(raw string) bool {
 		return false
 	}
 	switch u.Hostname() {
-	case "www.gstatic.com", "ssl.gstatic.com", "flow.google.com":
+	case "www.gstatic.com", "ssl.gstatic.com", FlowHost:
 		return true
 	}
 	return false
@@ -142,8 +144,8 @@ func discoverRPCs(ctx context.Context, conn *websocket.Conn, build string, polic
 	sort.Slice(sources, func(i, j int) bool {
 		first, _ := url.Parse(sources[i])
 		second, _ := url.Parse(sources[j])
-		if (first.Hostname() == "flow.google.com") != (second.Hostname() == "flow.google.com") {
-			return first.Hostname() != "flow.google.com"
+		if (first.Hostname() == FlowHost) != (second.Hostname() == FlowHost) {
+			return first.Hostname() != FlowHost
 		}
 		return sources[i] < sources[j]
 	})
@@ -167,7 +169,7 @@ func discoverRPCs(ctx context.Context, conn *websocket.Conn, build string, polic
 		return nil, errors.New("cannot read script source")
 	}, required...)
 	if len(required) == 0 || err == nil {
-		registryCache.Store(cacheKey, registryEntry{Registry: registry, Err: err, Until: time.Now().Add(time.Duration(policy.PollMaxIntervalMS) * time.Millisecond)})
+		registryCache.Store(cacheKey, registryEntry{Registry: registry, Err: err, Until: time.Now().Add(time.Duration(policy.RPCCacheSeconds) * time.Second)})
 	}
 	return registry, err
 }
@@ -263,6 +265,8 @@ func (r *RPCRegistry) field(method string) *string {
 		return &r.Media
 	case MethodUploadImage:
 		return &r.UploadImage
+	case MethodGenerateImages:
+		return &r.GenerateImages
 	case MethodUpsampleImage:
 		return &r.UpsampleImage
 	case MethodGenerateVideoText:
@@ -301,8 +305,7 @@ func DiscoverFlowRPCs(ctx context.Context, port int, build string, policy config
 		return RPCRegistry{}, err
 	}
 	for _, page := range pages {
-		u, err := url.Parse(page.URL)
-		if err != nil || page.Type != "page" || u.Scheme != "https" || u.Host != "flow.google.com" {
+		if _, ok := page.flowPage(); !ok {
 			continue
 		}
 		if !localWebSocket(page.WebSocketDebuggerURL, port) {

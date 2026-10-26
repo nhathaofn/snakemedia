@@ -1,12 +1,11 @@
 package chrome
 
 import (
-	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
-	"time"
+
+	"SnakeMedia/internal/logger"
 )
 
 // LaunchOptions holds dynamic options for starting Chrome.
@@ -50,22 +49,9 @@ func Launch(opts LaunchOptions) (*exec.Cmd, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("chrome: start process: %w", err)
 	}
+	if err := bindToApp(cmd); err != nil {
+		logger.Get().Warn("cannot tie Chrome to the app lifetime", "error", err)
+	}
 
 	return cmd, nil
-}
-
-// IsPortOpen checks if the Chrome CDP endpoint responds on the given port.
-func IsPortOpen(ctx context.Context, port int) bool {
-	url := fmt.Sprintf("http://127.0.0.1:%d/json/version", port)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return false
-	}
-	client := &http.Client{Timeout: 1 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
 }

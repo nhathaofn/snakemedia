@@ -39,7 +39,7 @@ export const Sidebar: React.FC = () => {
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const version = useAppStore((s) => s.appInfo?.version);
-  const toggleLabel = sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
+  const toggleLabel = sidebarCollapsed ? 'Mở rộng thanh bên' : 'Thu gọn thanh bên';
 
   return (
     <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>

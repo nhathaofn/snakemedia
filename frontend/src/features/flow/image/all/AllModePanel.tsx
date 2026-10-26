@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { FolderOpen } from 'lucide-react';
-import { api } from '../../../../services/api';
+import { api, isTransportFailure } from '../../../../services/api';
 import { Button } from '../../../../components/ui';
 import { useAppStore } from '../../../../stores';
 import { FlowImageProjectMode, FlowImageQuality, GenerateImageRequest } from '../../../../types';
@@ -12,6 +13,7 @@ import {
   ratioLabel,
   selectedModelOf,
   useModelCatalog,
+  useRotationCount,
   useStudioConfig,
 } from '../../shared';
 import {
@@ -29,14 +31,57 @@ const DEFAULT_IMAGE_QUALITIES = [FlowImageQuality.OneK];
 /** All-mode image settings; shared model and reference choices, with its own ratio and thread count. */
 export const AllModePanel: React.FC = () => {
   const { config, error: configError } = useStudioConfig();
-  const store = useFlowImageStore();
+  useEffect(() => {
+    let active = true;
+    void api.listPendingImageGenerations(FlowImageProjectMode.All).then((response) => {
+      if (!active || !response.success || !response.data?.length) return;
+      const current = useFlowImageStore.getState();
+      current.restoreAllPrompts(response.data, current.allImageQuality);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (config && !useFlowImageStore.getState().allAspectRatio) {
+      useFlowImageStore.getState().setAllAspectRatio(config.defaultBatchRatio);
+    }
+  }, [config]);
+  const store = useFlowImageStore(
+    useShallow((s) => ({
+      addReferenceImages: s.addReferenceImages,
+      allAspectRatio: s.allAspectRatio,
+      allImageCountPerPrompt: s.allImageCountPerPrompt,
+      allPaused: s.allPaused,
+      allProcessing: s.allProcessing,
+      allPrompts: s.allPrompts,
+      allReferenceMode: s.allReferenceMode,
+      allStopRequested: s.allStopRequested,
+      allThreads: s.allThreads,
+      allWaitMode: s.allWaitMode,
+      hideGeminiLogo: s.hideGeminiLogo,
+      imageOutputDirectory: s.imageOutputDirectory,
+      models: s.models,
+      referenceImages: s.referenceImages,
+      removeReferenceImage: s.removeReferenceImage,
+      selectedModel: s.selectedModel,
+      setAllAspectRatio: s.setAllAspectRatio,
+      setAllImageCountPerPrompt: s.setAllImageCountPerPrompt,
+      setAllReferenceMode: s.setAllReferenceMode,
+      setAllThreads: s.setAllThreads,
+      setAllWaitMode: s.setAllWaitMode,
+      setHideGeminiLogo: s.setHideGeminiLogo,
+      setModels: s.setModels,
+      setSelectedModel: s.setSelectedModel,
+    })),
+  );
   const allImageQuality = useFlowImageStore((state) => state.allImageQuality);
   const setAllImageQuality = useFlowImageStore((state) => state.setAllImageQuality);
   const model = useFlowImageStore(selectedModelOf);
   const addToast = useAppStore((state) => state.addToast);
   const { loading, error } = useModelCatalog(api.getImageModels, store.setModels);
   const [promptListOpen, setPromptListOpen] = useState(false);
-  const [readyAccountCount, setReadyAccountCount] = useState<number | null>(null);
+  const readyAccountCount = useRotationCount();
   const [expandedConfig, setExpandedConfig] = useState<'basic' | 'advanced' | null>('basic');
   const hasTasksToProcess = store.allPrompts.some(
     (task) => task.status === 'queued' || task.status === 'failed' || task.status === 'save-failed',
@@ -53,18 +98,6 @@ export const AllModePanel: React.FC = () => {
   const availableImageQualities = model?.availableQualities?.length
     ? model.availableQualities
     : DEFAULT_IMAGE_QUALITIES;
-
-  useEffect(() => {
-    let active = true;
-    void api.getActiveRotationCount().then((response) => {
-      if (active && response.success && typeof response.data === 'number') {
-        setReadyAccountCount(response.data);
-      }
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
 
   useEffect(() => {
     if (store.imageOutputDirectory) return;
@@ -107,7 +140,7 @@ export const AllModePanel: React.FC = () => {
       addToast({
         type: 'error',
         title: 'Chưa có model ảnh',
-        message: 'Kiểm tra tài khoản ở mục Account rồi thử lại.',
+        message: 'Kiểm tra tài khoản ở mục Tài khoản rồi thử lại.',
       });
       return;
     }
@@ -228,30 +261,63 @@ export const AllModePanel: React.FC = () => {
             continue;
           }
 
-          const response = await api.generateImages(
-            GenerateImageRequest.createFrom({
-              prompt: task.prompt,
-              modelId: task.modelId || current.selectedModel,
-              aspectRatio: task.aspectRatio || current.allAspectRatio,
-              quality: task.quality,
-              projectMode: FlowImageProjectMode.All,
-              count: task.count,
-              references: task.references.map((image) => ({
-                base64: image.base64,
-                mimeType: image.mimeType,
-                fileName: image.name,
-              })),
-            }),
-          );
+          // Reuse the ID only when the last attempt's outcome is unknown; a retry
+          // after a definite failure must be a new request, not the cached one.
+          const requestId = task.requestId ?? crypto.randomUUID();
+          useFlowImageStore.getState().updateAllPrompt(task.id, { requestId });
+          // A restored job lost its references, so it is only checked again;
+          // resending it would not match the job Flow already has.
+          const response =
+            task.restored && task.requestId
+              ? await api.resumeImageGeneration(requestId)
+              : await api.generateImages(
+                  GenerateImageRequest.createFrom({
+                    requestId,
+                    prompt: task.prompt,
+                    modelId: task.modelId || current.selectedModel,
+                    aspectRatio: task.aspectRatio || current.allAspectRatio,
+                    quality: task.quality,
+                    projectMode: FlowImageProjectMode.All,
+                    count: task.count,
+                    references: task.references.map((image) => ({
+                      base64: image.base64,
+                      mimeType: image.mimeType,
+                      fileName: image.name,
+                    })),
+                  }),
+                );
           if (!response.success || !response.data) {
             const message = response.error ?? 'Không rõ lỗi.';
-            useFlowImageStore
-              .getState()
-              .updateAllPrompt(task.id, { status: 'failed', error: message, outputDirectory });
+            useFlowImageStore.getState().updateAllPrompt(task.id, {
+              status: 'failed',
+              error: message,
+              outputDirectory,
+              // A definite answer ends the old request; a restored task is then
+              // sent fresh next time.
+              ...(isTransportFailure(response)
+                ? { requestId }
+                : { requestId: undefined, restored: false }),
+            });
             failed.push({ prompt: task.prompt, message });
             continue;
           }
           current.addItems(response.data);
+          if (!response.data.some((item) => item.pending)) {
+            useFlowImageStore.getState().updateAllPrompt(task.id, { requestId: undefined });
+          }
+          if (response.data.some((item) => item.pending)) {
+            const message =
+              response.data.find((item) => item.pending)?.error ??
+              'Flow đang đối soát job đã nhận.';
+            useFlowImageStore.getState().updateAllPrompt(task.id, {
+              status: 'failed',
+              results: response.data,
+              error: message,
+              outputDirectory,
+            });
+            failed.push({ prompt: task.prompt, message });
+            continue;
+          }
           const firstError = response.data.find((item) => item.error)?.error;
           if (response.data.length === 0 || response.data.every((item) => item.error)) {
             const message = firstError ?? 'Không tạo được ảnh.';
@@ -351,8 +417,8 @@ export const AllModePanel: React.FC = () => {
           <span>Lỗi</span>
         </div>
         <div className="flow-image-all-stat is-accounts">
-          <strong className={readyAccountCount === null ? 'is-missing' : undefined}>
-            {readyAccountCount ?? 'Chưa có'}
+          <strong className={readyAccountCount === 0 ? 'is-missing' : undefined}>
+            {readyAccountCount}
           </strong>
           <span>Tài khoản</span>
         </div>

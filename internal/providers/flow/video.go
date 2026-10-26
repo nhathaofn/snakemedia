@@ -73,6 +73,7 @@ var videoFailedStatuses = []int{4, 5, 7}
 
 // GenerateVideoRequest is a text-to-video request.
 type GenerateVideoRequest struct {
+	RequestID   string `json:"requestId,omitempty"`
 	Prompt      string `json:"prompt"`
 	ModelID     string `json:"modelId"`
 	AspectRatio string `json:"aspectRatio"`
@@ -81,8 +82,9 @@ type GenerateVideoRequest struct {
 	Count       int    `json:"count"`
 	ProjectID   string `json:"projectId,omitempty"`
 	// References are images the video must follow (reference-to-video).
-	References []ReferenceImage `json:"references,omitempty"`
-	onAccepted func()
+	References  []ReferenceImage `json:"references,omitempty"`
+	fingerprint string
+	onAccepted  func()
 }
 
 // GeneratedVideoItem is one requested output video.
@@ -207,6 +209,39 @@ func (s *Provider) GenerateVideos(ctx context.Context, req GenerateVideoRequest)
 	if err := validateVideoRequest(req); err != nil {
 		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeInvalidArgument)
 	}
+	requestID, err := prepareRequestID(req.RequestID)
+	if err != nil {
+		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeInvalidArgument)
+	}
+	req.RequestID = requestID
+	fingerprintReq := req
+	fingerprintReq.RequestID = ""
+	fingerprintReq.fingerprint = ""
+	fingerprintReq.onAccepted = nil
+	fingerprint, err := requestFingerprint(fingerprintReq)
+	if err != nil {
+		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeInternal)
+	}
+	req.fingerprint = fingerprint
+	lock := s.jobLock(req.RequestID)
+	if !lock.TryLock() {
+		return models.SuccessResponse(pendingVideoItems(newGenerationJob(req.RequestID, generationJobVideo, fingerprint, ""), req))
+	}
+	defer lock.Unlock()
+	job, exists, jobErr := s.checkGenerationJob(req.RequestID, generationJobVideo, fingerprint)
+	if jobErr != nil {
+		return models.ErrorResponse[[]GeneratedVideoItem](jobErr.Error(), models.CodeInvalidArgument)
+	}
+	if exists {
+		switch job.Phase {
+		case generationComplete:
+			return models.SuccessResponse(job.VideoResult)
+		case generationRejected:
+			return models.ErrorResponse[[]GeneratedVideoItem](job.Message, models.CodeUnavailable)
+		default:
+			return s.resumeVideoGeneration(ctx, job, req)
+		}
+	}
 	choices, code, err := s.videoGenerationChoices(ctx, req)
 	if err != nil {
 		return models.ErrorResponse[[]GeneratedVideoItem]("Không thể tạo video: "+err.Error(), code)
@@ -243,7 +278,7 @@ func (s *Provider) GenerateVideos(ctx context.Context, req GenerateVideoRequest)
 		remaining = slices.Delete(remaining, idx, idx+1)
 	}
 	if lease == nil {
-		return models.ErrorResponse[[]GeneratedVideoItem]("Các tài khoản đã đăng xuất khỏi Google ("+strings.Join(skipped, ", ")+"); hãy đăng nhập lại ở mục Account.", models.CodeUnavailable)
+		return models.ErrorResponse[[]GeneratedVideoItem]("Các tài khoản đã đăng xuất khỏi Google ("+strings.Join(skipped, ", ")+"); hãy đăng nhập lại ở mục Tài khoản.", models.CodeUnavailable)
 	}
 	defer func() {
 		releaseProfile()
@@ -256,6 +291,24 @@ func (s *Provider) GenerateVideos(ctx context.Context, req GenerateVideoRequest)
 		s.refreshLiveCredits(ctx, account.ID)
 	}
 	if err != nil {
+		job, readErr := s.loadGenerationJob(req.RequestID)
+		if readErr == nil && (job.Phase == generationSubmitting || job.Phase == generationAccepted) {
+			if definiteMutationRejection(err) {
+				job.Phase, job.Message = generationRejected, err.Error()
+				if saveErr := s.saveGenerationJob(job); saveErr != nil {
+					return models.ErrorResponse[[]GeneratedVideoItem](saveErr.Error(), models.CodeInternal)
+				}
+				return models.ErrorResponse[[]GeneratedVideoItem](fmt.Sprintf("Lỗi khi tạo video từ Google Flow (%s): %s", account.Email, err.Error()), models.CodeUnavailable)
+			}
+			lease.commitVideoSpend()
+			pending := pendingVideoItems(job, req)
+			for i := range pending {
+				pending[i].ModelName = displayName(chosen.family.name)
+			}
+			job.Phase, job.VideoResult = generationAccepted, append([]GeneratedVideoItem(nil), pending...)
+			_ = s.saveGenerationJob(job)
+			return models.SuccessResponse(pending)
+		}
 		s.forgetProject(account.ID)
 		return models.ErrorResponse[[]GeneratedVideoItem](
 			fmt.Sprintf("Lỗi khi tạo video từ Google Flow (%s): %s", account.Email, err.Error()),
@@ -265,6 +318,19 @@ func (s *Provider) GenerateVideos(ctx context.Context, req GenerateVideoRequest)
 	lease.commitVideoSpend()
 	for i := range videos {
 		videos[i].ModelName = displayName(chosen.family.name)
+		videos[i].JobID = req.RequestID
+	}
+	if job, readErr := s.loadGenerationJob(req.RequestID); readErr == nil {
+		job.VideoTemplate.ModelName = displayName(chosen.family.name)
+		job.VideoResult = append([]GeneratedVideoItem(nil), videos...)
+		if slices.ContainsFunc(videos, func(item GeneratedVideoItem) bool { return item.Pending }) {
+			job.Phase = generationAccepted
+		} else {
+			job.Phase, job.Message = generationComplete, ""
+		}
+		if err := s.saveGenerationJob(job); err != nil {
+			return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeInternal)
+		}
 	}
 	return models.SuccessResponse(videos)
 }
@@ -275,7 +341,11 @@ func (s *Provider) GenerateVideos(ctx context.Context, req GenerateVideoRequest)
 // Flow's own client sends one item per requested output and, for any resolution
 // other than 720p, adds field 8 = [resolution] (bundle builder u(); not in the capture).
 func BuildVideoTextRequest(prompt, projectID, variantKey string, aspect, resolution, count int, recaptchaToken string) ([]byte, error) {
-	return buildVideoRequest(prompt, projectID, variantKey, aspect, resolution, count, nil, recaptchaToken)
+	return buildVideoRequest(prompt, projectID, variantKey, aspect, resolution, count, nil, recaptchaToken, nil)
+}
+
+func BuildVideoTextRequestWithClientIDs(prompt, projectID, variantKey string, aspect, resolution, count int, recaptchaToken string, clientIDs []string) ([]byte, error) {
+	return buildVideoRequest(prompt, projectID, variantKey, aspect, resolution, count, nil, recaptchaToken, clientIDs)
 }
 
 // BuildVideoReferenceRequest builds the MZZa6b payload as captured by SolwStudio:
@@ -285,33 +355,48 @@ func BuildVideoReferenceRequest(prompt, projectID, variantKey string, aspect, re
 	if len(mediaIDs) == 0 {
 		return nil, errors.New("thiếu ảnh tham chiếu")
 	}
-	return buildVideoRequest(prompt, projectID, variantKey, aspect, resolution, count, mediaIDs, recaptchaToken)
+	return buildVideoRequest(prompt, projectID, variantKey, aspect, resolution, count, mediaIDs, recaptchaToken, nil)
 }
 
-func buildVideoRequest(prompt, projectID, variantKey string, aspect, resolution, count int, mediaIDs []string, recaptchaToken string) ([]byte, error) {
+func BuildVideoReferenceRequestWithClientIDs(prompt, projectID, variantKey string, aspect, resolution, count int, mediaIDs []string, recaptchaToken string, clientIDs []string) ([]byte, error) {
+	if len(mediaIDs) == 0 {
+		return nil, errors.New("thiếu ảnh tham chiếu")
+	}
+	return buildVideoRequest(prompt, projectID, variantKey, aspect, resolution, count, mediaIDs, recaptchaToken, clientIDs)
+}
+
+func buildVideoRequest(prompt, projectID, variantKey string, aspect, resolution, count int, mediaIDs []string, recaptchaToken string, clientIDs []string) ([]byte, error) {
 	if strings.TrimSpace(prompt) == "" || projectID == "" || variantKey == "" {
 		return nil, errors.New("thiếu prompt, project ID hoặc model video")
 	}
 	if count < 1 || count > MaxVideosPerRequest {
 		return nil, fmt.Errorf("số lượng video phải từ 1 đến %d", MaxVideosPerRequest)
 	}
+	if len(clientIDs) != 0 && len(clientIDs) != count {
+		return nil, errors.New("số client ID không khớp số video yêu cầu")
+	}
 	if aspect != 1 && aspect != 2 {
 		return nil, fmt.Errorf("tỉ lệ video %d không được hỗ trợ", aspect)
 	}
-	clientID := func() string { return strings.ToUpper(uuid.NewString()) }
+	newClientID := func() string { return strings.ToUpper(uuid.NewString()) }
 	refs := make([]any, 0, len(mediaIDs))
 	for _, id := range mediaIDs {
 		refs = append(refs, []any{nil, id})
 	}
 	items := make([]any, 0, count)
 	for i := 0; i < count; i++ {
+		workflowID := newClientID()
+		clientID := newClientID()
+		if len(clientIDs) > 0 {
+			clientID = strings.ToUpper(clientIDs[i])
+		}
 		item := []any{[]any{nil, nil, [][][]string{{{prompt}}}}}
 		resolutionIndex := 7 // field 8 of a text request
 		if len(refs) > 0 {
 			item = append(item, refs)
 			resolutionIndex = 11 // field 12 of a reference request
 		}
-		item = append(item, variantKey, aspect, nil, []any{nil, nil, nil, nil, clientID(), clientID()})
+		item = append(item, variantKey, aspect, nil, []any{nil, nil, nil, nil, workflowID, clientID})
 		if resolution != videoResolution720p {
 			for len(item) < resolutionIndex {
 				item = append(item, nil)
@@ -320,7 +405,7 @@ func buildVideoRequest(prompt, projectID, variantKey string, aspect, resolution,
 		}
 		items = append(items, item)
 	}
-	return json.Marshal([]any{items, flowContext(projectID, recaptchaToken), []any{clientID(), 2}})
+	return json.Marshal([]any{items, flowContext(projectID, recaptchaToken), []any{newClientID(), 2}})
 }
 
 type pendingVideo struct {
@@ -463,12 +548,22 @@ func editVideoFailureDetail(raw string) string {
 	return videoFailureDetail(raw)
 }
 
+// maxLoggedReplyBytes bounds a debug-logged Flow reply.
+const maxLoggedReplyBytes = 4000
+
+// signedQuery matches the query string of a URL; Flow media URLs carry their
+// access signature there, which must not end up in log files.
+var signedQuery = regexp.MustCompile(`(https?://[^\s"'\\?]+)\?[^\s"'\\]*`)
+
 func logRawVideoReply(rpcID, payload string) {
-	limit := len(payload)
-	if limit > 4000 {
-		limit = 4000
+	if len(payload) > maxLoggedReplyBytes {
+		payload = payload[:maxLoggedReplyBytes]
 	}
-	logger.Get().Debug("flow video reply", "rpc", rpcID, "payload", payload[:limit])
+	logger.Get().Debug("flow video reply", "rpc", rpcID, "payload", redactSignedURLs(payload))
+}
+
+func redactSignedURLs(text string) string {
+	return signedQuery.ReplaceAllString(text, "$1?<redacted>")
 }
 
 // generateVideosFromAccount runs one text-to-video request and follows it to completion.
@@ -495,76 +590,78 @@ func (s *Provider) generateVideosFromAccount(ctx context.Context, acc session.St
 		return nil, err
 	}
 
-	// 1. Ensure headless browser and mint reCAPTCHA Enterprise token
-	var recaptchaToken string
-	if s.accounts == nil {
-		return nil, errors.New("dịch vụ tài khoản chưa được liên kết để cấp token reCAPTCHA")
+	// 1. Upload references, then mint the generation token last so it is fresh.
+	browser, err := s.generationBrowser(ctx, acc)
+	if err != nil {
+		return nil, err
 	}
-
-	browser, bErr := s.accounts.EnsureAccountHeadlessBrowser(ctx, acc)
-	if bErr != nil {
-		return nil, fmt.Errorf("không khởi động được trình duyệt Chrome để cấp bảo mật: %w", bErr)
-	}
-	if browser == nil {
-		return nil, errors.New("trình duyệt Chrome chưa được khởi tạo")
-	}
-
 	policy := s.cfg.Get().Accounts
-	tok, tErr := chrome.MintRecaptchaToken(ctx, browser.Port, policy, chrome.ActionVideoGeneration)
-	if tErr != nil {
-		return nil, fmt.Errorf("lỗi cấp token reCAPTCHA Enterprise từ trình duyệt: %w", tErr)
+	refMediaIDs, err := s.uploadReferences(ctx, client, acc, browser, policy, req.References, projectID)
+	if err != nil {
+		return nil, err
 	}
-	if tok == "" {
-		return nil, errors.New("token reCAPTCHA Enterprise trả về rỗng")
-	}
-	recaptchaToken = tok
-
-	// 2. If reference images are supplied, upload each one via RPC maseQ
-	var refMediaIDs []string
-	for _, ref := range req.References {
-		uploadToken, uErrToken := chrome.MintRecaptchaToken(ctx, browser.Port, policy, chrome.ActionImageGeneration)
-		if uErrToken != nil || uploadToken == "" {
-			uploadToken = recaptchaToken
-		}
-		mediaID, uErr := s.UploadReferenceImage(ctx, client, acc, ref.Base64, ref.MimeType, ref.FileName, uploadToken, projectID)
-		if uErr != nil {
-			return nil, fmt.Errorf("không tải ảnh tham chiếu %q lên được: %w", ref.FileName, uErr)
-		}
-		refMediaIDs = append(refMediaIDs, mediaID)
+	recaptchaToken, err := mintGenerationToken(ctx, browser, policy, chrome.ActionVideoGeneration)
+	if err != nil {
+		return nil, err
 	}
 
 	// 3. Dispatch text-to-video or reference-to-video using the active Flow build.
+	clientIDs := newGenerationClientIDs(req.Count)
 	rpcID := client.Credentials().RPCs.ID(chrome.MethodGenerateVideoText)
-	inner, err := BuildVideoTextRequest(req.Prompt, projectID, variant, FlowVideoAspect[req.AspectRatio], FlowVideoResolution[req.Resolution], req.Count, recaptchaToken)
+	inner, err := BuildVideoTextRequestWithClientIDs(req.Prompt, projectID, variant, FlowVideoAspect[req.AspectRatio], FlowVideoResolution[req.Resolution], req.Count, recaptchaToken, clientIDs)
 	if len(refMediaIDs) > 0 {
 		rpcID = client.Credentials().RPCs.ID(chrome.MethodGenerateVideoReferences)
-		inner, err = BuildVideoReferenceRequest(req.Prompt, projectID, variant, FlowVideoAspect[req.AspectRatio], FlowVideoResolution[req.Resolution], req.Count, refMediaIDs, recaptchaToken)
+		inner, err = BuildVideoReferenceRequestWithClientIDs(req.Prompt, projectID, variant, FlowVideoAspect[req.AspectRatio], FlowVideoResolution[req.Resolution], req.Count, refMediaIDs, recaptchaToken, clientIDs)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("không đóng gói được payload tạo video: %w", err)
 	}
-	return s.runVideoJob(ctx, client, projectID, rpcID, inner, GeneratedVideoItem{Prompt: req.Prompt, Model: variant, AspectRatio: req.AspectRatio, Duration: req.Duration, Resolution: req.Resolution}, req.onAccepted)
+	template := GeneratedVideoItem{JobID: req.RequestID, Prompt: req.Prompt, Model: variant, AspectRatio: req.AspectRatio, Duration: req.Duration, Resolution: req.Resolution}
+	return s.runVideoJob(ctx, client, acc.ID, req.RequestID, req.fingerprint, projectID, rpcID, inner, clientIDs, template, req.onAccepted)
 }
 
 // runVideoJob submits a built video request (text, reference or edit), follows
 // its videos until Flow finishes them and downloads the results. template
 // carries the request's settings into every returned item.
-func (s *Provider) runVideoJob(ctx context.Context, client *chrome.FlowClient, projectID, rpcID string, inner []byte, template GeneratedVideoItem, accepted ...func()) ([]GeneratedVideoItem, error) {
+func (s *Provider) runVideoJob(ctx context.Context, client *chrome.FlowClient, accountID, requestID, fingerprint, projectID, rpcID string, inner []byte, clientIDs []string, template GeneratedVideoItem, accepted ...func()) ([]GeneratedVideoItem, error) {
 	limits := s.cfg.Get().Accounts
 	fReq, err := BuildBatchEnvelope(rpcID, inner)
 	if err != nil {
 		return nil, err
 	}
+	job := newGenerationJob(requestID, generationJobVideo, fingerprint, accountID)
+	job.Phase, job.ProjectID, job.ClientIDs, job.VideoTemplate = generationSubmitting, projectID, append([]string(nil), clientIDs...), template
+	if err := s.saveGenerationJob(job); err != nil {
+		return nil, fmt.Errorf("không lưu được mã request trước khi gửi Flow: %w", err)
+	}
 	body, err := client.Do(ctx, rpcID, fReq, time.Duration(limits.GenerationTimeoutSeconds)*time.Second)
 	if bytes.Contains(body, []byte("PUBLIC_ERROR_UNUSUAL_ACTIVITY")) {
+		job.Phase, job.Message = generationRejected, "Flow yêu cầu xác thực lại reCAPTCHA trước khi tạo video."
+		_ = s.saveGenerationJob(job)
 		return nil, errors.New("Google Flow yêu cầu xác thực reCAPTCHA Enterprise token (action: VIDEO_GENERATION). Phiên cần được cấp token qua trình duyệt trước khi tạo video.")
 	}
 	if err != nil {
-		return nil, fmt.Errorf("lỗi khi gọi %s: %w", rpcID, err)
+		if definiteMutationRejection(err) {
+			job.Phase, job.Message = generationRejected, err.Error()
+			_ = s.saveGenerationJob(job)
+			return nil, fmt.Errorf("lỗi khi gọi %s: %w", rpcID, err)
+		}
+		if len(accepted) > 0 && accepted[0] != nil {
+			accepted[0]()
+		}
+		return s.reconcileVideoGenerationWithClient(ctx, client, job, template)
 	}
 	payload, err := chrome.ParseRPCPayload(string(body), rpcID)
 	if err != nil {
-		return nil, fmt.Errorf("Google Flow từ chối yêu cầu tạo video: %w", err)
+		if definiteMutationRejection(err) {
+			job.Phase, job.Message = generationRejected, err.Error()
+			_ = s.saveGenerationJob(job)
+			return nil, fmt.Errorf("Google Flow từ chối yêu cầu tạo video: %w", err)
+		}
+		if len(accepted) > 0 && accepted[0] != nil {
+			accepted[0]()
+		}
+		return s.reconcileVideoGenerationWithClient(ctx, client, job, template)
 	}
 	logRawVideoReply(rpcID, payload)
 	// Submit replies list the new media at field 4 (index 3); reference-to-video
@@ -577,20 +674,180 @@ func (s *Provider) runVideoJob(ctx context.Context, client *chrome.FlowClient, p
 		started = parseVideoOperations(payload)
 	}
 	if len(started) == 0 {
-		return nil, fmt.Errorf("Google Flow không trả về video nào đang tạo (phản hồi: %.200s)", payload)
+		if len(accepted) > 0 && accepted[0] != nil {
+			accepted[0]()
+		}
+		return s.reconcileVideoGenerationWithClient(ctx, client, job, template)
 	}
 	if len(accepted) > 0 && accepted[0] != nil {
 		accepted[0]()
 	}
-
-	final, err := s.waitForVideos(ctx, client, projectID, started, limits.VideoPollIntervalMS, limits.VideoGenerationTimeoutSeconds)
-	if err != nil {
+	for i := range started {
+		if i < len(clientIDs) {
+			started[i].clientID = clientIDs[i]
+		}
+	}
+	job.Phase, job.Videos = generationAccepted, trackVideos(started)
+	if err := s.saveGenerationJob(job); err != nil {
 		return nil, err
 	}
-	return s.collectVideoItems(ctx, client, final, template), nil
+	return s.followGenerationVideos(ctx, client, job, started, template)
 }
 
-func (s *Provider) collectVideoItems(ctx context.Context, client *chrome.FlowClient, final []pendingVideo, template GeneratedVideoItem) []GeneratedVideoItem {
+func (s *Provider) resumeVideoGeneration(ctx context.Context, job generationJob, req GenerateVideoRequest) models.Response[[]GeneratedVideoItem] {
+	pending := pendingVideoItems(job, req)
+	if job.AccountID == "" || job.ProjectID == "" || len(job.ClientIDs) == 0 {
+		return models.SuccessResponse(pending)
+	}
+	acc, release, err := s.readyOwnedAccount(ctx, job.AccountID)
+	if err != nil {
+		return models.SuccessResponse(pending)
+	}
+	defer release()
+	client, err := s.flowClient(ctx, *acc, chrome.MethodProjectContents, chrome.MethodMedia, chrome.MethodVideoStatus)
+	if err != nil {
+		return models.SuccessResponse(pending)
+	}
+	defer s.keepCredentials(*acc, client)
+	template := job.VideoTemplate
+	if template.Prompt == "" {
+		template = GeneratedVideoItem{JobID: job.ID, Prompt: req.Prompt, Model: req.ModelID, AspectRatio: req.AspectRatio, Duration: req.Duration, Resolution: req.Resolution}
+	}
+	items, err := s.reconcileVideoGenerationWithClient(ctx, client, job, template)
+	if errors.Is(err, errLostSubmission) {
+		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeUnavailable)
+	}
+	if err != nil {
+		return models.SuccessResponse(pending)
+	}
+	return models.SuccessResponse(items)
+}
+
+// ResumeVideoGeneration reconciles a saved video request without resubmitting it.
+func (s *Provider) ResumeVideoGeneration(ctx context.Context, id string) models.Response[[]GeneratedVideoItem] {
+	if _, err := uuid.Parse(id); err != nil {
+		return models.ErrorResponse[[]GeneratedVideoItem]("Mã yêu cầu không hợp lệ.", models.CodeInvalidArgument)
+	}
+	lock := s.jobLock(id)
+	if !lock.TryLock() {
+		return models.SuccessResponse([]GeneratedVideoItem{{JobID: id, ID: id, Pending: true, Error: "Job đang được đối soát."}})
+	}
+	defer lock.Unlock()
+	job, err := s.loadGenerationJob(id)
+	if err != nil {
+		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeNotFound)
+	}
+	if job.Kind != generationJobVideo {
+		return models.ErrorResponse[[]GeneratedVideoItem]("Mã này không phải job tạo video.", models.CodeInvalidArgument)
+	}
+	if job.Phase == generationComplete {
+		return models.SuccessResponse(job.VideoResult)
+	}
+	if job.Phase == generationRejected {
+		return models.ErrorResponse[[]GeneratedVideoItem](job.Message, models.CodeUnavailable)
+	}
+	req := GenerateVideoRequest{RequestID: id, Prompt: job.VideoTemplate.Prompt, ModelID: job.VideoTemplate.Model, AspectRatio: job.VideoTemplate.AspectRatio, Duration: job.VideoTemplate.Duration, Resolution: job.VideoTemplate.Resolution, Count: len(job.ClientIDs)}
+	return s.resumeVideoGeneration(ctx, job, req)
+}
+
+func (s *Provider) reconcileVideoGenerationWithClient(ctx context.Context, client *chrome.FlowClient, job generationJob, template GeneratedVideoItem) ([]GeneratedVideoItem, error) {
+	started := make([]pendingVideo, 0, len(job.ClientIDs))
+	known := make(map[string]bool, len(job.ClientIDs))
+	for _, record := range job.Videos {
+		if record.MediaID == "" && record.OperationID == "" {
+			continue
+		}
+		started = append(started, pendingVideo{name: record.MediaID, operation: record.OperationID, clientID: record.ClientID, status: record.Status, statusObserved: record.StatusObserved})
+		if record.ClientID != "" {
+			known[strings.ToLower(record.ClientID)] = true
+		}
+	}
+	if len(known) < len(job.ClientIDs) {
+		listing, err := s.projectContentsPayload(ctx, client, job.ProjectID)
+		if err == nil {
+			for _, clientID := range job.ClientIDs {
+				if known[strings.ToLower(clientID)] {
+					continue
+				}
+				match := mediaForClient(listing, clientID)
+				if match.name == "" && match.operation == "" {
+					continue
+				}
+				match.clientID = clientID
+				started = append(started, match)
+				known[strings.ToLower(clientID)] = true
+			}
+		}
+	}
+	if len(started) == 0 && s.submissionLost(job) {
+		return nil, s.rejectLostSubmission(job)
+	}
+	if len(started) == 0 {
+		job.Message = "Flow chưa tìm thấy job mang mã đã lưu. Hãy kiểm tra lại sau; yêu cầu này sẽ không được gửi lại."
+		_ = s.saveGenerationJob(job)
+		return pendingVideoItems(job, GenerateVideoRequest{Prompt: template.Prompt, ModelID: template.Model, AspectRatio: template.AspectRatio, Duration: template.Duration, Resolution: template.Resolution}), nil
+	}
+	job.Phase, job.Videos = generationAccepted, trackVideos(started)
+	if err := s.saveGenerationJob(job); err != nil {
+		return nil, err
+	}
+	return s.followGenerationVideos(ctx, client, job, started, template)
+}
+
+func (s *Provider) followGenerationVideos(ctx context.Context, client *chrome.FlowClient, job generationJob, started []pendingVideo, template GeneratedVideoItem) ([]GeneratedVideoItem, error) {
+	policy := s.cfg.Get().Accounts
+	final, err := s.waitForVideos(ctx, client, job.ProjectID, started, policy.VideoPollIntervalMS, policy.VideoGenerationTimeoutSeconds, func(videos []pendingVideo) error {
+		job.Videos = trackVideos(videos)
+		return s.saveGenerationJob(job)
+	})
+	if len(final) > 0 {
+		job.Videos = trackVideos(final)
+	}
+	if err != nil {
+		job.Phase = generationAccepted
+		job.Message = "Flow đã nhận yêu cầu. Job đang được theo dõi; gọi lại cùng mã request để kiểm tra, không gửi job mới."
+		if saveErr := s.saveGenerationJob(job); saveErr != nil {
+			return nil, saveErr
+		}
+		return pendingVideoItems(job, GenerateVideoRequest{Prompt: template.Prompt, ModelID: template.Model, AspectRatio: template.AspectRatio, Duration: template.Duration, Resolution: template.Resolution}), nil
+	}
+	results := s.collectVideoItems(ctx, client, final, template, false)
+	for i := range results {
+		results[i].JobID = job.ID
+		results[i].Pending = false
+	}
+	known := make(map[string]bool, len(started))
+	for _, video := range started {
+		if video.clientID != "" {
+			known[strings.ToLower(video.clientID)] = true
+		}
+	}
+	if len(known) < len(job.ClientIDs) {
+		allPending := pendingVideoItems(job, GenerateVideoRequest{Prompt: template.Prompt, ModelID: template.Model, AspectRatio: template.AspectRatio, Duration: template.Duration, Resolution: template.Resolution})
+		for i, id := range job.ClientIDs {
+			if known[strings.ToLower(id)] || i >= len(allPending) {
+				continue
+			}
+			results = append(results, allPending[i])
+		}
+	}
+	job.VideoResult = append([]GeneratedVideoItem(nil), results...)
+	if len(known) == len(job.ClientIDs) {
+		job.Phase, job.Message = generationComplete, ""
+	} else {
+		job.Phase = generationAccepted
+	}
+	if err := s.saveGenerationJob(job); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// collectVideoItems downloads finished videos into items built from template.
+// edit selects the edit wording for failures and probes the downloaded file so
+// the trimmed source duration is reported; generated videos keep their request
+// duration. JobID is set for every journaled job and must not select this.
+func (s *Provider) collectVideoItems(ctx context.Context, client *chrome.FlowClient, final []pendingVideo, template GeneratedVideoItem, edit bool) []GeneratedVideoItem {
 	limits := s.cfg.Get().Accounts
 	now := time.Now().UTC().Format(time.RFC3339)
 	items := make([]GeneratedVideoItem, 0, len(final))
@@ -606,7 +863,7 @@ func (s *Provider) collectVideoItems(ctx context.Context, client *chrome.FlowCli
 			item.Error = videoStatusText(v.status)
 			if v.errMsg != "" {
 				detail := videoFailureDetail(v.errMsg)
-				if template.JobID != "" {
+				if edit {
 					detail = editVideoFailureDetail(v.errMsg)
 				}
 				item.Error += ": " + detail
@@ -618,7 +875,7 @@ func (s *Provider) collectVideoItems(ctx context.Context, client *chrome.FlowCli
 				logger.Get().Warn("cannot download generated video", "media", v.name, "error", dlErr)
 			} else {
 				item.LocalURL = local
-				if template.JobID != "" {
+				if edit {
 					file, pathErr := s.media.Path(local)
 					probeCtx, cancel := context.WithTimeout(ctx, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
 					metadata, probeErr := media.ProbeVideo(probeCtx, file, s.cfg.Get().Flow)

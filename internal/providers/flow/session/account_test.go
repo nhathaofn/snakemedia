@@ -119,6 +119,49 @@ func TestEnsureAccountHeadlessBrowser(t *testing.T) {
 	}
 }
 
+func TestConcurrentBrowserRequestsLaunchOneChromePerProfile(t *testing.T) {
+	s := testAccountService(t)
+	stored := StoredAccount{AccountProfile: seedAccount(t, s, "race@example.invalid")}
+
+	var starts atomic.Int32
+	s.start = func(_ context.Context, opts chrome.LaunchOptions, _ config.AccountConfig) (*chrome.Browser, error) {
+		starts.Add(1)
+		time.Sleep(20 * time.Millisecond) // widen the window between lookup and store
+		return &chrome.Browser{Port: opts.Port, ProfileDir: opts.ProfileDir, Headless: opts.Headless}, nil
+	}
+
+	const callers = 4
+	browsers := make(chan *chrome.Browser, callers)
+	for range callers {
+		go func() {
+			b, err := s.EnsureAccountHeadlessBrowser(context.Background(), stored)
+			if err != nil {
+				t.Error(err)
+			}
+			browsers <- b
+		}()
+	}
+	first := <-browsers
+	for range callers - 1 {
+		if b := <-browsers; b != first {
+			t.Fatal("concurrent callers received different browsers for one profile")
+		}
+	}
+	if n := starts.Load(); n != 1 {
+		t.Fatalf("launched Chrome %d times for one profile", n)
+	}
+}
+
+func TestReservedCDPPortIsNotReusedWhileStarting(t *testing.T) {
+	s := testAccountService(t)
+	if got := s.reservePort(9222); got != 9222 {
+		t.Fatalf("first launch should get the configured port, got %d", got)
+	}
+	if got := s.reservePort(9222); got != 0 {
+		t.Fatalf("second launch reused a port still being started: %d", got)
+	}
+}
+
 func TestCorruptStoreQuarantinedAndBlocksWrites(t *testing.T) {
 	s := testAccountService(t)
 	if err := os.WriteFile(s.accountsFilePath(), []byte("{broken"), 0600); err != nil {

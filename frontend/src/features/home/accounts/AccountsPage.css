@@ -157,15 +157,6 @@
   color: var(--danger);
 }
 
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(var(--rotation-full));
-  }
-}
-
 .spin {
   animation: spin var(--animation-spin-duration) linear infinite;
 }

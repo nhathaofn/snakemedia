@@ -48,7 +48,7 @@
   align-items: center;
   justify-content: center;
   gap: var(--space-3);
-  background-color: rgba(15, 23, 42, 0.75);
+  background-color: var(--media-overlay);
   backdrop-filter: blur(4px);
   color: var(--text-secondary);
   font-size: var(--font-size-caption);
@@ -59,7 +59,7 @@
 
 .flow-edit-preview-error {
   color: var(--danger);
-  background-color: rgba(15, 23, 42, 0.88);
+  background-color: var(--media-overlay-strong);
 }
 
 .flow-edit-preview-error span {

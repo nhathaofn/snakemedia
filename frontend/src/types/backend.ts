@@ -29,6 +29,7 @@ export const GenerateImageRequest = flow.GenerateImageRequest;
 export type GeneratedImageItem = flow.GeneratedImageItem;
 export const GeneratedImageItem = flow.GeneratedImageItem;
 export type FlowVideoModel = flow.FlowVideoModel;
+export type FlowVideoCost = flow.FlowVideoCost;
 export type GenerateVideoRequest = flow.GenerateVideoRequest;
 export const GenerateVideoRequest = flow.GenerateVideoRequest;
 export type GeneratedVideoItem = flow.GeneratedVideoItem;

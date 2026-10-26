@@ -3,7 +3,7 @@
 Production desktop application scaffold built with Go and Wails v2, using Vite + React 19 + TypeScript for the presentation layer.
 
 ## Stack
-- Backend: Go 1.26 (see `go.mod`), Wails v2.16.0 runtime
+- Backend: Go 1.26 (see `go.mod`), Wails v2.17.0 runtime
 - Frontend: Vite 7, React 19, TypeScript 5, React Router 7, Zustand 5
 - Tooling: ESLint 10 (typescript-eslint, react-hooks), Prettier 3, Vitest 5
 - Package manager: npm 11
@@ -31,7 +31,7 @@ Production desktop application scaffold built with Go and Wails v2, using Vite +
 | `main.go` | Entry point: parses manifest, builds window options from config, lifecycle hooks, single-instance lock, enum bindings | — |
 | `app.go` | Wails-bound controller; every exported method is exposed to the frontend | — |
 | `internal/buildinfo/` | App identity and build metadata parsed from `wails.json` | `buildinfo.go` |
-| `internal/paths/` | Per-user data, config and log locations | `paths.go` |
+| `internal/paths/` | Per-user data, config, log, media and default image output locations | `paths.go` |
 | `internal/config/` | User settings (`Theme`, `LogLevel`, `WindowScale`): validation, atomic persistence, corrupt-file quarantine | `config.go` |
 | `internal/window/` | Startup window geometry: `WindowScale` × primary screen, clamped to min size and screen | `sizing.go` |
 | `internal/logger/` | `log/slog` logger: file + stdout, size rotation at startup, runtime level changes | `logger.go` |
@@ -41,13 +41,13 @@ Production desktop application scaffold built with Go and Wails v2, using Vite +
 | `internal/engine/` | Node specs (typed ports, settings), registry, typed node adapter | `node.go` |
 | `internal/media/` | Downloaded and imported media store, `/flow-media/` middleware, `media.save` node | `store.go` |
 | `internal/providers/` | `Provider` interface; one package per external service | `provider.go` |
-| `internal/providers/flow/` | Google Flow provider: rotation, projects, model catalogue, image/video generation, video edit, nodes | `provider.go`, `nodes.go`, `edit.go` |
+| `internal/providers/flow/` | Google Flow provider: rotation, projects, model catalogue, image/video generation, video edit, job journals, nodes | `provider.go`, `generation_jobs.go`, `generation_prep.go`, `edit.go` |
 | `internal/providers/flow/session/` | Google account sessions: Chrome profiles, DPAPI store, session sync | `account.go` |
 | `internal/providers/flow/chrome/` | Chrome/CDP, Flow HTTP client, Scotty video upload, reCAPTCHA (do not edit recaptcha.go) | `batch.go`, `upload.go` |
 | `pkg/utils/` | Reusable utilities (atomic writes, file checks, byte formatting) | `fileutils.go` |
 | `tools/gofmtcheck/` | Cross-platform gofmt gate used by CI and verify | — |
 | `frontend/src/components/` | UI primitives (`ui/`), desktop shell (`layout/`: TitleBar, Header, Sidebar), feedback (`feedback/`) | — |
-| `frontend/src/features/` | One folder per header section (`home/`, `flow/`, `settings/`): `section.tsx` manifest + one sub-folder per feature (Flow: `image/`, `video/`, `edit/`, shared UI in `shared/`) | `<section>/section.tsx` |
+| `frontend/src/features/` | One folder per header section (`home/`, `flow/`, `settings/`): `section.tsx` manifest + one sub-folder per feature (Flow: `image/`, `video/`, `edit/`, shared UI, generation and job recovery hooks in `shared/`) | `<section>/section.tsx`, `flow/shared/recovery.ts` |
 | `frontend/src/routes/` | Section registry (`registry.ts`) → router, header tabs, per-section sidebar; `useActiveSection` | `registry.ts` |
 | `frontend/src/stores/` | Global state with Zustand (`useAppStore`) | `appStore.ts` |
 | `frontend/src/services/` | Typed bridge over generated bindings (`api`, `invoke`, `unwrap`), runtime detection | `api.ts` |
@@ -67,6 +67,12 @@ Production desktop application scaffold built with Go and Wails v2, using Vite +
 - Colours, sizes and timings in CSS come from `frontend/src/styles/tokens.css`.
 - The main window starts hidden; `App.domReady` sizes it to `WindowScale` (default 0.7) of the primary screen, centres it, then shows it. Never remove `StartHidden` without moving that logic.
 - `go.mod` has `ignore ./frontend/node_modules` so `./...` never picks up Go code shipped inside npm packages.
+- `.gitattributes` keeps LF in the working tree on every OS; gofmt and Prettier fail on CRLF.
+- Billable Flow requests carry a request ID that is also the conversation turn ID. Reuse an ID only when the previous attempt's outcome is unknown (bridge failure or pending job); a definite answer from Flow means the next attempt gets a new ID.
+- Flow RPC IDs are discovered by method name from the running build (`chrome/resolver.go`); project-only methods need `projectPageClient`. A hardcoded ID is allowed only as a logged fallback.
+- Chrome launched by the app is tied to the app process (Windows job object), so a crash or dev reload does not leave a signed-in browser behind.
+- Video metadata for MP4/MOV/M4V is read from the file header (`internal/media/mp4probe.go`); ffprobe is only needed for WebM or unusual files.
+- `wails dev` builds run without the single-instance lock (`instance_lock_dev.go`), so a rebuild never hands off to the stale window.
 - Fast checks defined in `.agents/verify.json` must pass before finishing any development task.
 
 ## Boundaries

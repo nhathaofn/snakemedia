@@ -3,7 +3,6 @@ package chrome
 import (
 	"context"
 	"errors"
-	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -23,8 +22,7 @@ func MintRuntimeRecaptchaToken(ctx context.Context, port int, policy config.Acco
 		return "", err
 	}
 	for _, page := range pages {
-		u, err := url.Parse(page.URL)
-		if err != nil || page.Type != "page" || u.Scheme != "https" || u.Host != "flow.google.com" {
+		if _, ok := page.flowPage(); !ok {
 			continue
 		}
 		if !localWebSocket(page.WebSocketDebuggerURL, port) {

@@ -58,7 +58,7 @@ func (s *Provider) GetImageModels(ctx context.Context) models.Response[[]FlowMod
 	return models.SuccessResponse(modelsList)
 }
 
-// modelsFor returns the account's model catalogue, cached for modelCacheTTL.
+// modelsFor returns the account's model catalogue, cached for Flow.ModelCacheSeconds.
 func (s *Provider) modelsFor(ctx context.Context, acc session.StoredAccount) ([]FlowModel, error) {
 	s.mu.Lock()
 	if cached, ok := s.models[acc.ID]; ok && time.Now().Before(cached.expires) && cached.buildLabel == acc.Credentials.BuildLabel && cached.tier == accountTier(acc) {
@@ -73,7 +73,7 @@ func (s *Provider) modelsFor(ctx context.Context, acc session.StoredAccount) ([]
 		return nil, err
 	}
 	s.mu.Lock()
-	s.models[acc.ID] = modelCache{buildLabel: acc.Credentials.BuildLabel, tier: accountTier(acc), models: list, expires: time.Now().Add(modelCacheTTL)}
+	s.models[acc.ID] = modelCache{buildLabel: acc.Credentials.BuildLabel, tier: accountTier(acc), models: list, expires: time.Now().Add(s.modelCacheTTL())}
 	s.mu.Unlock()
 	return cloneFlowModels(list), nil
 }
@@ -253,6 +253,17 @@ type FlowVideoModel struct {
 	// MaxReferenceImages is how many reference images the family's
 	// reference-to-video variants accept on this tier; 0 means none.
 	MaxReferenceImages int `json:"maxReferenceImages"`
+	// Costs are the credits one text-to-video generation takes per variant on
+	// the account's tier, as Flow's catalogue lists them.
+	Costs []FlowVideoCost `json:"costs"`
+}
+
+// FlowVideoCost is the credit price of one video for a duration and quality.
+// Duration 0 means the variant accepts any listed duration at this price.
+type FlowVideoCost struct {
+	Duration   int    `json:"duration"`
+	Resolution string `json:"resolution"`
+	Credits    int    `json:"credits"`
 }
 
 type videoUsage struct {
@@ -479,6 +490,7 @@ func videoModels(families []videoFamily, defaultID string, tier int) []FlowVideo
 				m.MaxReferenceImages = max(m.MaxReferenceImages, u.maxRefs)
 			}
 		}
+		m.Costs = textVideoCosts(f, tier)
 		for d := range durations {
 			m.Durations = append(m.Durations, d)
 		}
@@ -496,6 +508,40 @@ func videoModels(families []videoFamily, defaultID string, tier int) []FlowVideo
 		list = append(list, m)
 	}
 	return list
+}
+
+// textVideoCosts lists one price per text-to-video variant, cheapest first.
+func textVideoCosts(f videoFamily, tier int) []FlowVideoCost {
+	resolutionName := make(map[int]string, len(FlowVideoResolution))
+	for name, code := range FlowVideoResolution {
+		resolutionName[code] = name
+	}
+	seen := map[FlowVideoCost]bool{}
+	costs := []FlowVideoCost{}
+	for _, u := range f.usages {
+		credits, ok := u.creditCost(tier)
+		if !u.textToVideo(tier) || !ok {
+			continue
+		}
+		duration := u.duration
+		if u.anyDuration {
+			duration = 0
+		}
+		for _, code := range u.resolutionCodes() {
+			cost := FlowVideoCost{Duration: duration, Resolution: resolutionName[code], Credits: credits}
+			if !seen[cost] {
+				seen[cost] = true
+				costs = append(costs, cost)
+			}
+		}
+	}
+	sort.Slice(costs, func(i, j int) bool {
+		if costs[i].Credits != costs[j].Credits {
+			return costs[i].Credits < costs[j].Credits
+		}
+		return costs[i].Duration < costs[j].Duration
+	})
+	return costs
 }
 
 // selectVideoVariant picks the usage Flow would send for these settings,
@@ -519,7 +565,7 @@ func selectVideoVariant(f videoFamily, tier, aspect, duration, resolution int, w
 	return videoUsage{}, fmt.Errorf("Model %s không có biến thể %d giây, chất lượng này cho tỉ lệ đã chọn ở gói tài khoản hiện tại.", displayName(f.name), duration)
 }
 
-// videoFamiliesFor returns the account's video catalogue, cached for modelCacheTTL.
+// videoFamiliesFor returns the account's video catalogue, cached for Flow.ModelCacheSeconds.
 func (s *Provider) videoFamiliesFor(ctx context.Context, acc session.StoredAccount) ([]videoFamily, string, error) {
 	s.mu.Lock()
 	cached, ok := s.videoModels[acc.ID]
@@ -536,7 +582,7 @@ func (s *Provider) videoFamiliesFor(ctx context.Context, acc session.StoredAccou
 		return nil, "", err
 	}
 	s.mu.Lock()
-	s.videoModels[acc.ID] = videoModelCache{buildLabel: acc.Credentials.BuildLabel, tier: accountTier(acc), families: families, defaultID: defaultID, expires: time.Now().Add(modelCacheTTL)}
+	s.videoModels[acc.ID] = videoModelCache{buildLabel: acc.Credentials.BuildLabel, tier: accountTier(acc), families: families, defaultID: defaultID, expires: time.Now().Add(s.modelCacheTTL())}
 	s.mu.Unlock()
 	return families, defaultID, nil
 }
@@ -593,4 +639,8 @@ func (s *Provider) GetVideoModels(ctx context.Context) models.Response[[]FlowVid
 		return models.ErrorResponse[[]FlowVideoModel]("Gói tài khoản này không có model tạo video từ văn bản.", models.CodeUnavailable)
 	}
 	return models.SuccessResponse(list)
+}
+
+func (s *Provider) modelCacheTTL() time.Duration {
+	return time.Duration(s.cfg.Get().Flow.ModelCacheSeconds) * time.Second
 }

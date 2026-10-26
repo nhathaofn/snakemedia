@@ -1,7 +1,7 @@
 import React from 'react';
 import { ModePlaceholder } from '../../shared';
 
-/** AllModePanel - Tools applied to every video at once (not built yet). */
+/** AllModePanel - Placeholder until batch video generation exists. */
 export const AllModePanel: React.FC = () => (
-  <ModePlaceholder text="Chế độ tạo All (hàng loạt) sẵn sàng triển khai." />
+  <ModePlaceholder text="Chế độ All (hàng loạt) cho video chưa được hỗ trợ." />
 );

@@ -7,7 +7,9 @@ import (
 	"errors"
 	"math"
 	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"SnakeMedia/internal/config"
 )
@@ -19,9 +21,17 @@ type VideoMetadata struct {
 	DurationSeconds float64 `json:"durationSeconds"`
 }
 
-// ProbeVideo resolves ffprobe from configuration or PATH. There are no machine
-// paths or assumed durations. The caller supplies a bounded context.
+// ProbeVideo reads MP4, MOV and M4V headers directly, so the common formats
+// work without FFmpeg; other files (WebM) and unreadable headers fall back to
+// ffprobe from configuration or PATH. There are no machine paths or assumed
+// durations. The caller supplies a bounded context.
 func ProbeVideo(ctx context.Context, file string, policy config.FlowConfig) (VideoMetadata, error) {
+	switch strings.ToLower(filepath.Ext(file)) {
+	case ".mp4", ".mov", ".m4v":
+		if meta, err := probeMP4(file); err == nil {
+			return meta, nil
+		}
+	}
 	program := policy.ProbePath
 	if program == "" {
 		var err error

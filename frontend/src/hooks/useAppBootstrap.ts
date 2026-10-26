@@ -28,7 +28,11 @@ export function useAppBootstrap(): void {
       }
       const failure = [infoRes, cfgRes].find((r) => !r.success);
       if (failure) {
-        addToast({ type: 'error', title: 'Backend unavailable', message: failure.error ?? '' });
+        addToast({
+          type: 'error',
+          title: 'Không kết nối được backend',
+          message: failure.error ?? '',
+        });
       }
     });
 

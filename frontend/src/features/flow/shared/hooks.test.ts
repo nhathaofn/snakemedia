@@ -1,7 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { create } from 'zustand';
-import { runGeneration } from './hooks';
+import { beginGenerationAttempt, clearGenerationAttempt, runGeneration } from './hooks';
+import { invoke } from '../../../services/api';
 import { ResponseCode, type ApiResponse } from '../../../types';
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 interface Item {
   id: string;
@@ -39,6 +44,49 @@ const ok = (data: Item[]): ApiResponse<Item[]> => ({ success: true, data, code: 
 const fail: ApiResponse<Item[]> = { success: false, error: 'boom', code: ResponseCode.Internal };
 
 describe('runGeneration', () => {
+  it('reuses the request ID while a matching Flow request is pending', async () => {
+    const request = { prompt: 'a cat', modelId: 'BELUGA' };
+    const first = await beginGenerationAttempt('image', request);
+    first.settle(true);
+    const retry = await beginGenerationAttempt('image', request);
+    expect(retry.requestId).toBe(first.requestId);
+    clearGenerationAttempt(retry.requestId);
+    const next = await beginGenerationAttempt('image', request);
+    expect(next.requestId).not.toBe(first.requestId);
+    clearGenerationAttempt(next.requestId);
+  });
+
+  it('gives a deliberate resend of an in-flight prompt its own request ID', async () => {
+    const request = { prompt: 'a fox', modelId: 'BELUGA' };
+    const first = await beginGenerationAttempt('image', request);
+    const resend = await beginGenerationAttempt('image', request);
+    expect(resend.requestId).not.toBe(first.requestId);
+    resend.settle(false);
+    first.settle(true);
+    // Once the uncertain attempt is no longer in flight, a retry reconciles it.
+    const retry = await beginGenerationAttempt('image', request);
+    expect(retry.requestId).toBe(first.requestId);
+    retry.settle(false);
+  });
+
+  it('treats a bridge failure as uncertain, not as a Flow rejection', async () => {
+    vi.stubGlobal('window', { go: {}, runtime: {} });
+    const store = makeStore('a cat');
+    const lifecycle = { onFailure: vi.fn(), onUncertainFailure: vi.fn() };
+    await runGeneration(
+      store,
+      () => invoke<Item[]>('GenerateImages', () => Promise.reject(new Error('ipc closed'))),
+      'ảnh',
+      vi.fn(),
+      lifecycle,
+    );
+    expect(lifecycle.onFailure).not.toHaveBeenCalled();
+    expect(lifecycle.onUncertainFailure).toHaveBeenCalledWith('GenerateImages: ipc closed', true);
+
+    await runGeneration(store, async () => fail, 'ảnh', vi.fn(), lifecycle);
+    expect(lifecycle.onFailure).toHaveBeenCalledWith('boom', true);
+  });
+
   it('clears the prompt as soon as it is sent and keeps it cleared on success', async () => {
     const store = makeStore('a cat');
     const notify = vi.fn();

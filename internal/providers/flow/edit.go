@@ -67,6 +67,9 @@ type FlowEditModel struct {
 	Duration int `json:"duration"`
 	// MaxInputSeconds is the longest part of the source video Flow reads.
 	MaxInputSeconds int `json:"maxInputSeconds"`
+	// MaxCredits is the most one edit costs on the account's tier; the exact
+	// price depends on the variant the source video selects.
+	MaxCredits int `json:"maxCredits"`
 }
 
 // UploadedSourceVideo describes a video successfully uploaded to Google Flow.
@@ -111,6 +114,9 @@ func editModels(families []videoFamily, defaultID string, tier int) []FlowEditMo
 			if u.editVideo(tier) {
 				m.Duration = max(m.Duration, u.duration)
 				m.MaxInputSeconds = max(m.MaxInputSeconds, u.maxInputSeconds)
+				if credits, ok := u.creditCost(tier); ok {
+					m.MaxCredits = max(m.MaxCredits, credits)
+				}
 			}
 		}
 		if m.Duration > 0 {
@@ -121,6 +127,60 @@ func editModels(families []videoFamily, defaultID string, tier int) []FlowEditMo
 		list[0].Default = true
 	}
 	return list
+}
+
+// editCandidates pairs each account offering video edits with the most one
+// edit can cost on its tier, the amount reserved while an edit is prepared.
+func (s *Provider) editCandidates(ctx context.Context, accounts []session.StoredAccount) []videoAccountCandidate {
+	candidates := make([]videoAccountCandidate, 0, len(accounts))
+	for _, acc := range accounts {
+		families, defaultID, err := s.videoFamiliesFor(ctx, acc)
+		if err != nil {
+			continue
+		}
+		models := editModels(families, defaultID, accountTier(acc))
+		if len(models) == 0 {
+			continue
+		}
+		cost := 0
+		for _, m := range models {
+			cost = max(cost, m.MaxCredits)
+		}
+		candidates = append(candidates, videoAccountCandidate{account: acc, cost: cost})
+	}
+	return candidates
+}
+
+// readyEditAccount reserves an edit's credits on one of the candidates and
+// syncs its session, skipping accounts that signed out of Google.
+func (s *Provider) readyEditAccount(ctx context.Context, candidates []videoAccountCandidate) (*session.StoredAccount, func(), error) {
+	if len(candidates) == 0 {
+		return nil, nil, errors.New("không có tài khoản nào dùng được model chỉnh sửa video")
+	}
+	var skipped []string
+	for len(candidates) > 0 {
+		idx, lease, err := s.acquireVideoCandidate(ctx, candidates)
+		if err != nil {
+			return nil, nil, err
+		}
+		acc := candidates[idx].account
+		releaseProfile := s.accounts.AcquireProfile(acc.ProfileDir)
+		synced, err := s.syncSession(ctx, acc)
+		if err == nil {
+			return &synced, func() {
+				releaseProfile()
+				lease.release()
+			}, nil
+		}
+		releaseProfile()
+		lease.release()
+		if !errors.Is(err, session.ErrSessionSignedOut) {
+			return nil, nil, fmt.Errorf("không đồng bộ được phiên Flow của %s: %w", acc.Email, err)
+		}
+		skipped = append(skipped, acc.Email)
+		candidates = slices.Delete(candidates, idx, idx+1)
+	}
+	return nil, nil, fmt.Errorf("các tài khoản đã đăng xuất khỏi Google (%s); hãy đăng nhập lại ở mục Tài khoản", strings.Join(skipped, ", "))
 }
 
 // editAspect maps a video's size to the aspect Flow sends for it. A video of
@@ -206,7 +266,13 @@ func (s *Provider) UploadSourceVideo(ctx context.Context, localURL string) model
 	if err != nil {
 		return models.ErrorResponse[UploadedSourceVideo](err.Error(), models.CodeInvalidArgument)
 	}
-	acc, release, err := s.readyAccount(ctx)
+	// The edit runs on the account that holds the upload, so pick one that can
+	// afford an edit, with the same credit-weighted rotation as video generation.
+	accounts, err := s.GetValidConnectedAccounts()
+	if err != nil {
+		return models.ErrorResponse[UploadedSourceVideo]("Không thể tải video lên Flow: "+err.Error(), models.CodeUnavailable)
+	}
+	acc, release, err := s.readyEditAccount(ctx, s.editCandidates(ctx, accounts))
 	if err != nil {
 		return models.ErrorResponse[UploadedSourceVideo]("Không thể tải video lên Flow: "+err.Error(), models.CodeUnavailable)
 	}
@@ -300,13 +366,19 @@ func (s *Provider) EditVideos(ctx context.Context, req EditVideoRequest) models.
 	if err != nil {
 		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeInvalidArgument)
 	}
-	var acc *session.StoredAccount
-	var release func()
-	if record != nil {
-		acc, release, err = s.readyOwnedAccount(ctx, record.AccountID)
-	} else {
-		acc, release, err = s.readyAccount(ctx)
+	// Reserve the edit's credits up front, so parallel video work cannot spend
+	// them first; the exact cost is recorded once Flow accepts the edit.
+	accounts, err := s.GetValidConnectedAccounts()
+	if err != nil {
+		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeUnavailable)
 	}
+	if record != nil {
+		accounts = slices.DeleteFunc(accounts, func(a session.StoredAccount) bool { return a.ID != record.AccountID })
+		if len(accounts) == 0 {
+			return models.ErrorResponse[[]GeneratedVideoItem]("Tài khoản sở hữu nguồn/job không còn kết nối. Hãy kết nối lại tài khoản đó.", models.CodeUnavailable)
+		}
+	}
+	acc, release, err := s.readyEditAccount(ctx, s.editCandidates(ctx, accounts))
 	if err != nil {
 		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeUnavailable)
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -12,6 +13,38 @@ import (
 
 	"SnakeMedia/internal/config"
 )
+
+func TestFlowRequestAcceptedButReplyLost(t *testing.T) {
+	accepted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		close(accepted)
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	origin, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials := flowTestCredentials()
+	credentials.Cookies = []CookieItem{{Name: "SID", Value: "fake-session", Domain: origin.Hostname(), Path: "/"}}
+	client, err := newFlowClient(server.URL, credentials, config.DefaultAccountConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err = client.Do(ctx, "rpcLost1", `[[["rpcLost1","[]",null,"generic"]]]`, time.Second)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected lost reply to end in deadline exceeded, got %v", err)
+	}
+	select {
+	case <-accepted:
+	case <-time.After(time.Second):
+		t.Fatal("fake Flow server never received the generation request")
+	}
+}
 
 func flowTestCredentials() Credentials {
 	return Credentials{AtToken: "runtime-at", SessionID: "runtime-session", BuildLabel: "runtime-build", Language: "vi", UserAgent: "runtime-agent", SourcePath: "/project/test", AuthUser: "1", Cookies: []CookieItem{

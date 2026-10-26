@@ -41,6 +41,12 @@ func (s *Provider) flowClient(ctx context.Context, acc session.StoredAccount, me
 }
 
 func (s *Provider) editClient(ctx context.Context, acc session.StoredAccount, projectID string) (*chrome.FlowClient, error) {
+	return s.projectClient(ctx, acc, projectID, chrome.MethodModels, chrome.MethodEditVideo, chrome.MethodVideoStatus, chrome.MethodProjectContents, chrome.MethodMedia)
+}
+
+// projectClient opens projectID in the account's browser so the project page's
+// lazy bundles load, then discovers methods from them.
+func (s *Provider) projectClient(ctx context.Context, acc session.StoredAccount, projectID string, methods ...string) (*chrome.FlowClient, error) {
 	browser, err := s.accounts.EnsureAccountHeadlessBrowser(ctx, acc)
 	if err != nil {
 		return nil, err
@@ -57,11 +63,50 @@ func (s *Provider) editClient(ctx context.Context, acc session.StoredAccount, pr
 	for {
 		fresh, err := s.syncSession(ctx, acc)
 		if err == nil {
-			client, discoveryErr := s.flowClient(ctx, fresh, chrome.MethodModels, chrome.MethodEditVideo, chrome.MethodVideoStatus, chrome.MethodProjectContents, chrome.MethodMedia)
+			client, discoveryErr := s.flowClient(ctx, fresh, methods...)
 			if discoveryErr == nil {
 				return client, nil
 			}
 			err = discoveryErr
+		}
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(time.Duration(policy.PollIntervalMS) * time.Millisecond):
+		}
+	}
+}
+
+// projectPageClient discovers methods that only a project page loads (project
+// contents, media). The Flow home page lacks them, so when discovery there
+// fails it opens the account's project and discovers again.
+func (s *Provider) projectPageClient(ctx context.Context, acc session.StoredAccount, methods ...string) (*chrome.FlowClient, error) {
+	client, err := s.flowClient(ctx, acc, methods...)
+	if err == nil {
+		return client, nil
+	}
+	home, homeErr := s.homePageClient(ctx, acc)
+	if homeErr != nil {
+		return nil, homeErr
+	}
+	project, projectErr := s.resolveProject(ctx, home, acc, "")
+	if projectErr != nil {
+		return nil, projectErr
+	}
+	return s.projectClient(ctx, acc, project, methods...)
+}
+
+// homePageClient discovers the project-list methods of the Flow home page. A
+// headless Chrome that has just started may not have loaded those bundles yet,
+// so discovery is retried until the browser startup timeout.
+func (s *Provider) homePageClient(ctx context.Context, acc session.StoredAccount) (*chrome.FlowClient, error) {
+	policy := s.cfg.Get().Accounts
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(policy.BrowserStartupTimeoutSeconds)*time.Second)
+	defer cancel()
+	for {
+		client, err := s.flowClient(ctx, acc, chrome.MethodProjects, chrome.MethodCreateProject)
+		if err == nil {
+			return client, nil
 		}
 		select {
 		case <-ctx.Done():

@@ -99,7 +99,7 @@
   --flow-chat-result-max-width: 480px;
   --flow-chat-attachment-size: 72px;
   --flow-image-bank-thumb-size: 112px;
-  --flow-chat-video-overlay: rgba(15, 23, 42, 0.8);
+  --flow-chat-video-overlay: var(--media-overlay);
   --flow-chat-preview-max-width: 78vw;
   --flow-chat-preview-max-height: 76vh;
   --flow-chat-preview-media-max-height: 68vh;
@@ -120,8 +120,18 @@
   --feedback-success-border: rgb(from var(--success) r g b / 30%);
   --feedback-warning-bg: rgb(from var(--warning) r g b / 15%);
   --feedback-warning-border: rgb(from var(--warning) r g b / 30%);
+  --feedback-danger-bg: rgb(from var(--danger) r g b / 10%);
+  --feedback-danger-border: rgb(from var(--danger) r g b / 30%);
+  /* Captions and controls drawn over images and videos stay dark in both themes. */
+  --media-overlay-soft: rgba(15, 23, 42, 0.7);
+  --media-overlay: rgba(15, 23, 42, 0.8);
+  --media-overlay-strong: rgba(15, 23, 42, 0.88);
+  --media-letterbox: #000;
+  --lightbox-backdrop: rgba(0, 0, 0, 0.85);
   --empty-state-bg: var(--bg-secondary);
   --animation-spin-duration: 1s;
+  --animation-spin-fast-duration: 0.8s;
+  --animation-spin-slow-duration: 1.2s;
   --rotation-full: 360deg;
 }
 

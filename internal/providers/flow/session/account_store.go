@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -328,6 +329,13 @@ func (s *Service) RemoveAccount(ctx context.Context, id string) models.Response[
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Other accounts may have been updated (credits, cookies) while the lock was
+	// released for the profile deletion; save the current list, not the snapshot.
+	current, err := s.loadAccountsUnsafe()
+	if err != nil {
+		return models.ErrorResponse[bool]("Profile đã xóa nhưng chưa đọc lại được danh sách tài khoản; hãy thử xóa lại: "+err.Error(), models.CodeInternal)
+	}
+	filtered = slices.DeleteFunc(current, func(acc StoredAccount) bool { return acc.ID == id })
 	if err := s.saveAccountsUnsafe(filtered); err != nil {
 		return models.ErrorResponse[bool]("Profile đã xóa nhưng chưa lưu được danh sách tài khoản; hãy thử xóa lại: "+err.Error(), models.CodeInternal)
 	}

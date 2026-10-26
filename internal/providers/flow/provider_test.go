@@ -366,3 +366,44 @@ func TestNodesRunTheProviderCapabilities(t *testing.T) {
 		t.Fatalf("validation codes must reach the node caller: %+v", res)
 	}
 }
+
+func TestGenerateImagesReconcilesAnUncertainRequestInsteadOfResubmitting(t *testing.T) {
+	accounts := testAccountService(t)
+	acc := seedFlowAccount(t, accounts, "first@example.invalid", true)
+	service := testFlowService(accounts)
+	request := validGenerateRequest()
+	request.RequestID = "810d0719-c843-4529-9a83-2eab39f14725"
+	request.Quality = ImageQuality1K
+	request.ProjectMode = ImageProjectModeSingle
+	fingerprintRequest := request
+	fingerprintRequest.RequestID = ""
+	fingerprint, err := requestFingerprint(fingerprintRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := newGenerationJob(request.RequestID, generationJobImage, fingerprint, acc.ID)
+	job.Phase = generationSubmitting
+	job.ProjectID = "project-accepted-by-flow"
+	job.ClientIDs = []string{"6E432AA9-719C-4F74-B67A-BE74235592E5", "9D78F255-A29D-4A78-B1A9-C418F8D832E0"}
+	job.ImageTemplate = imageGenerationTemplate{Prompt: request.Prompt, ModelID: request.ModelID, AspectRatio: request.AspectRatio, Quality: ImageQuality1K}
+	if err := service.saveGenerationJob(job); err != nil {
+		t.Fatal(err)
+	}
+
+	dispatches := 0
+	service.generateLiveImages = func(context.Context, session.StoredAccount, GenerateImageRequest) ([]GeneratedImageItem, error) {
+		dispatches++
+		return nil, errors.New("must not dispatch a second request")
+	}
+	result := service.GenerateImages(context.Background(), request)
+	if !result.Success || len(result.Data) != 2 || !result.Data[0].Pending || !result.Data[1].Pending {
+		t.Fatalf("uncertain request must stay pending while reconciliation is unavailable: %+v", result)
+	}
+	if dispatches != 0 {
+		t.Fatalf("reconciliation dispatched %d new generation requests", dispatches)
+	}
+	saved, err := service.loadGenerationJob(request.RequestID)
+	if err != nil || saved.Phase != generationSubmitting || saved.ClientIDs[0] != job.ClientIDs[0] {
+		t.Fatalf("saved request identity was lost: %+v, err=%v", saved, err)
+	}
+}

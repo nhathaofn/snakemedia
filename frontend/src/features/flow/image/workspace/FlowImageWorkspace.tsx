@@ -1,38 +1,76 @@
-import React from 'react';
-import { AlertCircle, Copy, Download, Maximize2, X } from 'lucide-react';
+import React, { useEffect, useRef } from 'react';
+import { useShallow } from 'zustand/react/shallow';
+import { AlertCircle, Copy, Download, Maximize2, RefreshCw, X } from 'lucide-react';
 import './FlowImageWorkspace.css';
 import { api } from '../../../../services/api';
 import { useAppStore } from '../../../../stores';
 import { FlowImageProjectMode, GenerateImageRequest } from '../../../../types';
 import {
+  UNCERTAIN_RETRY_HINT,
   ConversationGallery,
   PromptBar,
   cssAspectRatio,
+  beginGenerationAttempt,
   selectedModelOf,
   useGeneration,
+  useRestoreJobs,
+  useResumeJob,
+  useStopGeneration,
   useSaveMedia,
 } from '../../shared';
+import { errorMessage } from '../../../../utils';
 import { useFlowImageStore } from '../store/flowImageStore';
 
+/** Single studio's saved jobs; All-mode jobs belong to the queue, not this conversation. */
+const listPendingSingleImages = () => api.listPendingImageGenerations(FlowImageProjectMode.Single);
+
 export const FlowImageWorkspace: React.FC = () => {
-  const store = useFlowImageStore();
+  const store = useFlowImageStore(
+    useShallow((s) => ({
+      prompt: s.prompt,
+      referenceImages: s.referenceImages,
+      items: s.items,
+      turns: s.turns,
+      previewImage: s.previewImage,
+      setPrompt: s.setPrompt,
+      isGenerating: s.isGenerating,
+      setPreviewImage: s.setPreviewImage,
+    })),
+  );
   const model = useFlowImageStore(selectedModelOf);
   const addToast = useAppStore((s) => s.addToast);
   const generate = useGeneration(useFlowImageStore, 'ảnh');
   const saveMedia = useSaveMedia();
   const { prompt, referenceImages, items, turns, previewImage } = store;
 
+  useRestoreJobs(useFlowImageStore, listPendingSingleImages, 'Đang đối soát job tạo ảnh');
+
+  useEffect(() => {
+    if (!previewImage) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') useFlowImageStore.getState().setPreviewImage(null);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [previewImage]);
+  const { resuming, resumeJob } = useResumeJob(useFlowImageStore, api.resumeImageGeneration);
+  const stopGeneration = useStopGeneration();
+
   const referenceLimit = model?.maxReferenceImages ?? 0;
   const blockedReason = !model
-    ? 'Chưa có model: kiểm tra tài khoản ở mục Account.'
+    ? 'Chưa có model: kiểm tra tài khoản ở mục Tài khoản.'
     : referenceImages.length > referenceLimit
       ? `${model.name} nhận tối đa ${referenceLimit} ảnh tham chiếu.`
       : undefined;
 
+  // The prompt box clears only after the request ID is derived (async), so a
+  // second Enter in that gap must not send the same prompt twice.
+  const submitting = useRef(false);
+
   const onGenerate = () => {
+    if (submitting.current) return;
     const current = useFlowImageStore.getState();
-    const turn = {
-      id: crypto.randomUUID(),
+    const draft = {
       prompt: current.prompt.trim(),
       attachments: current.referenceImages.map((image) => ({
         id: image.previewUrl,
@@ -44,33 +82,54 @@ export const FlowImageWorkspace: React.FC = () => {
       pendingRatio: current.aspectRatio,
       pendingLabel: 'Đang tạo ảnh',
     };
-    void generate(
-      () =>
-        api.generateImages(
-          // createFrom builds the generated class, which converts the nested references.
-          GenerateImageRequest.createFrom({
-            prompt: current.prompt.trim(),
-            modelId: current.selectedModel,
-            aspectRatio: current.aspectRatio,
-            projectMode: FlowImageProjectMode.Single,
-            count: current.quantity,
-            references: current.referenceImages.map((img) => ({
-              base64: img.base64,
-              mimeType: img.mimeType,
-              fileName: img.name,
-            })),
-          }),
-        ),
-      {
-        onStart: () => useFlowImageStore.getState().beginTurn(turn),
-        onSuccess: (results) => useFlowImageStore.getState().completeTurn(turn.id, results),
-        onFailure: (message, promptRestored) => {
-          const current = useFlowImageStore.getState();
-          if (promptRestored) current.removeTurn(turn.id);
-          else current.failTurn(turn.id, message);
-        },
-      },
-    );
+    const requestData = {
+      prompt: current.prompt.trim(),
+      modelId: current.selectedModel,
+      aspectRatio: current.aspectRatio,
+      projectMode: FlowImageProjectMode.Single,
+      count: current.quantity,
+      references: current.referenceImages.map((img) => ({
+        base64: img.base64,
+        mimeType: img.mimeType,
+        fileName: img.name,
+      })),
+    };
+    submitting.current = true;
+    void beginGenerationAttempt('image', requestData)
+      .then((attempt) => {
+        submitting.current = false;
+        // The turn shares the request ID, so restoring or resuming this job finds it.
+        const turn = { ...draft, id: attempt.requestId };
+        return generate(
+          () =>
+            api.generateImages(
+              GenerateImageRequest.createFrom({ ...requestData, requestId: attempt.requestId }),
+            ),
+          {
+            onStart: () => useFlowImageStore.getState().beginTurn(turn),
+            onSuccess: (results) => {
+              attempt.settle(results.some((result) => result.pending));
+              useFlowImageStore.getState().completeTurn(turn.id, results);
+            },
+            onFailure: (message, promptRestored) => {
+              attempt.settle(false);
+              const current = useFlowImageStore.getState();
+              if (promptRestored) current.removeTurn(turn.id);
+              else current.failTurn(turn.id, message);
+            },
+            onUncertainFailure: (message, promptRestored) => {
+              attempt.settle(true);
+              const current = useFlowImageStore.getState();
+              if (promptRestored) current.removeTurn(turn.id);
+              else current.failTurn(turn.id, `${message} ${UNCERTAIN_RETRY_HINT}`);
+            },
+          },
+        );
+      })
+      .catch((error: unknown) => {
+        submitting.current = false;
+        addToast({ type: 'error', title: 'Không gửi được yêu cầu', message: errorMessage(error) });
+      });
   };
 
   const copyPrompt = (text: string) => {
@@ -84,10 +143,24 @@ export const FlowImageWorkspace: React.FC = () => {
         turns={turns}
         items={items}
         emptyTitle="Tạo hình ảnh với Google Flow"
+        onStopTurn={stopGeneration}
         emptyText="Mô tả hình ảnh bạn muốn ở ô bên dưới rồi nhấn Enter."
         renderItem={(img) => (
           <div className="flow-media-card" style={{ aspectRatio: cssAspectRatio(img.aspectRatio) }}>
-            {img.localUrl ? (
+            {img.pending ? (
+              <div className="flow-media-error flow-media-pending" role="status">
+                <RefreshCw size={20} />
+                <span>{img.error}</span>
+                <button
+                  type="button"
+                  className="flow-card-action-btn flow-card-text-btn"
+                  disabled={!!img.jobId && resuming.has(img.jobId)}
+                  onClick={() => img.jobId && void resumeJob(img.jobId)}
+                >
+                  Kiểm tra tiếp
+                </button>
+              </div>
+            ) : img.localUrl ? (
               <img src={img.localUrl} alt={img.prompt} loading="lazy" />
             ) : (
               <div className="flow-media-error" role="alert">

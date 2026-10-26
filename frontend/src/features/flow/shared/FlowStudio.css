@@ -65,6 +65,11 @@
   justify-content: space-between;
 }
 
+.flow-field-hint {
+  font-size: var(--font-size-caption);
+  color: var(--text-secondary);
+}
+
 .flow-field-badge {
   font-size: var(--font-size-caption);
   color: var(--primary);
@@ -204,11 +209,11 @@
 }
 
 .rotation-status-badge.has-accounts {
-  border-color: rgba(16, 185, 129, 0.3);
+  border-color: var(--feedback-success-border);
 }
 
 .rotation-status-badge.no-accounts {
-  border-color: rgba(239, 68, 68, 0.3);
+  border-color: var(--feedback-danger-border);
   color: var(--danger);
 }
 
@@ -230,7 +235,7 @@
 /* Error state banner */
 .flow-error-banner {
   padding: var(--space-4) var(--space-6);
-  background-color: rgba(239, 68, 68, 0.1);
+  background-color: var(--feedback-danger-bg);
   border: var(--border-width) solid rgba(239, 68, 68, 0.3);
   border-radius: var(--radius-md);
   color: var(--danger);
@@ -582,12 +587,12 @@
 .flow-media-badge {
   align-self: flex-start;
   font-size: var(--font-size-caption);
-  background-color: rgba(15, 23, 42, 0.85);
+  background-color: var(--media-overlay-strong);
   color: var(--primary);
   padding: 2px 6px;
   border-radius: var(--radius-sm);
   font-weight: var(--font-weight-medium);
-  border: 1px solid rgba(56, 189, 248, 0.3);
+  border: var(--border-width) solid var(--feedback-primary-border);
 }
 
 .flow-card-action-btn {
@@ -596,12 +601,21 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background-color: rgba(15, 23, 42, 0.8);
+  background-color: var(--media-overlay);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   cursor: pointer;
   transition: all var(--transition-fast);
+}
+
+/* Text buttons (Kiểm tra tiếp, Dừng) size to their label instead of the icon square. */
+.flow-card-action-btn.flow-card-text-btn {
+  width: auto;
+  padding: 0 var(--space-4);
+  gap: var(--space-2);
+  white-space: nowrap;
+  font-size: var(--font-size-caption);
 }
 
 .flow-card-action-btn:hover:not(:disabled) {
@@ -664,7 +678,7 @@
 }
 
 .skeleton-spinner {
-  animation: spin 1.2s linear infinite;
+  animation: spin var(--animation-spin-slow-duration) linear infinite;
   color: var(--primary);
 }
 
@@ -683,6 +697,13 @@
   margin: 0;
   font-size: var(--font-size-caption);
   color: var(--text-muted);
+}
+
+.flow-chat-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  align-self: flex-start;
 }
 
 .flow-chat-error {
@@ -760,16 +781,7 @@
 }
 
 .spin {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+  animation: spin var(--animation-spin-duration) linear infinite;
 }
 
 /* Placeholder for modes that are not built yet (All) */
@@ -848,7 +860,7 @@
   height: 20px;
   border: none;
   border-radius: var(--radius-sm);
-  background-color: rgba(15, 23, 42, 0.75);
+  background-color: var(--media-overlay);
   color: var(--text-primary);
   cursor: pointer;
   transition: all var(--transition-fast);

@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { api } from '../../../../services/api';
 import {
   FlowModePanel,
@@ -15,7 +16,21 @@ import { useFlowImageStore } from '../store/flowImageStore';
 /** SingleModePanel - Image settings; every choice and limit comes from the backend. */
 export const SingleModePanel: React.FC = () => {
   const { config, error: configError } = useStudioConfig();
-  const store = useFlowImageStore();
+  const store = useFlowImageStore(
+    useShallow((s) => ({
+      addReferenceImages: s.addReferenceImages,
+      models: s.models,
+      quantity: s.quantity,
+      referenceImages: s.referenceImages,
+      removeReferenceImage: s.removeReferenceImage,
+      selectedModel: s.selectedModel,
+      setModels: s.setModels,
+      setQuantity: s.setQuantity,
+      setSelectedModel: s.setSelectedModel,
+      aspectRatio: s.aspectRatio,
+      setAspectRatio: s.setAspectRatio,
+    })),
+  );
   const model = useFlowImageStore(selectedModelOf);
   const { loading, error } = useModelCatalog(api.getImageModels, store.setModels);
   const { aspectRatio, setAspectRatio } = store;

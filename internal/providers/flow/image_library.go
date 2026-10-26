@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/models"
 	"SnakeMedia/internal/providers/flow/chrome"
 	"SnakeMedia/internal/providers/flow/session"
@@ -95,36 +96,67 @@ func (s *Provider) ListImageProjects(ctx context.Context, requestedMode ImagePro
 		return models.ErrorResponse[[]FlowImageProject]("Không có tài khoản Google Flow nào đang kết nối.", models.CodeUnavailable)
 	}
 
-	projects := make([]FlowImageProject, 0)
+	// Accounts are independent (own browser and lease), so read them in parallel
+	// and keep the others when one account fails.
 	now := time.Now().In(time.Local)
-	for _, account := range accounts {
-		client, release, err := s.imageLibraryClient(ctx, account)
-		if err != nil {
-			return models.ErrorResponse[[]FlowImageProject](fmt.Sprintf("Không đọc được project của %s: %v", account.Email, err), models.CodeUnavailable)
+	perAccount := make([][]FlowImageProject, len(accounts))
+	failures := make([]error, len(accounts))
+	var wg sync.WaitGroup
+	for i, account := range accounts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			perAccount[i], failures[i] = s.accountImageProjects(ctx, account, mode, now)
+		}()
+	}
+	wg.Wait()
+
+	projects := make([]FlowImageProject, 0)
+	var messages []string
+	for i, account := range accounts {
+		if failures[i] != nil {
+			logger.Get().Warn("cannot list Flow image projects", "account", account.ID, "error", failures[i])
+			messages = append(messages, fmt.Sprintf("Không đọc được project của %s: %v", account.Email, failures[i]))
+			continue
 		}
-		accountProjects, fetchErr := s.FetchAccountProjects(ctx, client)
-		if fetchErr == nil {
-			if accountProjects == nil {
-				accountProjects = []flowProject{}
-			}
-			_, accountProjects, fetchErr = s.ensureDailyImageProject(ctx, client, account, mode, accountProjects)
-		}
-		release()
-		if fetchErr != nil {
-			return models.ErrorResponse[[]FlowImageProject](fmt.Sprintf("Không đọc được project của %s: %v", account.Email, fetchErr), models.CodeUnavailable)
-		}
-		for _, project := range accountProjects {
-			projectMode, createdAt, ok := s.parseImageProjectTitle(project.Title, now)
-			if !ok || projectMode != mode || !isRecentImageProject(createdAt, now) {
-				continue
-			}
-			projects = append(projects, FlowImageProject{
-				AccountID: account.ID, AccountEmail: account.Email,
-				ProjectID: project.ID, Mode: projectMode, Title: project.Title,
-			})
-		}
+		projects = append(projects, perAccount[i]...)
+	}
+	if len(messages) == len(accounts) {
+		return models.ErrorResponse[[]FlowImageProject](strings.Join(messages, "\n"), models.CodeUnavailable)
 	}
 	return models.SuccessResponse(projects)
+}
+
+// accountImageProjects returns one account's recent projects for mode,
+// creating today's project for that mode when it does not exist yet.
+func (s *Provider) accountImageProjects(ctx context.Context, account session.StoredAccount, mode ImageProjectMode, now time.Time) ([]FlowImageProject, error) {
+	client, release, err := s.imageLibraryClient(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	accountProjects, err := s.FetchAccountProjects(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+	if accountProjects == nil {
+		accountProjects = []flowProject{}
+	}
+	if _, accountProjects, err = s.ensureDailyImageProject(ctx, client, account, mode, accountProjects); err != nil {
+		return nil, err
+	}
+	var projects []FlowImageProject
+	for _, project := range accountProjects {
+		projectMode, createdAt, ok := s.parseImageProjectTitle(project.Title, now)
+		if !ok || projectMode != mode || !isRecentImageProject(createdAt, now) {
+			continue
+		}
+		projects = append(projects, FlowImageProject{
+			AccountID: account.ID, AccountEmail: account.Email,
+			ProjectID: project.ID, Mode: projectMode, Title: project.Title,
+		})
+	}
+	return projects, nil
 }
 
 // ListProjectImages lists image media for one project after confirming that
@@ -192,20 +224,33 @@ func (s *Provider) GetProjectImageReference(ctx context.Context, accountID, proj
 		return models.ErrorResponse[FlowProjectImageReference]("Không đọc được ảnh từ Flow: "+err.Error(), models.CodeUnavailable)
 	}
 	imageURLs := flowProjectImageURLs(payload)
+	limits := s.cfg.Get().Accounts
+	var lastErr error
+	var unsupportedFormat bool
 	for _, imageURL := range imageURLs {
-		limits := s.cfg.Get().Accounts
+		if ctx.Err() != nil {
+			return models.ErrorResponse[FlowProjectImageReference](ctx.Err().Error(), models.CodeUnavailable)
+		}
 		data, mimeType, err := client.FetchMedia(ctx, imageURL, []string{"image/"}, MaxReferenceImageBytes, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
 		if err != nil {
-			return models.ErrorResponse[FlowProjectImageReference]("Không tải được ảnh từ Flow: "+err.Error(), models.CodeUnavailable)
+			lastErr = err
+			continue
 		}
 		mimeType = strings.TrimSpace(strings.Split(mimeType, ";")[0])
 		if !containsString(ReferenceMimeTypes, mimeType) || detectedImageType(data) == "" {
-			return models.ErrorResponse[FlowProjectImageReference]("Định dạng ảnh trong project Flow không được hỗ trợ.", models.CodeInvalidArgument)
+			unsupportedFormat = true
+			continue
 		}
 		return models.SuccessResponse(FlowProjectImageReference{
 			Base64: base64.StdEncoding.EncodeToString(data), MimeType: mimeType,
 			FileName: flowProjectMediaName(selected.name, payload),
 		})
+	}
+	if lastErr != nil {
+		return models.ErrorResponse[FlowProjectImageReference]("Không tải được ảnh từ Flow: "+lastErr.Error(), models.CodeUnavailable)
+	}
+	if unsupportedFormat {
+		return models.ErrorResponse[FlowProjectImageReference]("Định dạng ảnh trong project Flow không được hỗ trợ.", models.CodeInvalidArgument)
 	}
 	return models.ErrorResponse[FlowProjectImageReference]("Tệp trong project Flow không phải ảnh tham chiếu hợp lệ.", models.CodeInvalidArgument)
 }
@@ -462,10 +507,34 @@ func (s *Provider) imageProjectLock(key dailyImageProjectKey) *sync.Mutex {
 	}
 	projectLock := s.imageProjectLocks[key]
 	if projectLock == nil {
+		s.pruneOtherDaysLocked(key.Day)
 		projectLock = &sync.Mutex{}
 		s.imageProjectLocks[key] = projectLock
 	}
 	return projectLock
+}
+
+// pruneOtherDaysLocked drops per-day project state from earlier days so these
+// maps do not grow for as long as the app runs. Callers hold s.mu.
+func (s *Provider) pruneOtherDaysLocked(day string) {
+	current := make(map[string]bool)
+	for key, projectID := range s.dailyImageProjects {
+		if key.Day != day {
+			delete(s.dailyImageProjects, key)
+		} else {
+			current[projectID] = true
+		}
+	}
+	for key := range s.imageProjectLocks {
+		if key.Day != day {
+			delete(s.imageProjectLocks, key)
+		}
+	}
+	for projectID := range s.generatedImageCounts {
+		if !current[projectID] && s.reservedImageCounts[projectID] == 0 {
+			delete(s.generatedImageCounts, projectID)
+		}
+	}
 }
 
 func (s *Provider) forgetDailyImageProjects(accountID string) {
@@ -533,7 +602,7 @@ func (s *Provider) imageLibraryClient(ctx context.Context, account session.Store
 		lease.release()
 		return nil, nil, err
 	}
-	client, err := s.flowClient(ctx, fresh, chrome.MethodProjects, chrome.MethodCreateProject, chrome.MethodProjectContents, chrome.MethodMedia)
+	client, err := s.projectPageClient(ctx, fresh, chrome.MethodProjects, chrome.MethodCreateProject, chrome.MethodProjectContents, chrome.MethodMedia)
 	if err != nil {
 		releaseProfile()
 		lease.release()

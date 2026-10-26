@@ -89,7 +89,9 @@ type Service struct {
 	browsers       map[string]*chrome.Browser
 	nextRefresh    map[string]time.Time
 	canceledLogins map[string]time.Time
-	inUse          map[string]int // profile path -> requests using its browser
+	inUse          map[string]int         // profile path -> requests using its browser
+	launches       map[string]*sync.Mutex // profile path -> serialises browser()
+	reservedPorts  map[int]bool           // CDP ports chosen by launches still starting
 	storeErr       error
 	closed         bool
 	// Adapter seams keep regression tests independent of real Google accounts.
@@ -101,7 +103,7 @@ type Service struct {
 }
 
 func NewService(p paths.Paths, cfg *config.Manager) *Service {
-	return &Service{paths: p, cfgManager: cfg, browsers: make(map[string]*chrome.Browser), nextRefresh: make(map[string]time.Time), canceledLogins: make(map[string]time.Time), inUse: make(map[string]int), inspect: chrome.InspectFlowSession, inspectIdentity: chrome.InspectFlowIdentity, query: chrome.QueryCreditsDirectHTTP, start: chrome.StartBrowser, validate: func(ctx context.Context, b *chrome.Browser, p config.AccountConfig) error { return b.Validate(ctx, p) }}
+	return &Service{paths: p, cfgManager: cfg, browsers: make(map[string]*chrome.Browser), nextRefresh: make(map[string]time.Time), canceledLogins: make(map[string]time.Time), inUse: make(map[string]int), launches: make(map[string]*sync.Mutex), reservedPorts: make(map[int]bool), inspect: chrome.InspectFlowSession, inspectIdentity: chrome.InspectFlowIdentity, query: chrome.QueryCreditsDirectHTTP, start: chrome.StartBrowser, validate: func(ctx context.Context, b *chrome.Browser, p config.AccountConfig) error { return b.Validate(ctx, p) }}
 }
 
 func accountFailure[T any](err error) models.Response[T] {
@@ -160,6 +162,10 @@ func (s *Service) browser(ctx context.Context, path string, headless bool) (b *c
 	if err != nil {
 		return nil, false, err
 	}
+	// Concurrent requests for one profile must not both launch Chrome: the
+	// second would hit the profile lock or leak the handle it overwrites.
+	unlock := s.lockLaunch(path)
+	defer unlock()
 	cfg := s.cfgManager.Get()
 	s.mu.Lock()
 	b = s.browsers[path]
@@ -189,23 +195,49 @@ func (s *Service) browser(ctx context.Context, path string, headless bool) (b *c
 	if err != nil {
 		return nil, false, err
 	}
-	port := cfg.CdpPort
+	port := s.reservePort(cfg.CdpPort)
+	b, err = s.start(ctx, chrome.LaunchOptions{ChromePath: chromePath, ProfileDir: path, Port: port, TargetURL: chrome.FlowURL, Headless: headless}, cfg.Accounts)
 	s.mu.Lock()
-	for _, other := range s.browsers {
-		if other.Port == port {
-			port = 0
-			break
-		}
+	delete(s.reservedPorts, port)
+	if err == nil {
+		s.browsers[path] = b
 	}
 	s.mu.Unlock()
-	b, err = s.start(ctx, chrome.LaunchOptions{ChromePath: chromePath, ProfileDir: path, Port: port, TargetURL: chrome.FlowURL, Headless: headless}, cfg.Accounts)
 	if err != nil {
 		return nil, false, err
 	}
-	s.mu.Lock()
-	s.browsers[path] = b
-	s.mu.Unlock()
 	return b, true, nil
+}
+
+// lockLaunch serialises browser() per profile; different profiles still launch
+// in parallel.
+func (s *Service) lockLaunch(path string) func() {
+	s.mu.Lock()
+	m := s.launches[path]
+	if m == nil {
+		m = &sync.Mutex{}
+		s.launches[path] = m
+	}
+	s.mu.Unlock()
+	m.Lock()
+	return m.Unlock
+}
+
+// reservePort returns the configured CDP port when no running or starting
+// browser holds it, otherwise 0 so Chrome picks a free one.
+func (s *Service) reservePort(preferred int) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if preferred == 0 || s.reservedPorts[preferred] {
+		return 0
+	}
+	for _, other := range s.browsers {
+		if other.Port == preferred {
+			return 0
+		}
+	}
+	s.reservedPorts[preferred] = true
+	return preferred
 }
 
 // AcquireProfile marks the profile's browser as needed by an image request until
@@ -611,11 +643,7 @@ func (s *Service) Close() {
 }
 
 // ErrSessionSignedOut reports a profile whose Chrome is no longer signed in to Google.
-var ErrSessionSignedOut = errors.New("Chrome của tài khoản đã đăng xuất khỏi Google; hãy đăng nhập lại ở mục Account.")
-
-// signedOutReads is how many consecutive loaded-but-anonymous Flow pages count
-// as signed out, so a page still filling in its session data is not misread.
-const signedOutReads = 3
+var ErrSessionSignedOut = errors.New("Chrome của tài khoản đã đăng xuất khỏi Google; hãy đăng nhập lại ở mục Tài khoản.")
 
 // SyncSession re-reads the Flow session (cookies, CSRF token, runtime values)
 // from the account's own Chrome profile, starting it headless when it is not
@@ -651,7 +679,7 @@ func (s *Service) SyncSession(ctx context.Context, acc StoredAccount) (StoredAcc
 			acc.CookieCount = len(creds.Cookies)
 			return acc, nil
 		case err == nil && details != nil:
-			if anonymous++; anonymous >= signedOutReads {
+			if anonymous++; anonymous >= p.SignedOutReads {
 				s.markExpired(acc.ID, ErrSessionSignedOut.Error())
 				return acc, ErrSessionSignedOut
 			}

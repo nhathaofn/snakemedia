@@ -15,7 +15,10 @@ import (
 )
 
 // Provider constants are wire protocol identifiers, never captured session data.
-const FlowURL = "https://flow.google.com"
+const (
+	FlowHost = "flow.google.com"
+	FlowURL  = "https://" + FlowHost
+)
 const batchPath = "/_/AiSandboxAngularFrontend/data/batchexecute"
 
 var ErrLoginRequired = errors.New("Phiên Flow chưa đăng nhập.")
@@ -61,6 +64,15 @@ type pageEntry struct {
 	Type                 string `json:"type"`
 	URL                  string `json:"url"`
 	WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
+}
+
+// flowPage reports whether p is a Flow tab and returns its parsed URL.
+func (p pageEntry) flowPage() (*url.URL, bool) {
+	u, err := url.Parse(p.URL)
+	if err != nil || p.Type != "page" || u.Scheme != "https" || u.Host != FlowHost {
+		return nil, false
+	}
+	return u, true
 }
 
 // cdpCall correlates responses and skips unsolicited events. Cancellation closes
@@ -150,8 +162,7 @@ func inspectFlowSession(ctx context.Context, port int, policy config.AccountConf
 	}
 	var target string
 	for _, p := range pages {
-		u, err := url.Parse(p.URL)
-		if err == nil && p.Type == "page" && u.Scheme == "https" && u.Host == "flow.google.com" {
+		if _, ok := p.flowPage(); ok {
 			target = p.WebSocketDebuggerURL
 			break
 		}

@@ -7,16 +7,16 @@ import { HomeOverviewPage } from './overview/HomeOverviewPage';
 export const homeSection = {
   id: 'home',
   path: '/home',
-  label: 'Home',
+  label: 'Trang chủ',
   icon: House,
   features: [
     {
       id: 'overview',
       path: 'overview',
-      label: 'Overview',
+      label: 'Tổng quan',
       icon: LayoutDashboard,
       element: <HomeOverviewPage />,
     },
-    { id: 'accounts', path: 'accounts', label: 'Account', icon: User, element: <AccountsPage /> },
+    { id: 'accounts', path: 'accounts', label: 'Tài khoản', icon: User, element: <AccountsPage /> },
   ],
 } as const satisfies AppSection;

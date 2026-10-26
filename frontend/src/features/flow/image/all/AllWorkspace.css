@@ -607,7 +607,7 @@
   align-items: center;
   justify-content: center;
   padding: var(--space-8);
-  background: rgb(0 0 0 / 72%);
+  background: var(--dialog-backdrop);
   backdrop-filter: blur(3px);
 }
 
@@ -644,7 +644,7 @@
   justify-content: center;
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-full);
-  background: rgb(15 23 42 / 82%);
+  background: var(--media-overlay);
   color: white;
   cursor: pointer;
 }
@@ -710,7 +710,7 @@
   border: 2px solid currentColor;
   border-right-color: transparent;
   border-radius: var(--radius-full);
-  animation: flow-image-all-spin 700ms linear infinite;
+  animation: spin var(--animation-spin-fast-duration) linear infinite;
 }
 
 .flow-image-all-task-error {
@@ -718,10 +718,4 @@
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
-}
-
-@keyframes flow-image-all-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }

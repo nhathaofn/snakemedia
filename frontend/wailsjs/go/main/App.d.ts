@@ -4,6 +4,8 @@ import {models} from '../models';
 import {flow} from '../models';
 import {config} from '../models';
 
+export function CancelGeneration(arg1:string):Promise<models.Response_bool_>;
+
 export function CancelLogin(arg1:string):Promise<models.Response_bool_>;
 
 export function CheckLoginStatus(arg1:string):Promise<models.Response_SnakeMedia_internal_providers_flow_session_LoginStatusInfo_>;
@@ -46,6 +48,10 @@ export function ListFlowProjectImages(arg1:string,arg2:string,arg3:flow.ImagePro
 
 export function ListNodes():Promise<models.Response___SnakeMedia_internal_engine_Spec_>;
 
+export function ListPendingImageGenerations(arg1:flow.ImageProjectMode):Promise<models.Response___SnakeMedia_internal_providers_flow_GeneratedImageItem_>;
+
+export function ListPendingVideoGenerations():Promise<models.Response___SnakeMedia_internal_providers_flow_GeneratedVideoItem_>;
+
 export function ListVideoEditJobs():Promise<models.Response___SnakeMedia_internal_providers_flow_GeneratedVideoItem_>;
 
 export function OpenAccountBrowser(arg1:string):Promise<models.Response_SnakeMedia_internal_providers_flow_session_LoginProcessInfo_>;
@@ -56,7 +62,11 @@ export function RefreshAccount(arg1:string):Promise<models.Response_SnakeMedia_i
 
 export function RemoveAccount(arg1:string):Promise<models.Response_bool_>;
 
+export function ResumeImageGeneration(arg1:string):Promise<models.Response___SnakeMedia_internal_providers_flow_GeneratedImageItem_>;
+
 export function ResumeVideoEdit(arg1:string):Promise<models.Response___SnakeMedia_internal_providers_flow_GeneratedVideoItem_>;
+
+export function ResumeVideoGeneration(arg1:string):Promise<models.Response___SnakeMedia_internal_providers_flow_GeneratedVideoItem_>;
 
 export function SaveImageToTaskFolder(arg1:string,arg2:string,arg3:string):Promise<models.Response_SnakeMedia_internal_media_SaveResult_>;
 

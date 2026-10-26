@@ -25,7 +25,7 @@ export function useConfigUpdate() {
         setConfig(res.data);
         return true;
       }
-      addToast({ type: 'error', title: 'Could not save settings', message: res.error ?? '' });
+      addToast({ type: 'error', title: 'Không lưu được cài đặt', message: res.error ?? '' });
       return false;
     },
     [setConfig, addToast],

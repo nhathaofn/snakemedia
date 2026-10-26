@@ -106,7 +106,13 @@ func (f *FlowClient) FetchMedia(ctx context.Context, rawURL string, accept []str
 	}
 	req.Header.Set("User-Agent", f.creds.UserAgent)
 	req.Header.Set("Referer", f.base+"/")
-	client := &http.Client{Jar: f.client.Jar}
+	// Cookies ride along on redirects, so every hop must stay on Google's media hosts.
+	client := &http.Client{Jar: f.client.Jar, CheckRedirect: func(next *http.Request, via []*http.Request) error {
+		if len(via) >= 10 || next.URL.Scheme != "https" || next.URL.User != nil || !mediaHost(next.URL.Hostname()) {
+			return errors.New("ảnh chuyển hướng đến địa chỉ không thuộc Google")
+		}
+		return nil
+	}}
 	resp, err := client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {

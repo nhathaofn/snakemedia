@@ -15,14 +15,14 @@ export const flowSection = {
     {
       id: 'overview',
       path: 'overview',
-      label: 'Overview',
+      label: 'Tổng quan',
       icon: LayoutDashboard,
       element: <FlowOverviewPage />,
     },
     {
       id: 'image',
       path: 'image',
-      label: 'Image',
+      label: 'Ảnh',
       icon: Image,
       element: <FlowImagePage />,
       layout: 'full',
@@ -38,7 +38,7 @@ export const flowSection = {
     {
       id: 'edit',
       path: 'edit',
-      label: 'Edit video',
+      label: 'Chỉnh sửa video',
       icon: Scissors,
       element: <FlowEditPage />,
       layout: 'full',

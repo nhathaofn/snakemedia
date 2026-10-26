@@ -72,3 +72,13 @@ func TestStudioMethodsResolveFromRealReferenceBundles(t *testing.T) {
 		t.Fatalf("real bundle studio descriptors: %v", err)
 	}
 }
+
+func TestResolveImageGenerationDescriptorFromProjectBundle(t *testing.T) {
+	// Snippet shape captured from the 2026-10-25 project-page bundle.
+	script := "https://www.gstatic.com/project_bundle.js"
+	content := `y6a=_.Gd(x6a),z6a={Wa:"ogiZ0b",hb:"/FlowService.BatchGenerateImages",kb:!1,Ya:class extends _.m{}};O8a={Wa:"maseQ",hb:"/FlowService.UploadImage",kb:!1,Ya:class extends _.m{}};`
+	registry, err := resolveRPCs([]string{script}, 5, 10240, func(string) ([]byte, error) { return []byte(content), nil }, MethodGenerateImages, MethodUploadImage)
+	if err != nil || registry.ID(MethodGenerateImages) != "ogiZ0b" || registry.ID(MethodUploadImage) != "maseQ" {
+		t.Fatalf("image RPCs not resolved: %+v %v", registry, err)
+	}
+}

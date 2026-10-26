@@ -4,13 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/models"
 	"SnakeMedia/internal/providers/flow/chrome"
 	"SnakeMedia/internal/providers/flow/session"
@@ -68,8 +67,20 @@ func (s *Provider) runEditVideoJob(ctx context.Context, client *chrome.FlowClien
 	if err := json.Unmarshal(inner, &payload); err != nil {
 		return nil, err
 	}
-	item := asList(asList(payload[0])[0])
-	metadata := asList(item[4])
+	// The payload is built locally, but guard its shape so a builder change
+	// fails as an error instead of a panic.
+	var item, metadata []any
+	if len(payload) > 0 {
+		if items := asList(payload[0]); len(items) > 0 {
+			item = asList(items[0])
+		}
+	}
+	if len(item) > 4 {
+		metadata = asList(item[4])
+	}
+	if len(metadata) < 5 {
+		return nil, errors.New("payload chỉnh sửa video không đúng cấu trúc")
+	}
 	metadata[4] = strings.ToUpper(req.RequestID)
 	// Flow's video editor writes a new version into the uploaded workflow.
 	// Field 2 selects that workflow; field 6 is only for a NEW workflow seed.
@@ -182,7 +193,7 @@ func (s *Provider) followEditJob(ctx context.Context, client *chrome.FlowClient,
 			job.Message = "Flow chưa hoàn tất trong thời gian chờ. Có thể kiểm tra tiếp mà không gửi lại lượt chỉnh sửa."
 		}
 	} else {
-		job.Results = s.collectVideoItems(ctx, client, final, job.Template)
+		job.Results = s.collectVideoItems(ctx, client, final, job.Template, true)
 		job.Complete = !slices.ContainsFunc(job.Results, func(item GeneratedVideoItem) bool {
 			return item.LocalURL == "" && !slices.ContainsFunc(final, func(v pendingVideo) bool { return v.name == item.ID && videoFailed(v) })
 		})
@@ -232,30 +243,60 @@ func (s *Provider) ResumeVideoEdit(ctx context.Context, id string) models.Respon
 	return models.SuccessResponse(items)
 }
 
+// ListVideoEditJobs lists saved edit jobs. Unreadable journals are skipped,
+// finished ones past retention are deleted, and unfinished ones idle past
+// retention are closed with an explanation instead of staying pending.
 func (s *Provider) ListVideoEditJobs(context.Context) models.Response[[]GeneratedVideoItem] {
-	dir := filepath.Join(filepath.Dir(s.cfg.Path()), "flow", "jobs")
-	entries, err := os.ReadDir(dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return models.SuccessResponse([]GeneratedVideoItem{})
-	}
+	entries, err := s.stateEntries("jobs")
 	if err != nil {
 		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeInternal)
 	}
+	retention := s.jobRetention()
 	items := []GeneratedVideoItem{}
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+		var job editJob
+		if err := s.readState("jobs", entry.id, &job); err != nil || job.ID != entry.id {
+			logger.Get().Warn("skipping unreadable edit job", "job", entry.id, "error", err)
 			continue
 		}
-		id := strings.TrimSuffix(entry.Name(), ".json")
-		var job editJob
-		if err := s.readState("jobs", id, &job); err != nil {
-			return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeInternal)
-		}
-		if job.ID != id {
-			return models.ErrorResponse[[]GeneratedVideoItem]("Mã job đã lưu không khớp.", models.CodeInternal)
+		if time.Since(entry.modified) > retention {
+			if job.Complete {
+				s.expireEditJob(job)
+				continue
+			}
+			job = s.abandonEditJob(job)
 		}
 		items = append(items, job.items()...)
 	}
 	slices.SortFunc(items, func(a, b GeneratedVideoItem) int { return strings.Compare(b.CreatedAt, a.CreatedAt) })
 	return models.SuccessResponse(items)
+}
+
+func (s *Provider) expireEditJob(job editJob) {
+	lock := s.jobLock(job.ID)
+	if !lock.TryLock() {
+		return
+	}
+	defer lock.Unlock()
+	if err := s.removeState("jobs", job.ID); err != nil {
+		logger.Get().Warn("cannot delete expired edit job", "job", job.ID, "error", err)
+	}
+	s.jobLocks.Delete(job.ID)
+}
+
+// abandonEditJob closes an edit Flow never finished within retention.
+func (s *Provider) abandonEditJob(job editJob) editJob {
+	lock := s.jobLock(job.ID)
+	if !lock.TryLock() {
+		return job
+	}
+	defer lock.Unlock()
+	item := job.Template
+	item.ID, item.JobID = job.ID, job.ID
+	item.Error = "Flow không trả kết quả trong thời gian lưu giữ; đã ngừng theo dõi."
+	job.Complete, job.Results, job.Message = true, []GeneratedVideoItem{item}, item.Error
+	if err := s.saveState("jobs", job.ID, job); err != nil {
+		logger.Get().Warn("cannot close abandoned edit job", "job", job.ID, "error", err)
+	}
+	return job
 }

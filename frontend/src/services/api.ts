@@ -41,6 +41,17 @@ export class ApiError extends Error {
   }
 }
 
+/** Envelopes `invoke` built from a rejected binding call rather than a Go reply. */
+const transportFailures = new WeakSet<object>();
+
+/**
+ * True when the call failed in the IPC bridge (or Go panicked) instead of
+ * returning a response: the backend may or may not have acted on it.
+ */
+export function isTransportFailure(res: ApiResponse<unknown>): boolean {
+  return transportFailures.has(res);
+}
+
 /**
  * Calls a generated Go binding and normalises every failure mode
  * (no Wails runtime, thrown error) into an ApiResponse envelope.
@@ -59,11 +70,13 @@ export async function invoke<T>(
   try {
     return await call();
   } catch (err) {
-    return {
+    const failure: ApiResponse<T> = {
       success: false,
       error: `${method}: ${errorMessage(err)}`,
       code: ResponseCode.Internal,
     };
+    transportFailures.add(failure);
+    return failure;
   }
 }
 
@@ -99,12 +112,27 @@ export const api = {
     invoke<number>('GetActiveRotationCount', Backend.GetActiveRotationCount),
   generateImages: (req: GenerateImageRequest) =>
     invoke<GeneratedImageItem[]>('GenerateImages', () => Backend.GenerateImages(req)),
+  resumeImageGeneration: (id: string) =>
+    invoke<GeneratedImageItem[]>('ResumeImageGeneration', () => Backend.ResumeImageGeneration(id)),
+  listPendingImageGenerations: (mode: FlowImageProjectMode) =>
+    invoke<GeneratedImageItem[]>('ListPendingImageGenerations', () =>
+      Backend.ListPendingImageGenerations(mode),
+    ),
 
   getVideoModels: () => invoke<FlowVideoModel[]>('GetVideoModels', Backend.GetVideoModels),
   generateVideos: (req: GenerateVideoRequest) =>
     invoke<GeneratedVideoItem[]>('GenerateVideos', () => Backend.GenerateVideos(req)),
+  resumeVideoGeneration: (id: string) =>
+    invoke<GeneratedVideoItem[]>('ResumeVideoGeneration', () => Backend.ResumeVideoGeneration(id)),
+  listPendingVideoGenerations: () =>
+    invoke<GeneratedVideoItem[]>(
+      'ListPendingVideoGenerations',
+      Backend.ListPendingVideoGenerations,
+    ),
   listVideoEditJobs: () =>
     invoke<GeneratedVideoItem[]>('ListVideoEditJobs', Backend.ListVideoEditJobs),
+  cancelGeneration: (requestId: string) =>
+    invoke<boolean>('CancelGeneration', () => Backend.CancelGeneration(requestId)),
   resumeVideoEdit: (id: string) =>
     invoke<GeneratedVideoItem[]>('ResumeVideoEdit', () => Backend.ResumeVideoEdit(id)),
   getEditModels: () => invoke<FlowEditModel[]>('GetEditModels', Backend.GetEditModels),

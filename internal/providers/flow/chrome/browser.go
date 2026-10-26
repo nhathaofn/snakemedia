@@ -22,7 +22,14 @@ import (
 
 type browserVersion struct {
 	Browser   string `json:"Browser"`
+	UserAgent string `json:"User-Agent"`
 	WebSocket string `json:"webSocketDebuggerUrl"`
+}
+
+// headless reports whether the running Chrome has no window; an adopted
+// browser from an earlier run must not be handed out as a visible one.
+func (v browserVersion) headless() bool {
+	return strings.Contains(v.Browser, "Headless") || strings.Contains(v.UserAgent, "HeadlessChrome")
 }
 
 // This app-owned marker records an explicit, dynamically allocated port. It
@@ -98,7 +105,7 @@ func StartBrowser(ctx context.Context, opts LaunchOptions, policy config.Account
 			b := &Browser{Port: saved.Port, ProfileDir: opts.ProfileDir, endpoint: saved.WebSocket}
 			var v browserVersion
 			if localJSON(ctx, b.Port, "/json/version", policy, &v) == nil && v.WebSocket == b.endpoint {
-				b.Version = v.Browser
+				b.Version, b.Headless = v.Browser, v.headless()
 				return b, nil
 			}
 		}
@@ -111,7 +118,7 @@ func StartBrowser(ctx context.Context, opts LaunchOptions, policy config.Account
 				b := &Browser{Port: port, ProfileDir: opts.ProfileDir, endpoint: fmt.Sprintf("ws://127.0.0.1:%d%s", port, parts[1])}
 				var v browserVersion
 				if localJSON(ctx, port, "/json/version", policy, &v) == nil && v.WebSocket == b.endpoint {
-					b.Version = v.Browser
+					b.Version, b.Headless = v.Browser, v.headless()
 					return b, nil
 				}
 			}

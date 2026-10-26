@@ -6,14 +6,13 @@ import (
 	"sync"
 	"time"
 
+	"SnakeMedia/internal/config"
 	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/providers/flow/chrome"
 	"SnakeMedia/internal/providers/flow/session"
 )
 
-const maxConcurrentRequestsPerAccount = 2
-
-var errRotationSlotsFull = errors.New("mọi tài khoản phù hợp đang đủ hai yêu cầu đồng thời")
+var errRotationSlotsFull = errors.New("mọi tài khoản phù hợp đang chạy đủ số yêu cầu đồng thời cho phép")
 
 type rotationAccountState struct {
 	active           int
@@ -88,7 +87,7 @@ func (s *Provider) reserveLeastBusyLocked(accounts []session.StoredAccount) (ses
 	}
 	minActive := int(^uint(0) >> 1)
 	for _, acc := range accounts {
-		if active := s.rotationStateLocked(acc).active; active < maxConcurrentRequestsPerAccount && active < minActive {
+		if active := s.rotationStateLocked(acc).active; active < s.accountConcurrency() && active < minActive {
 			minActive = active
 		}
 	}
@@ -137,7 +136,7 @@ func (s *Provider) acquireLeastBusy(ctx context.Context, accounts []session.Stor
 func (s *Provider) acquireSpecificAccount(ctx context.Context, account session.StoredAccount) (*accountLease, error) {
 	_, lease, err := s.waitForRotationSlot(ctx, func() (int, *accountLease, error) {
 		state := s.rotationStateLocked(account)
-		if state.active >= maxConcurrentRequestsPerAccount {
+		if state.active >= s.accountConcurrency() {
 			return -1, nil, errRotationSlotsFull
 		}
 		state.active++
@@ -214,7 +213,7 @@ func (s *Provider) reserveVideoCandidateLocked(candidates []videoAccountCandidat
 		states[i] = state
 		if !state.snapshotKnown {
 			creditEligible[i] = true
-			if state.active < maxConcurrentRequestsPerAccount && state.active < minActive {
+			if state.active < s.accountConcurrency() && state.active < minActive {
 				minActive = state.active
 			}
 			continue
@@ -225,7 +224,7 @@ func (s *Provider) reserveVideoCandidateLocked(candidates []videoAccountCandidat
 			continue
 		}
 		creditEligible[i] = true
-		if state.active < maxConcurrentRequestsPerAccount && state.active < minActive {
+		if state.active < s.accountConcurrency() && state.active < minActive {
 			minActive = state.active
 		}
 	}
@@ -428,4 +427,12 @@ func (l *accountLease) release() {
 		p.notifyRotationWaitersLocked()
 		p.rotationMu.Unlock()
 	})
+}
+
+// accountConcurrency is how many requests one account may run at once.
+func (s *Provider) accountConcurrency() int {
+	if s.cfg == nil {
+		return config.DefaultAccountConfig().MaxConcurrentRequestsPerAccount
+	}
+	return s.cfg.Get().Accounts.MaxConcurrentRequestsPerAccount
 }

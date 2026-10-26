@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"SnakeMedia/internal/media"
 	"SnakeMedia/internal/providers/flow/session"
@@ -27,11 +29,62 @@ type sourceRecord struct {
 	Original   media.VideoMetadata `json:"original"`
 }
 
+// stateDir is the folder holding the saved records of one kind.
+func (s *Provider) stateDir(kind string) string {
+	return filepath.Join(filepath.Dir(s.cfg.Path()), "flow", kind)
+}
+
 func (s *Provider) statePath(kind, id string) (string, error) {
 	if _, err := uuid.Parse(id); err != nil {
 		return "", errors.New("Mã tham chiếu không hợp lệ.")
 	}
-	return filepath.Join(filepath.Dir(s.cfg.Path()), "flow", kind, id+".json"), nil
+	return filepath.Join(s.stateDir(kind), id+".json"), nil
+}
+
+// stateEntry is one saved record and when it was last written.
+type stateEntry struct {
+	id       string
+	modified time.Time
+}
+
+// stateEntries lists the saved records of one kind; foreign files are ignored.
+func (s *Provider) stateEntries(kind string) ([]stateEntry, error) {
+	entries, err := os.ReadDir(s.stateDir(kind))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := make([]stateEntry, 0, len(entries))
+	for _, entry := range entries {
+		id, ok := strings.CutSuffix(entry.Name(), ".json")
+		if entry.IsDir() || !ok || uuid.Validate(id) != nil {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		out = append(out, stateEntry{id: id, modified: info.ModTime()})
+	}
+	return out, nil
+}
+
+func (s *Provider) removeState(kind, id string) error {
+	path, err := s.statePath(kind, id)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// jobRetention is how long finished journals are kept and unconfirmed ones followed.
+func (s *Provider) jobRetention() time.Duration {
+	return time.Duration(s.cfg.Get().Flow.JobRetentionHours) * time.Hour
 }
 
 func (s *Provider) saveState(kind, id string, value any) error {

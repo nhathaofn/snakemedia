@@ -116,7 +116,7 @@ func (s *Store) Put(id, contentType, fallbackExt string, data []byte) (string, e
 // outside the media folder.
 func (s *Store) Path(localURL string) (string, error) {
 	name := strings.TrimPrefix(localURL, Route)
-	if name == localURL || name == "" || name != filepath.Base(name) {
+	if name == localURL || name == "" || name == "." || name == ".." || name != filepath.Base(name) {
 		return "", fmt.Errorf("Tệp %q không thuộc thư mục media.", localURL)
 	}
 	return filepath.Join(s.dir, name), nil

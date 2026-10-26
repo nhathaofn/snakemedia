@@ -1,0 +1,6 @@
+# Keep LF in the working tree on every OS so gofmt and Prettier agree with CI.
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.exe binary

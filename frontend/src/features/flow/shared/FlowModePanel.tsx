@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Layers } from 'lucide-react';
-import { api } from '../../../services/api';
+import { useRotationCount } from './hooks';
 
 /**
  * Tools panel of one mode. Fields stack from the top; the account rotation status
@@ -26,17 +25,7 @@ export function FlowModePanel({
 
 /** Number of connected accounts with valid cookies that take turns generating. */
 function RotationStatusBadge() {
-  const [count, setCount] = useState(0);
-
-  useEffect(() => {
-    let active = true;
-    void api.getActiveRotationCount().then((res) => {
-      if (active && res.success && typeof res.data === 'number') setCount(res.data);
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
+  const count = useRotationCount();
 
   return (
     <div

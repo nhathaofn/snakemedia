@@ -149,22 +149,14 @@ export const AccountsPage: React.FC = () => {
     setSession({ id, request: api.launchLoginBrowser(id) });
   };
 
-  const closeLogin = () => {
-    if (session)
-      void api.cancelLogin(session.id).then((response) => {
-        try {
-          unwrap(response);
-        } catch (cause) {
-          report(cause);
-        }
-      });
-    setSession(null);
-  };
+  // Unmounting LoginModal cancels its login session, so closing only has to
+  // drop the session; cancelling here as well sent CancelLogin twice.
+  const closeLogin = () => setSession(null);
 
   return (
     <div className="page-shell accounts-page">
       <div className="accounts-header">
-        <h1 className="accounts-title">Account</h1>
+        <h1 className="accounts-title">Tài khoản</h1>
         <Button
           variant="primary"
           disabled={loading || !!loadError || busyId !== null || session !== null}

@@ -93,6 +93,9 @@ export namespace config {
 	    generationTimeoutSeconds: number;
 	    videoGenerationTimeoutSeconds: number;
 	    videoPollIntervalMs: number;
+	    maxConcurrentRequestsPerAccount: number;
+	    signedOutReads: number;
+	    rpcCacheSeconds: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new AccountConfig(source);
@@ -112,6 +115,9 @@ export namespace config {
 	        this.generationTimeoutSeconds = source["generationTimeoutSeconds"];
 	        this.videoGenerationTimeoutSeconds = source["videoGenerationTimeoutSeconds"];
 	        this.videoPollIntervalMs = source["videoPollIntervalMs"];
+	        this.maxConcurrentRequestsPerAccount = source["maxConcurrentRequestsPerAccount"];
+	        this.signedOutReads = source["signedOutReads"];
+	        this.rpcCacheSeconds = source["rpcCacheSeconds"];
 	    }
 	}
 	export class FlowConfig {
@@ -124,6 +130,9 @@ export namespace config {
 	    pollMaxIntervalMs: number;
 	    minTrimSeconds: number;
 	    trimStepSeconds: number;
+	    maxImageBytes: number;
+	    modelCacheSeconds: number;
+	    jobRetentionHours: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new FlowConfig(source);
@@ -140,6 +149,9 @@ export namespace config {
 	        this.pollMaxIntervalMs = source["pollMaxIntervalMs"];
 	        this.minTrimSeconds = source["minTrimSeconds"];
 	        this.trimStepSeconds = source["trimStepSeconds"];
+	        this.maxImageBytes = source["maxImageBytes"];
+	        this.modelCacheSeconds = source["modelCacheSeconds"];
+	        this.jobRetentionHours = source["jobRetentionHours"];
 	    }
 	}
 	export class AppConfig {
@@ -338,6 +350,7 @@ export namespace flow {
 	    default: boolean;
 	    duration: number;
 	    maxInputSeconds: number;
+	    maxCredits: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new FlowEditModel(source);
@@ -350,6 +363,7 @@ export namespace flow {
 	        this.default = source["default"];
 	        this.duration = source["duration"];
 	        this.maxInputSeconds = source["maxInputSeconds"];
+	        this.maxCredits = source["maxCredits"];
 	    }
 	}
 	export class FlowImageProject {
@@ -426,6 +440,22 @@ export namespace flow {
 	        this.fileName = source["fileName"];
 	    }
 	}
+	export class FlowVideoCost {
+	    duration: number;
+	    resolution: string;
+	    credits: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new FlowVideoCost(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.duration = source["duration"];
+	        this.resolution = source["resolution"];
+	        this.credits = source["credits"];
+	    }
+	}
 	export class FlowVideoModel {
 	    id: string;
 	    name: string;
@@ -434,6 +464,7 @@ export namespace flow {
 	    aspectRatios: string[];
 	    resolutions: string[];
 	    maxReferenceImages: number;
+	    costs: FlowVideoCost[];
 	
 	    static createFrom(source: any = {}) {
 	        return new FlowVideoModel(source);
@@ -448,7 +479,26 @@ export namespace flow {
 	        this.aspectRatios = source["aspectRatios"];
 	        this.resolutions = source["resolutions"];
 	        this.maxReferenceImages = source["maxReferenceImages"];
+	        this.costs = this.convertValues(source["costs"], FlowVideoCost);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ReferenceImage {
 	    base64: string;
@@ -467,6 +517,7 @@ export namespace flow {
 	    }
 	}
 	export class GenerateImageRequest {
+	    requestId?: string;
 	    prompt: string;
 	    modelId: string;
 	    aspectRatio: string;
@@ -482,6 +533,7 @@ export namespace flow {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.requestId = source["requestId"];
 	        this.prompt = source["prompt"];
 	        this.modelId = source["modelId"];
 	        this.aspectRatio = source["aspectRatio"];
@@ -511,6 +563,7 @@ export namespace flow {
 		}
 	}
 	export class GenerateVideoRequest {
+	    requestId?: string;
 	    prompt: string;
 	    modelId: string;
 	    aspectRatio: string;
@@ -526,6 +579,7 @@ export namespace flow {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.requestId = source["requestId"];
 	        this.prompt = source["prompt"];
 	        this.modelId = source["modelId"];
 	        this.aspectRatio = source["aspectRatio"];
@@ -555,6 +609,8 @@ export namespace flow {
 		}
 	}
 	export class GeneratedImageItem {
+	    jobId?: string;
+	    pending?: boolean;
 	    id: string;
 	    url: string;
 	    prompt: string;
@@ -571,6 +627,8 @@ export namespace flow {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.jobId = source["jobId"];
+	        this.pending = source["pending"];
 	        this.id = source["id"];
 	        this.url = source["url"];
 	        this.prompt = source["prompt"];
@@ -621,6 +679,7 @@ export namespace flow {
 	    videoExtensions: string[];
 	    imageAspectRatios: string[];
 	    defaultImageRatio: string;
+	    defaultBatchRatio: string;
 	    maxImages: number;
 	    maxVideos: number;
 	    maxReferenceBytes: number;
@@ -635,6 +694,7 @@ export namespace flow {
 	        this.videoExtensions = source["videoExtensions"];
 	        this.imageAspectRatios = source["imageAspectRatios"];
 	        this.defaultImageRatio = source["defaultImageRatio"];
+	        this.defaultBatchRatio = source["defaultBatchRatio"];
 	        this.maxImages = source["maxImages"];
 	        this.maxVideos = source["maxVideos"];
 	        this.maxReferenceBytes = source["maxReferenceBytes"];

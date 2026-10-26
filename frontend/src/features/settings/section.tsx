@@ -6,14 +6,14 @@ import { SettingsPage } from './general/SettingsPage';
 export const settingsSection = {
   id: 'settings',
   path: '/settings',
-  label: 'Settings',
+  label: 'Cài đặt',
   icon: Settings,
   placement: 'sidebar',
   features: [
     {
       id: 'general',
       path: 'general',
-      label: 'General',
+      label: 'Chung',
       icon: SlidersHorizontal,
       element: <SettingsPage />,
     },

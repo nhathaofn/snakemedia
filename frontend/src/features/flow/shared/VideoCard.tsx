@@ -45,7 +45,12 @@ export function VideoCard({
           </p>
         )}
         {video.pending && onResume && (
-          <button type="button" className="flow-card-action-btn" disabled={busy} onClick={onResume}>
+          <button
+            type="button"
+            className="flow-card-action-btn flow-card-text-btn"
+            disabled={busy}
+            onClick={onResume}
+          >
             Kiểm tra tiếp
           </button>
         )}

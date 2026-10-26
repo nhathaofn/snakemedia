@@ -38,6 +38,14 @@ describe('shared studio slice', () => {
     expect(useFlowImageStore.getState().selectedModel).toBe('B');
     useFlowImageStore.getState().setModels([imageModel('C')]);
     expect(useFlowImageStore.getState().selectedModel).toBe('C');
+  });
+
+  it('keeps the chosen model when the same catalogue loads again', () => {
+    const store = useFlowImageStore.getState();
+    store.setModels([imageModel('A'), imageModel('B', true)]);
+    useFlowImageStore.getState().setSelectedModel('A');
+    useFlowImageStore.getState().setModels([imageModel('A'), imageModel('B', true)]);
+    expect(useFlowImageStore.getState().selectedModel).toBe('A');
     useFlowImageStore.getState().setModels([]);
     expect(useFlowImageStore.getState().selectedModel).toBe('');
   });
@@ -141,7 +149,9 @@ describe('video store', () => {
     store.completeTurn('video-turn', [
       { id: 'temporary-result-id', jobId: 'flow-job' },
     ] as GeneratedVideoItem[]);
-    expect(useFlowVideoStore.getState().turns[0].resultKeys).toEqual(['flow-job']);
+    expect(useFlowVideoStore.getState().turns[0].resultKeys).toEqual([
+      'flow-job:temporary-result-id',
+    ]);
   });
 
   it('fits ratio, duration and quality to the selected model', () => {
@@ -172,5 +182,87 @@ describe('video store', () => {
       duration: 8,
       resolution: '720p',
     });
+  });
+
+  it('restores saved jobs once, before the turns of this session', () => {
+    useFlowImageStore.setState({ turns: [], items: [] });
+    const pending = {
+      id: 'c1',
+      jobId: 'job-1',
+      pending: true,
+      prompt: 'a fox',
+    } as GeneratedImageItem;
+    const store = useFlowImageStore.getState();
+    store.beginTurn({
+      id: 'job-2',
+      prompt: 'new',
+      attachments: [],
+      pendingCount: 1,
+      pendingRatio: '1:1',
+      pendingLabel: '',
+    });
+    const entry = {
+      turn: {
+        id: 'job-1',
+        prompt: 'a fox',
+        attachments: [],
+        pendingCount: 0,
+        pendingRatio: '1:1',
+        pendingLabel: '',
+      },
+      items: [pending],
+    };
+    useFlowImageStore.getState().restoreTurns([entry]);
+    useFlowImageStore.getState().restoreTurns([entry]);
+    const { turns, items } = useFlowImageStore.getState();
+    expect(turns.map((turn) => turn.id)).toEqual(['job-1', 'job-2']);
+    expect(turns[0].resultKeys).toEqual(['job-1:c1']);
+    expect(items).toHaveLength(1);
+  });
+
+  it('replaces a pending placeholder with its finished result', () => {
+    useFlowImageStore.setState({ turns: [], items: [] });
+    const pending = { id: 'c1', jobId: 'job-1', pending: true } as GeneratedImageItem;
+    const done = {
+      id: 'media-1',
+      jobId: 'job-1',
+      localUrl: '/flow-media/1.png',
+    } as GeneratedImageItem;
+    const store = useFlowImageStore.getState();
+    store.beginTurn({
+      id: 'job-1',
+      prompt: 'p',
+      attachments: [],
+      pendingCount: 1,
+      pendingRatio: '',
+      pendingLabel: '',
+    });
+    store.addItems([pending]);
+    useFlowImageStore.getState().completeTurn('job-1', [pending]);
+    useFlowImageStore.getState().addItems([done]);
+    useFlowImageStore.getState().completeTurn('job-1', [done]);
+    const { turns, items } = useFlowImageStore.getState();
+    expect(turns[0].resultKeys).toEqual(['job-1:media-1']);
+    expect(items.map((item) => item.id)).toEqual(['media-1']);
+  });
+
+  it('resets a turn when the same request is sent again', () => {
+    useFlowImageStore.setState({ turns: [], items: [] });
+    const store = useFlowImageStore.getState();
+    const draft = {
+      id: 'job-1',
+      prompt: 'p',
+      attachments: [],
+      pendingCount: 1,
+      pendingRatio: '',
+      pendingLabel: '',
+    };
+    store.beginTurn(draft);
+    useFlowImageStore.getState().failTurn('job-1', 'mất kết nối');
+    useFlowImageStore.getState().beginTurn(draft);
+    const { turns } = useFlowImageStore.getState();
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({ pendingCount: 1 });
+    expect(turns[0].error).toBeUndefined();
   });
 });

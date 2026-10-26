@@ -1,7 +1,7 @@
 import React from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import '../shared/FlowStudio.css';
 import './FlowEditPage.css';
-import { useAppStore } from '../../../stores';
 import { api } from '../../../services/api';
 import { EditVideoRequest } from '../../../types';
 import {
@@ -13,10 +13,21 @@ import {
   selectedModelOf,
   useGeneration,
   useModelCatalog,
+  useRestoreJobs,
+  useResumeJob,
+  useStopGeneration,
   useSaveMedia,
 } from '../shared';
 import { SourceVideoPanel } from './SourceVideoPanel';
 import { trimRequest, useFlowEditStore } from './store/flowEditStore';
+
+/** Edit results replace a job's earlier items (upsert), unlike the other studios. */
+const editRecoveryStore = {
+  getState: () => {
+    const state = useFlowEditStore.getState();
+    return { ...state, addItems: state.upsertItems };
+  },
+};
 
 /**
  * FlowEditPage - Edit video: the source video and model on the left, the edited
@@ -37,7 +48,13 @@ export const FlowEditPage: React.FC = () => (
 function EditSettings() {
   const setModels = useFlowEditStore((s) => s.setModels);
   const model = useFlowEditStore(selectedModelOf);
-  const store = useFlowEditStore();
+  const store = useFlowEditStore(
+    useShallow((s) => ({
+      selectedModel: s.selectedModel,
+      models: s.models,
+      setSelectedModel: s.setSelectedModel,
+    })),
+  );
   const loadModels = React.useCallback(async () => {
     const result = await api.getEditModels();
     const latest = useFlowEditStore.getState();
@@ -68,6 +85,7 @@ function EditSettings() {
       {model && (
         <p className="flow-edit-note">
           Tạo 1 video từ đoạn đã chọn, tỉ lệ và chất lượng theo nguồn.
+          {model.maxCredits > 0 && ` Tối đa ${model.maxCredits} credit/lần.`}
         </p>
       )}
     </FlowModePanel>
@@ -75,7 +93,20 @@ function EditSettings() {
 }
 
 function EditWorkspace() {
-  const store = useFlowEditStore();
+  const store = useFlowEditStore(
+    useShallow((s) => ({
+      prompt: s.prompt,
+      items: s.items,
+      turns: s.turns,
+      source: s.source,
+      sourceDuration: s.sourceDuration,
+      uploadedSourceID: s.uploadedSourceID,
+      isSourceLoading: s.isSourceLoading,
+      sourceError: s.sourceError,
+      isGenerating: s.isGenerating,
+      setPrompt: s.setPrompt,
+    })),
+  );
   const model = useFlowEditStore(selectedModelOf);
   const generate = useGeneration(
     {
@@ -86,24 +117,9 @@ function EditWorkspace() {
     },
     'video',
   );
-  const notify = useAppStore((s) => s.addToast);
-  const resume = async (id: string) => {
-    const current = useFlowEditStore.getState();
-    if (current.isGenerating) return;
-    current.beginGeneration();
-    try {
-      const result = await api.resumeVideoEdit(id);
-      if (result.success && result.data) current.upsertItems(result.data);
-      else
-        notify({
-          type: 'error',
-          title: 'Chưa kiểm tra được video',
-          message: result.error ?? 'Không rõ lỗi.',
-        });
-    } finally {
-      useFlowEditStore.getState().finishGeneration();
-    }
-  };
+  useRestoreJobs(editRecoveryStore, api.listVideoEditJobs, 'Đang đối soát job chỉnh sửa video');
+  const { resuming, resumeJob } = useResumeJob(editRecoveryStore, api.resumeVideoEdit);
+  const stopGeneration = useStopGeneration();
   const saveMedia = useSaveMedia();
   const {
     prompt,
@@ -117,7 +133,7 @@ function EditWorkspace() {
   } = store;
 
   const blockedReason = !model
-    ? 'Chưa có model chỉnh sửa video: kiểm tra tài khoản ở mục Account.'
+    ? 'Chưa có model chỉnh sửa video: kiểm tra tài khoản ở mục Tài khoản.'
     : !source
       ? 'Chọn video gốc ở cột bên trái.'
       : sourceError
@@ -128,8 +144,18 @@ function EditWorkspace() {
 
   const onGenerate = () => {
     const current = useFlowEditStore.getState();
+    const request = EditVideoRequest.createFrom({
+      prompt: current.prompt.trim(),
+      modelId: current.selectedModel,
+      sourceUrl: current.source?.localUrl ?? '',
+      sourceId: current.uploadedSourceID ?? '',
+      ...trimRequest(current),
+    });
+    // The turn shares the request ID, so restoring or resuming this job finds it.
+    const requestId = current.requestIDFor(request);
+    request.requestId = requestId;
     const turn = {
-      id: crypto.randomUUID(),
+      id: requestId,
       prompt: current.prompt.trim(),
       attachments: current.source
         ? [
@@ -148,18 +174,10 @@ function EditWorkspace() {
           : '',
       pendingLabel: 'Đang chỉnh sửa video',
     };
-    const request = EditVideoRequest.createFrom({
-      prompt: current.prompt.trim(),
-      modelId: current.selectedModel,
-      sourceUrl: current.source?.localUrl ?? '',
-      sourceId: current.uploadedSourceID ?? '',
-      ...trimRequest(current),
-    });
     void generate(
       async () => {
-        request.requestId = current.requestIDFor(request);
         const result = await api.editVideos(request);
-        if (result.success) current.acceptAttempt(request.requestId);
+        if (result.success) current.acceptAttempt(requestId);
         return result;
       },
       {
@@ -180,6 +198,7 @@ function EditWorkspace() {
         turns={turns}
         items={items}
         emptyTitle="Chỉnh sửa video với Google Flow"
+        onStopTurn={stopGeneration}
         emptyText="Chọn video gốc, rồi mô tả thay đổi bạn muốn (góc quay, ánh sáng, trang phục…) và nhấn Enter."
         renderItem={(video) => (
           <VideoCard
@@ -187,8 +206,8 @@ function EditWorkspace() {
             showPrompt={false}
             onSave={(url) => void saveMedia(url)}
             onDismiss={() => useFlowEditStore.getState().dismissItem(video.jobId || video.id)}
-            onResume={video.jobId ? () => void resume(video.jobId!) : undefined}
-            busy={store.isGenerating}
+            onResume={video.jobId ? () => void resumeJob(video.jobId!) : undefined}
+            busy={!!video.jobId && resuming.has(video.jobId)}
           />
         )}
       />

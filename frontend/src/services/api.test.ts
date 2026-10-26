@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ResponseCode } from '../types';
-import { ApiError, invoke, unwrap } from './api';
+import { ApiError, invoke, isTransportFailure, unwrap } from './api';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -19,6 +19,16 @@ describe('invoke', () => {
     vi.stubGlobal('window', { go: {}, runtime: {} });
     const res = await invoke('GetConfig', () => Promise.reject(new Error('boom')));
     expect(res).toEqual({ success: false, error: 'GetConfig: boom', code: ResponseCode.Internal });
+  });
+
+  it('marks only bridge failures as transport failures', async () => {
+    vi.stubGlobal('window', { go: {}, runtime: {} });
+    const thrown = await invoke('GenerateImages', () => Promise.reject(new Error('ipc closed')));
+    expect(isTransportFailure(thrown)).toBe(true);
+    const replied = await invoke('GenerateImages', () =>
+      Promise.resolve({ success: false, error: 'rejected', code: ResponseCode.Internal }),
+    );
+    expect(isTransportFailure(replied)).toBe(false);
   });
 
   it('passes successful responses through', async () => {
