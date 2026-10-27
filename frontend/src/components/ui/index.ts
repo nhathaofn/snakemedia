@@ -4,3 +4,5 @@ export * from './Spinner/Spinner';
 export * from './SegmentedControl/SegmentedControl';
 export * from './Icon/Icon';
 export * from './Tabs/Tabs';
+export * from './RevealList/RevealList';
+export * from './Modal/Modal';

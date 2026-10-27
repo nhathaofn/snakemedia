@@ -1,56 +1,78 @@
 import { create } from 'zustand';
-import { api, unwrap } from '../../../services';
-import type { MuseAccount, MuseJob, MuseOptions } from '../../../types';
-import { upsertJob } from './format';
+import { api, unwrap, unwrapList } from '../../../services';
+import type { MuseJob, MuseOptions } from '../../../types';
+import { mergeSnapshot, upsertJob } from './format';
 
 interface MuseState {
   jobs: MuseJob[];
-  accounts: MuseAccount[];
   options: MuseOptions | null;
   loaded: boolean;
   loadError: string | null;
-  /** Loads jobs, accounts and options once; later calls reload them. */
+  /** Loads jobs and options; later calls reload them. */
   load: () => Promise<void>;
+  /** Reloads the jobs only (bulk changes); calls made meanwhile share one reload. */
+  loadJobs: () => Promise<void>;
   setJob: (job: MuseJob | null) => void;
   dropJob: (id: string) => void;
-  setAccounts: (accounts: MuseAccount[] | null) => void;
-  setAccount: (account: MuseAccount) => void;
 }
 
-/** Shared Muse state, kept current by backend events (see useMuseLive). */
-export const useMuseStore = create<MuseState>((set) => ({
+const errorText = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
+
+// Jobs events changed while a list call is in flight, applied over its
+// snapshot when it lands (null: removed). Cleared once no call is in flight.
+const touched = new Map<string, MuseJob | null>();
+let listsInFlight = 0;
+let jobsReload: Promise<void> | null = null;
+
+async function listJobs(): Promise<MuseJob[]> {
+  listsInFlight++;
+  try {
+    const snapshot = unwrapList(await api.listMuseJobs());
+    return mergeSnapshot(snapshot, touched);
+  } finally {
+    if (--listsInFlight === 0) touched.clear();
+  }
+}
+
+/**
+ * Shared Muse queue state, kept current by backend events (see useMuseLive).
+ * Accounts live in the shared accounts store.
+ */
+export const useMuseStore = create<MuseState>((set, get) => ({
   jobs: [],
-  accounts: [],
   options: null,
   loaded: false,
   loadError: null,
   load: async () => {
-    // A failed call must surface as loadError: showing "no jobs" or "no ready
-    // account" when the backend failed would mislead the user.
+    // A failed call must surface as loadError: showing "no jobs" when the
+    // backend failed would mislead the user.
     try {
-      const [jobs, accounts, options] = await Promise.all([
-        api.listMuseJobs().then(unwrap),
-        api.getMuseAccounts().then(unwrap),
-        api.getMuseOptions().then(unwrap),
-      ]);
-      set({ jobs, accounts, options, loaded: true, loadError: null });
+      const [jobs, options] = await Promise.all([listJobs(), api.getMuseOptions().then(unwrap)]);
+      set({ jobs, options, loaded: true, loadError: null });
     } catch (cause) {
-      set({ loaded: true, loadError: cause instanceof Error ? cause.message : String(cause) });
+      set({ loaded: true, loadError: errorText(cause) });
     }
+  },
+  loadJobs: () => {
+    jobsReload ??= (async () => {
+      try {
+        set({ jobs: await listJobs(), loaded: true, loadError: null });
+      } catch (cause) {
+        set({ loaded: true, loadError: errorText(cause) });
+      } finally {
+        jobsReload = null;
+      }
+    })();
+    return jobsReload;
   },
   setJob: (job) => {
     // Events can carry no job (bulk changes use MuseJobsChanged); ignore them.
     if (!job?.id) return;
+    if (listsInFlight > 0) touched.set(job.id, job);
     set((state) => ({ jobs: upsertJob(state.jobs, job) }));
   },
-  dropJob: (id) => set((state) => ({ jobs: state.jobs.filter((job) => job.id !== id) })),
-  setAccounts: (accounts) => {
-    if (Array.isArray(accounts)) set({ accounts });
+  dropJob: (id) => {
+    if (listsInFlight > 0) touched.set(id, null);
+    set({ jobs: get().jobs.filter((job) => job.id !== id) });
   },
-  setAccount: (account) =>
-    set((state) => ({
-      accounts: state.accounts.some((item) => item.id === account.id)
-        ? state.accounts.map((item) => (item.id === account.id ? account : item))
-        : [...state.accounts, account],
-    })),
 }));

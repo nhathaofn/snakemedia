@@ -1,12 +1,14 @@
-import { Navigate, useRouteError } from 'react-router-dom';
+import { Navigate, useNavigate, useRouteError } from 'react-router-dom';
 import type { RouteObject } from 'react-router-dom';
 import { AppLayout } from '../components/layout';
 import { Button } from '../components/ui';
 import { APP_SECTIONS, DEFAULT_PATH, defaultFeaturePath } from './registry';
 import type { AppSection } from '../types';
+import './RouteError.css';
 
 export function RouteErrorFallback() {
   const error = useRouteError();
+  const navigate = useNavigate();
   const message =
     error instanceof Error
       ? error.message
@@ -14,28 +16,14 @@ export function RouteErrorFallback() {
         ? error
         : 'Đã xảy ra lỗi không mong muốn trên trang này.';
   return (
-    <div
-      role="alert"
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        minHeight: '60vh',
-        padding: '2rem',
-        textAlign: 'center',
-        gap: '1rem',
-      }}
-    >
-      <h2 style={{ fontSize: '1.25rem', fontWeight: 600 }}>Đã xảy ra lỗi khi tải trang</h2>
-      <p style={{ color: 'var(--color-text-danger, #ef4444)', maxWidth: '500px', margin: 0 }}>
-        {message}
-      </p>
-      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+    <div role="alert" className="route-error">
+      <h2 className="route-error-title">Đã xảy ra lỗi khi tải trang</h2>
+      <p className="route-error-message">{message}</p>
+      <div className="route-error-actions">
         <Button variant="primary" onClick={() => window.location.reload()}>
           Tải lại trang
         </Button>
-        <Button variant="ghost" onClick={() => (window.location.href = '/')}>
+        <Button variant="ghost" onClick={() => navigate(DEFAULT_PATH)}>
           Về trang chủ
         </Button>
       </div>
@@ -44,7 +32,7 @@ export function RouteErrorFallback() {
 }
 
 /**
- * '/home' → { path: 'home', children: [index → first feature, 'overview', 'accounts', …] }.
+ * '/home' → { path: 'home', children: [index → first feature, 'accounts', 'proxy', …] }.
  * Case-sensitive so '/Home/...' falls through to the fallback instead of rendering a
  * page whose section the header and sidebar cannot resolve.
  */

@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { create } from 'zustand';
-import { beginGenerationAttempt, clearGenerationAttempt, runGeneration } from './hooks';
+import {
+  beginGenerationAttempt,
+  clearGenerationAttempt,
+  runGeneration,
+  staleGenerationKeys,
+} from './hooks';
 import { invoke } from '../../../services/api';
 import { ResponseCode, type ApiResponse } from '../../../types';
 
@@ -211,5 +216,19 @@ describe('runGeneration', () => {
     await second;
     expect(secondLifecycle.onFailure).toHaveBeenCalledWith('boom', true);
     expect(store.getState().prompt).toBe('second prompt');
+  });
+});
+
+describe('staleGenerationKeys', () => {
+  it('keeps pending and in-flight IDs and leaves other keys alone', () => {
+    const saved: [string, string][] = [
+      ['flow:generation:image:a', 'pending-job'],
+      ['flow:generation:video:b', 'settled-job'],
+      ['flow:generation:image:c', 'sending-now'],
+      ['theme', 'dark'],
+    ];
+    expect(staleGenerationKeys(saved, new Set(['pending-job', 'sending-now']))).toEqual([
+      'flow:generation:video:b',
+    ]);
   });
 });

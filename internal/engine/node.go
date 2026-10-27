@@ -43,13 +43,14 @@ const (
 	ParamSelect  ParamKind = "select"
 	ParamInteger ParamKind = "integer"
 	ParamText    ParamKind = "text"
+	ParamToggle  ParamKind = "toggle"
 )
 
 // AllParamKinds is bound to the frontend as a TypeScript enum.
 var AllParamKinds = []struct {
 	Value  ParamKind
 	TSName string
-}{{ParamSelect, "Select"}, {ParamInteger, "Integer"}, {ParamText, "Text"}}
+}{{ParamSelect, "Select"}, {ParamInteger, "Integer"}, {ParamText, "Text"}, {ParamToggle, "Toggle"}}
 
 // Param is a node setting. Choices that depend on the account or model are not
 // copied here: OptionsFrom names where the UI reads them (e.g. "flow.imageModels").
@@ -73,8 +74,10 @@ type Spec struct {
 	Params      []Param `json:"params"`
 }
 
-// Node runs one unit of work. Input arrives as the node's JSON request, the
-// form a graph runner or the UI hands over.
+// Node runs one unit of work. Input arrives as one JSON object keyed by input
+// port and setting names; the result must encode as an object keyed by output
+// port names, so a graph can hand each output port on. Image, video and media
+// ports carry MediaRefs, text ports strings.
 type Node interface {
 	Spec() Spec
 	Run(ctx context.Context, input json.RawMessage) (any, error)

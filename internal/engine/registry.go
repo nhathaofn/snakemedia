@@ -10,12 +10,13 @@ import (
 
 // Registry holds the node types every provider contributes.
 type Registry struct {
-	mu    sync.RWMutex
-	nodes map[string]Node
+	mu      sync.RWMutex
+	nodes   map[string]Node
+	options map[string]OptionSource
 }
 
 func NewRegistry() *Registry {
-	return &Registry{nodes: make(map[string]Node)}
+	return &Registry{nodes: make(map[string]Node), options: make(map[string]OptionSource)}
 }
 
 // Register adds nodes; a type registered twice is a wiring error.
@@ -49,11 +50,16 @@ func (r *Registry) Specs() []Spec {
 
 // Run executes one node with its JSON request.
 func (r *Registry) Run(ctx context.Context, nodeType string, input json.RawMessage) (any, error) {
-	r.mu.RLock()
-	n, ok := r.nodes[nodeType]
-	r.mu.RUnlock()
+	n, ok := r.node(nodeType)
 	if !ok {
 		return nil, Invalid(fmt.Sprintf("Không có node %q.", nodeType))
 	}
 	return n.Run(ctx, input)
+}
+
+func (r *Registry) node(nodeType string) (Node, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	n, ok := r.nodes[nodeType]
+	return n, ok
 }

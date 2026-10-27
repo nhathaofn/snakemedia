@@ -35,60 +35,7 @@
   gap: var(--space-2);
 }
 
-/* Lightbox Modal */
-.flow-lightbox-overlay {
-  position: fixed;
-  inset: 0;
-  background-color: var(--lightbox-backdrop);
-  backdrop-filter: blur(4px);
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-10);
-}
-
-.flow-lightbox-content {
-  position: relative;
-  max-width: 90vw;
-  max-height: 85vh;
-  display: flex;
-  flex-direction: column;
-  background-color: var(--bg-secondary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  box-shadow: var(--shadow-lg);
-}
-
-.flow-lightbox-content img {
-  max-width: 100%;
-  max-height: 65vh;
-  object-fit: contain;
-  background-color: var(--media-letterbox);
-}
-
-.flow-lightbox-close {
-  position: absolute;
-  top: var(--space-4);
-  right: var(--space-4);
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background-color: var(--media-overlay-soft);
-  color: var(--text-primary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius-full);
-  cursor: pointer;
-  z-index: 10;
-  transition: background-color var(--transition-fast);
-}
-
-.flow-lightbox-close:hover {
-  background-color: var(--bg-primary);
-}
+/* Caption under an image opened in the lightbox (Modal). */
 
 .flow-lightbox-footer {
   padding: var(--space-6);

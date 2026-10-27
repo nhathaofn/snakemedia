@@ -1,6 +1,6 @@
 # 0009. Muse Provider: Advanced Queue Controls, Proxy Bridge, Studio Assets & Multi-Scene Production
 
-- **Status:** Accepted
+- **Status:** Partly superseded by ADR 0010 (proxy, accounts) and ADR 0011 (studio, V2V, scripts, productions)
 - **Date:** 2026-10-26
 
 ## Context

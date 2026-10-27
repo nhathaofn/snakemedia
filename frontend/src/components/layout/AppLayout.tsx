@@ -5,13 +5,14 @@ import { TitleBar } from './TitleBar';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 import { Toaster } from '../feedback';
-import { useAppBootstrap, useThemeSync } from '../../hooks';
+import { useAppBootstrap, useCompactLayout, useThemeSync } from '../../hooks';
 // Import routes modules directly: routes/index depends on layout, so going through it would be circular.
 import { useActiveFeature } from '../../routes/useActiveSection';
 
 export const AppLayout: React.FC = () => {
   useAppBootstrap();
   useThemeSync();
+  useCompactLayout();
   const fullLayout = useActiveFeature()?.layout === 'full';
 
   return (

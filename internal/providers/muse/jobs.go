@@ -1,16 +1,10 @@
 package muse
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
-	"slices"
-	"sync"
-	"time"
+	"reflect"
 
-	"SnakeMedia/pkg/utils"
+	"SnakeMedia/internal/jobs"
 )
 
 // MuseJobKind is what a job asks Muse to make.
@@ -19,15 +13,15 @@ type MuseJobKind string
 const (
 	MuseJobImage MuseJobKind = "image"
 	MuseJobVideo MuseJobKind = "video"
-	// MuseJobV2V recreates a source video: Muse first analyses it, then makes a
-	// new video in the same chat from the prompt and reference images.
-	MuseJobV2V MuseJobKind = "v2v"
 )
 
 var AllMuseJobKinds = []struct {
 	Value  MuseJobKind
 	TSName string
-}{{MuseJobImage, "Image"}, {MuseJobVideo, "Video"}, {MuseJobV2V, "V2V"}}
+}{{MuseJobImage, "Image"}, {MuseJobVideo, "Video"}}
+
+// valid reports whether the kind is one Muse makes.
+func (k MuseJobKind) valid() bool { return k == MuseJobImage || k == MuseJobVideo }
 
 // MuseJobStatus is a job's place in its lifecycle.
 type MuseJobStatus string
@@ -48,44 +42,17 @@ var AllMuseJobStatuses = []struct {
 	{MuseJobFailed, "Failed"}, {MuseJobCancelled, "Cancelled"},
 }
 
-// MuseJob is one durable generation request. SessionID is the Muse chat the job
-// was sent to: once set, the job is only ever re-checked there, never re-sent,
-// so an interrupted job costs no second Muse generation.
+// MuseJob is one durable generation request: one prompt sent in its own Muse
+// chat. SessionID is that chat: once set, the job is only ever re-checked
+// there, never re-sent, so an interrupted job costs no second Muse generation.
 type MuseJob struct {
 	ID     string      `json:"id"`
 	Kind   MuseJobKind `json:"kind"`
 	Prompt string      `json:"prompt"`
-	Ratio  string      `json:"ratio"`
-	Count  int         `json:"count"`
-	// Label is a short title shown in the queue (a production names its parts).
+	// Label is a short title for the queue and saved file names; empty uses the prompt.
 	Label string `json:"label,omitempty"`
-	// ProjectID groups jobs; a paused project's queued jobs wait.
-	ProjectID string `json:"projectId"`
 	// References are local media URLs of the attached images, in order.
 	References []string `json:"references"`
-	// Manifest is appended after the prompt to tell Muse what each image is for.
-	Manifest string `json:"manifest,omitempty"`
-	// SourceVideo is the local media URL of a V2V source; KeepAudio puts its
-	// sound back on the result.
-	SourceVideo string `json:"sourceVideo,omitempty"`
-	KeepAudio   bool   `json:"keepAudio,omitempty"`
-	// V2VTurn is 2 once the analysis turn is done and the remake was sent.
-	V2VTurn int `json:"v2vTurn,omitempty"`
-	// Thread asks to continue an existing Muse chat (a storyboard) on the
-	// account PinAccount that owns it; if that fails a new chat is used.
-	Thread      string `json:"thread,omitempty"`
-	PinAccount  string `json:"pinAccount,omitempty"`
-	ThreadError string `json:"threadError,omitempty"`
-	// ProductionID marks a job a production created and follows;
-	// ProductionPart names which part ("board", "all", "scene-N"), so a
-	// production finds its child again after a crash instead of sending twice.
-	ProductionID   string `json:"productionId,omitempty"`
-	ProductionPart string `json:"productionPart,omitempty"`
-	// HistoryBase and SeenPaths describe the chat before this job's message
-	// was sent into it: a shared storyboard thread already holds earlier
-	// replies and files, which must not be taken as this job's result.
-	HistoryBase int      `json:"historyBase,omitempty"`
-	SeenPaths   []string `json:"seenPaths,omitempty"`
 	// Rechecks counts failed attempts to read back a job Muse already accepted.
 	Rechecks int `json:"rechecks,omitempty"`
 	// Held jobs wait in the queue until the user runs them.
@@ -104,166 +71,129 @@ type MuseJob struct {
 	SavedFiles []string `json:"savedFiles,omitempty"`
 	CreatedAt  string   `json:"createdAt"`
 	StartedAt  string   `json:"startedAt,omitempty"`
-	FinishedAt string   `json:"finishedAt,omitempty"`
+	// SentAt is when Muse accepted the send (SessionID set); the job's time
+	// limit counts from here. Older journals fall back to StartedAt.
+	SentAt     string `json:"sentAt,omitempty"`
+	FinishedAt string `json:"finishedAt,omitempty"`
+	// LimitReplies counts how often Muse answered "limit" or "verify" instead
+	// of making the job; each answer cost a chat turn, so it is capped. It
+	// survives requeues and restarts and is reset only by an explicit retry.
+	LimitReplies int `json:"limitReplies,omitempty"`
+	// NextCheckAt holds the job back until then (RFC3339): a re-check after an
+	// error, or a job whose account was not ready, waits instead of retrying
+	// at once, also across a restart.
+	NextCheckAt string `json:"nextCheckAt,omitempty"`
+}
+
+// resetForRetry is resetForQueue for a retry the user asked for: the limit
+// reply count and any hold start over.
+func resetForRetry(j *MuseJob) {
+	resetForQueue(j)
+	j.LimitReplies, j.NextCheckAt = 0, ""
 }
 
 // resetForQueue clears everything a previous run left behind, so a job sent
 // again starts a fresh chat from its first turn.
 func resetForQueue(j *MuseJob) {
 	j.Status, j.Step, j.Error = MuseJobQueued, "", ""
-	j.AccountID, j.SessionID, j.Sending = "", "", false
-	j.V2VTurn, j.ThreadError, j.HistoryBase, j.SeenPaths, j.Rechecks = 0, "", 0, nil, 0
+	j.AccountID, j.SessionID, j.Sending, j.Rechecks = "", "", false, 0
 	j.Files, j.SavedFiles = []string{}, []string{}
-	j.StartedAt, j.FinishedAt = "", ""
+	j.StartedAt, j.SentAt, j.FinishedAt = "", "", ""
 }
 
 func (j MuseJob) finished() bool {
 	return j.Status == MuseJobSucceeded || j.Status == MuseJobFailed || j.Status == MuseJobCancelled
 }
 
-// jobStore keeps every job in one JSON file, rewritten atomically on change.
+// JobID implements jobs.Record.
+func (j MuseJob) JobID() string { return j.ID }
+
+// Finished implements jobs.Record: only finished jobs are trimmed.
+func (j MuseJob) Finished() bool { return j.finished() }
+
+// jobStore keeps every job in the shared durable journal (internal/jobs):
+// one JSON file, rewritten atomically when a job's state changes, indexed by
+// ID. Only add trims, and only finished jobs, so a job being updated never
+// moves or disappears.
 type jobStore struct {
-	mu      sync.Mutex
 	path    string
-	maxJobs func() int
-	jobs    []MuseJob // oldest first
+	journal *jobs.Journal[MuseJob]
 }
 
 func newJobStore(path string, maxJobs func() int) *jobStore {
-	return &jobStore{path: path, maxJobs: maxJobs, jobs: []MuseJob{}}
+	return &jobStore{path: path, journal: jobs.New(path, jobs.Options[MuseJob]{
+		Limit:     maxJobs,
+		Normalize: normalizeJob,
+		Transient: onlyStepChanged,
+	})}
+}
+
+// errJournalCorrupt marks a journal that could not be read and was moved aside;
+// the queue then starts empty and the user should be told.
+var errJournalCorrupt = jobs.ErrCorrupt
+
+// normalizeJob gives a job read from disk empty slices instead of nil.
+func normalizeJob(j *MuseJob) {
+	if j.Files == nil {
+		j.Files = []string{}
+	}
+	if j.SavedFiles == nil {
+		j.SavedFiles = []string{}
+	}
+	if j.References == nil {
+		j.References = []string{}
+	}
 }
 
 // load reads the journal. A corrupt file is moved aside and the app starts
-// with an empty queue rather than refusing to run.
-func (s *jobStore) load() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	data, err := os.ReadFile(s.path)
-	if errors.Is(err, os.ErrNotExist) {
-		s.jobs = []MuseJob{}
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	var jobs []MuseJob
-	if err := json.Unmarshal(data, &jobs); err != nil {
-		backup := fmt.Sprintf("%s.corrupt-%s", s.path, time.Now().Format("20060102-150405"))
-		_ = os.Rename(s.path, backup)
-		return fmt.Errorf("Danh sách tác vụ Muse hỏng, đã giữ tại %s: %w", backup, err)
-	}
-	for i := range jobs {
-		if jobs[i].Files == nil {
-			jobs[i].Files = []string{}
-		}
-		if jobs[i].SavedFiles == nil {
-			jobs[i].SavedFiles = []string{}
-		}
-		if jobs[i].References == nil {
-			jobs[i].References = []string{}
-		}
-	}
-	s.jobs = jobs
-	return nil
-}
-
-func (s *jobStore) saveLocked() error {
-	if extra := len(s.jobs) - s.maxJobs(); extra > 0 {
-		kept := s.jobs[:0]
-		for _, j := range s.jobs {
-			if extra > 0 && j.finished() {
-				extra--
-				continue
-			}
-			kept = append(kept, j)
-		}
-		s.jobs = kept
-	}
-	data, err := json.Marshal(s.jobs)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		return err
-	}
-	return utils.WriteFileAtomic(s.path, data, 0o600)
-}
+// with an empty queue rather than refusing to run; the error wraps
+// errJournalCorrupt so the caller can tell the user.
+func (s *jobStore) load() error { return s.journal.Load() }
 
 func (s *jobStore) list() []MuseJob {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.jobs) == 0 {
-		return []MuseJob{}
-	}
-	res := make([]MuseJob, len(s.jobs))
-	copy(res, s.jobs)
+	res := s.journal.List()
 	for i := range res {
-		if res[i].Files == nil {
-			res[i].Files = []string{}
-		}
-		if res[i].SavedFiles == nil {
-			res[i].SavedFiles = []string{}
-		}
-		if res[i].References == nil {
-			res[i].References = []string{}
-		}
+		normalizeJob(&res[i])
 	}
 	return res
 }
 
-func (s *jobStore) get(id string) (MuseJob, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, j := range s.jobs {
-		if j.ID == id {
-			return j, true
-		}
-	}
-	return MuseJob{}, false
-}
+func (s *jobStore) get(id string) (MuseJob, bool) { return s.journal.Get(id) }
 
-func (s *jobStore) add(job MuseJob) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.jobs = append(s.jobs, job)
-	return s.saveLocked()
-}
+// snapshot returns the jobs with the given IDs that still exist, read under
+// one lock.
+func (s *jobStore) snapshot(ids []string) map[string]MuseJob { return s.journal.Snapshot(ids) }
 
-// update applies change to a job and persists the journal.
+func (s *jobStore) add(job MuseJob) error { return s.journal.Add(job) }
+
+// update applies change to a job and persists the journal. A change of the
+// Step text alone (progress shown while a job runs) stays in memory: it is
+// written with the job's next real change, and a restart drops it anyway.
 func (s *jobStore) update(id string, change func(*MuseJob)) (MuseJob, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.jobs {
-		if s.jobs[i].ID == id {
-			change(&s.jobs[i])
-			return s.jobs[i], s.saveLocked()
-		}
+	job, err := s.journal.Update(id, change)
+	if errors.Is(err, jobs.ErrNotFound) {
+		return MuseJob{}, errJobNotFound
 	}
-	return MuseJob{}, errJobNotFound
+	return job, err
+}
+
+// onlyStepChanged reports whether a and b differ in nothing but Step.
+func onlyStepChanged(a, b MuseJob) bool {
+	a.Step, b.Step = "", ""
+	return reflect.DeepEqual(a, b)
 }
 
 // removeWhere deletes every job drop selects and returns how many went.
 func (s *jobStore) removeWhere(drop func(MuseJob) bool) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	before := len(s.jobs)
-	s.jobs = slices.DeleteFunc(s.jobs, drop)
-	if len(s.jobs) == before {
-		return 0, nil
-	}
-	return before - len(s.jobs), s.saveLocked()
+	return s.journal.RemoveWhere(drop)
 }
 
 func (s *jobStore) remove(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.jobs {
-		if s.jobs[i].ID == id {
-			s.jobs = slices.Delete(s.jobs, i, i+1)
-			return s.saveLocked()
-		}
+	err := s.journal.Remove(id)
+	if errors.Is(err, jobs.ErrNotFound) {
+		return errJobNotFound
 	}
-	return errJobNotFound
+	return err
 }
 
 var errJobNotFound = errors.New("Tác vụ Muse không tồn tại.")

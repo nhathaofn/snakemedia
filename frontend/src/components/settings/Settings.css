@@ -1,0 +1,115 @@
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-10);
+}
+
+.settings-title {
+  font-size: var(--font-size-page-title);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.settings-section-title {
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.settings-card {
+  padding: 0;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+  padding: var(--space-7) var(--space-8);
+}
+
+.settings-row + .settings-row {
+  border-top: var(--border-width) solid var(--border-subtle);
+}
+
+.settings-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.settings-row-label {
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-primary);
+}
+
+.settings-row-hint {
+  font-size: var(--font-size-small);
+  color: var(--text-secondary);
+}
+
+.settings-row-control {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.settings-number {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.settings-input {
+  width: var(--settings-number-width);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-primary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--font-size-small);
+  text-align: right;
+}
+
+.settings-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.settings-input-wide {
+  width: var(--settings-text-width);
+  text-align: left;
+}
+
+.settings-unit {
+  font-size: var(--font-size-small);
+  color: var(--text-muted);
+}
+
+.settings-advanced {
+  border-top: var(--border-width) solid var(--border-subtle);
+}
+
+.settings-advanced > summary {
+  padding: var(--space-6) var(--space-8);
+  font-size: var(--font-size-small);
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.settings-advanced[open] > summary {
+  border-bottom: var(--border-width) solid var(--border-subtle);
+}

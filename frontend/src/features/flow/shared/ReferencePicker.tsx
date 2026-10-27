@@ -4,6 +4,7 @@ import { useAppStore } from '../../../stores';
 import type { StudioConfig } from '../../../types';
 import { formatBytes } from '../../../utils';
 import type { ConversationTurn } from './studioStore';
+import { Icon } from '../../../components/ui';
 
 /** A local file picked as reference, kept until generation uploads it. */
 export interface ReferenceImage {
@@ -140,7 +141,7 @@ export function ReferencePicker({
                 onClick={() => onRemove(img.previewUrl)}
                 title={`Bỏ ${img.name}`}
               >
-                <X size={12} />
+                <Icon icon={X} size="sm" />
               </button>
             </div>
           ))}
@@ -152,7 +153,7 @@ export function ReferencePicker({
           className="reference-dropzone"
           onClick={() => inputRef.current?.click()}
         >
-          <ImagePlus size={20} className="reference-dropzone-icon" />
+          <Icon icon={ImagePlus} size="xl" className="reference-dropzone-icon" />
           <span className="reference-dropzone-text">Thêm ảnh tham chiếu</span>
         </button>
       )}

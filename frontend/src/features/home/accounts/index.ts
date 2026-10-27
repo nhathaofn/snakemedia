@@ -1,2 +1,1 @@
-export * from './AccountsPage';
-export * from './LoginModal';
+export { AccountsPage } from './AccountsPage';

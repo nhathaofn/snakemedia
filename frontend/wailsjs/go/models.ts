@@ -1,3 +1,103 @@
+export namespace accounts {
+	
+	export enum Provider {
+	    Flow = "flow",
+	    Muse = "muse",
+	}
+	export enum Source {
+	    Browser = "browser",
+	    Cookies = "cookies",
+	}
+	export enum Status {
+	    Error = "error",
+	    SignedIn = "signed_in",
+	    SignedOut = "signed_out",
+	    SigningIn = "signing_in",
+	    Unverified = "unverified",
+	}
+	export class UsageItem {
+	    label: string;
+	    value: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new UsageItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.label = source["label"];
+	        this.value = source["value"];
+	    }
+	}
+	export class Account {
+	    id: string;
+	    provider: Provider;
+	    name: string;
+	    identity?: string;
+	    source: Source;
+	    status: Status;
+	    enabled: boolean;
+	    usage: UsageItem[];
+	    proxy: string;
+	    proxyInUse?: string;
+	    proxyRotating?: boolean;
+	    proxyStatus?: string;
+	    proxyIp?: string;
+	    pausedUntil?: string;
+	    message?: string;
+	    noRoute?: string;
+	    lastCheckedAt?: string;
+	    createdAt: string;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Account(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.provider = source["provider"];
+	        this.name = source["name"];
+	        this.identity = source["identity"];
+	        this.source = source["source"];
+	        this.status = source["status"];
+	        this.enabled = source["enabled"];
+	        this.usage = this.convertValues(source["usage"], UsageItem);
+	        this.proxy = source["proxy"];
+	        this.proxyInUse = source["proxyInUse"];
+	        this.proxyRotating = source["proxyRotating"];
+	        this.proxyStatus = source["proxyStatus"];
+	        this.proxyIp = source["proxyIp"];
+	        this.pausedUntil = source["pausedUntil"];
+	        this.message = source["message"];
+	        this.noRoute = source["noRoute"];
+	        this.lastCheckedAt = source["lastCheckedAt"];
+	        this.createdAt = source["createdAt"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace buildinfo {
 	
 	export class Info {
@@ -38,32 +138,6 @@ export namespace chrome {
 	    Unsubscribed = "UNSUBSCRIBED_WITH_CREDITS",
 	    Zero = "ZERO",
 	}
-	export class FlowCredits {
-	    availabilityCode?: number;
-	    credits: number;
-	    tierCode: number;
-	    tier: Tier;
-	    resetStatus: number;
-	    quotaFlag: number;
-	    dailyLimit: number;
-	    resetAt?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new FlowCredits(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.availabilityCode = source["availabilityCode"];
-	        this.credits = source["credits"];
-	        this.tierCode = source["tierCode"];
-	        this.tier = source["tier"];
-	        this.resetStatus = source["resetStatus"];
-	        this.quotaFlag = source["quotaFlag"];
-	        this.dailyLimit = source["dailyLimit"];
-	        this.resetAt = source["resetAt"];
-	    }
-	}
 
 }
 
@@ -85,21 +159,15 @@ export namespace config {
 	    System = "system",
 	}
 	export class AccountConfig {
+	    headless: boolean;
+	    pageReadySeconds: number;
 	    pollIntervalMs: number;
-	    pollMaxIntervalMs: number;
 	    loginTimeoutSeconds: number;
 	    requestTimeoutSeconds: number;
 	    browserStartupTimeoutSeconds: number;
-	    refreshCooldownSeconds: number;
 	    maxResponseBytes: number;
-	    maxDiscoveryBytes: number;
-	    maxDiscoveryScripts: number;
-	    generationTimeoutSeconds: number;
-	    videoGenerationTimeoutSeconds: number;
-	    videoPollIntervalMs: number;
-	    maxConcurrentRequestsPerAccount: number;
-	    signedOutReads: number;
-	    rpcCacheSeconds: number;
+	    maxDownloadBytes: number;
+	    idleBrowserMinutes: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new AccountConfig(source);
@@ -107,26 +175,20 @@ export namespace config {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.headless = source["headless"];
+	        this.pageReadySeconds = source["pageReadySeconds"];
 	        this.pollIntervalMs = source["pollIntervalMs"];
-	        this.pollMaxIntervalMs = source["pollMaxIntervalMs"];
 	        this.loginTimeoutSeconds = source["loginTimeoutSeconds"];
 	        this.requestTimeoutSeconds = source["requestTimeoutSeconds"];
 	        this.browserStartupTimeoutSeconds = source["browserStartupTimeoutSeconds"];
-	        this.refreshCooldownSeconds = source["refreshCooldownSeconds"];
 	        this.maxResponseBytes = source["maxResponseBytes"];
-	        this.maxDiscoveryBytes = source["maxDiscoveryBytes"];
-	        this.maxDiscoveryScripts = source["maxDiscoveryScripts"];
-	        this.generationTimeoutSeconds = source["generationTimeoutSeconds"];
-	        this.videoGenerationTimeoutSeconds = source["videoGenerationTimeoutSeconds"];
-	        this.videoPollIntervalMs = source["videoPollIntervalMs"];
-	        this.maxConcurrentRequestsPerAccount = source["maxConcurrentRequestsPerAccount"];
-	        this.signedOutReads = source["signedOutReads"];
-	        this.rpcCacheSeconds = source["rpcCacheSeconds"];
+	        this.maxDownloadBytes = source["maxDownloadBytes"];
+	        this.idleBrowserMinutes = source["idleBrowserMinutes"];
 	    }
 	}
 	export class MuseConfig {
-	    headless: boolean;
 	    maxAttempts: number;
+	    maxRechecks: number;
 	    imageTimeoutMinutes: number;
 	    videoTimeoutMinutes: number;
 	    pollIntervalMs: number;
@@ -134,24 +196,15 @@ export namespace config {
 	    sendGapMinSeconds: number;
 	    sendGapMaxSeconds: number;
 	    sendTimeoutSeconds: number;
-	    pageReadySeconds: number;
-	    loginTimeoutMinutes: number;
-	    maxAttachmentBytes: number;
-	    maxDownloadBytes: number;
 	    maxJobs: number;
 	    maxAccounts: number;
 	    totalThreads: number;
 	    threadsPerAccount: number;
 	    mode: MuseMode;
 	    useTopup: boolean;
-	    keepGoing: boolean;
 	    usagePauseMinutes: number;
 	    autoSave: boolean;
 	    outputDir: string;
-	    ffmpegPath: string;
-	    maxSourceVideoBytes: number;
-	    stopAfterFailures: number;
-	    maxRechecks: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new MuseConfig(source);
@@ -159,8 +212,8 @@ export namespace config {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.headless = source["headless"];
 	        this.maxAttempts = source["maxAttempts"];
+	        this.maxRechecks = source["maxRechecks"];
 	        this.imageTimeoutMinutes = source["imageTimeoutMinutes"];
 	        this.videoTimeoutMinutes = source["videoTimeoutMinutes"];
 	        this.pollIntervalMs = source["pollIntervalMs"];
@@ -168,39 +221,38 @@ export namespace config {
 	        this.sendGapMinSeconds = source["sendGapMinSeconds"];
 	        this.sendGapMaxSeconds = source["sendGapMaxSeconds"];
 	        this.sendTimeoutSeconds = source["sendTimeoutSeconds"];
-	        this.pageReadySeconds = source["pageReadySeconds"];
-	        this.loginTimeoutMinutes = source["loginTimeoutMinutes"];
-	        this.maxAttachmentBytes = source["maxAttachmentBytes"];
-	        this.maxDownloadBytes = source["maxDownloadBytes"];
 	        this.maxJobs = source["maxJobs"];
 	        this.maxAccounts = source["maxAccounts"];
 	        this.totalThreads = source["totalThreads"];
 	        this.threadsPerAccount = source["threadsPerAccount"];
 	        this.mode = source["mode"];
 	        this.useTopup = source["useTopup"];
-	        this.keepGoing = source["keepGoing"];
 	        this.usagePauseMinutes = source["usagePauseMinutes"];
 	        this.autoSave = source["autoSave"];
 	        this.outputDir = source["outputDir"];
-	        this.ffmpegPath = source["ffmpegPath"];
-	        this.maxSourceVideoBytes = source["maxSourceVideoBytes"];
-	        this.stopAfterFailures = source["stopAfterFailures"];
-	        this.maxRechecks = source["maxRechecks"];
 	    }
 	}
 	export class FlowConfig {
 	    probePath: string;
-	    maxSourceBytes: number;
-	    maxDownloadBytes: number;
 	    uploadAttempts: number;
 	    uploadRetryDelayMs: number;
 	    maxPollFailures: number;
 	    pollMaxIntervalMs: number;
-	    minTrimSeconds: number;
-	    trimStepSeconds: number;
 	    maxImageBytes: number;
 	    modelCacheSeconds: number;
 	    jobRetentionHours: number;
+	    generationTimeoutSeconds: number;
+	    videoGenerationTimeoutSeconds: number;
+	    videoPollIntervalMs: number;
+	    maxConcurrentRequestsPerAccount: number;
+	    signedOutReads: number;
+	    queueThreads: number;
+	    queueGapMinSeconds: number;
+	    queueGapMaxSeconds: number;
+	    queueMaxTasks: number;
+	    maxDiscoveryBytes: number;
+	    maxDiscoveryScripts: number;
+	    rpcCacheSeconds: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new FlowConfig(source);
@@ -209,27 +261,35 @@ export namespace config {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.probePath = source["probePath"];
-	        this.maxSourceBytes = source["maxSourceBytes"];
-	        this.maxDownloadBytes = source["maxDownloadBytes"];
 	        this.uploadAttempts = source["uploadAttempts"];
 	        this.uploadRetryDelayMs = source["uploadRetryDelayMs"];
 	        this.maxPollFailures = source["maxPollFailures"];
 	        this.pollMaxIntervalMs = source["pollMaxIntervalMs"];
-	        this.minTrimSeconds = source["minTrimSeconds"];
-	        this.trimStepSeconds = source["trimStepSeconds"];
 	        this.maxImageBytes = source["maxImageBytes"];
 	        this.modelCacheSeconds = source["modelCacheSeconds"];
 	        this.jobRetentionHours = source["jobRetentionHours"];
+	        this.generationTimeoutSeconds = source["generationTimeoutSeconds"];
+	        this.videoGenerationTimeoutSeconds = source["videoGenerationTimeoutSeconds"];
+	        this.videoPollIntervalMs = source["videoPollIntervalMs"];
+	        this.maxConcurrentRequestsPerAccount = source["maxConcurrentRequestsPerAccount"];
+	        this.signedOutReads = source["signedOutReads"];
+	        this.queueThreads = source["queueThreads"];
+	        this.queueGapMinSeconds = source["queueGapMinSeconds"];
+	        this.queueGapMaxSeconds = source["queueGapMaxSeconds"];
+	        this.queueMaxTasks = source["queueMaxTasks"];
+	        this.maxDiscoveryBytes = source["maxDiscoveryBytes"];
+	        this.maxDiscoveryScripts = source["maxDiscoveryScripts"];
+	        this.rpcCacheSeconds = source["rpcCacheSeconds"];
 	    }
 	}
 	export class AppConfig {
 	    theme: Theme;
 	    logLevel: LogLevel;
 	    windowScale: number;
-	    cdpPort: number;
 	    accounts: AccountConfig;
 	    flow: FlowConfig;
 	    muse: MuseConfig;
+	    revision: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -240,10 +300,10 @@ export namespace config {
 	        this.theme = source["theme"];
 	        this.logLevel = source["logLevel"];
 	        this.windowScale = source["windowScale"];
-	        this.cdpPort = source["cdpPort"];
 	        this.accounts = this.convertValues(source["accounts"], AccountConfig);
 	        this.flow = this.convertValues(source["flow"], FlowConfig);
 	        this.muse = this.convertValues(source["muse"], MuseConfig);
+	        this.revision = source["revision"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -274,12 +334,178 @@ export namespace engine {
 	    Integer = "integer",
 	    Select = "select",
 	    Text = "text",
+	    Toggle = "toggle",
 	}
 	export enum PortType {
 	    Image = "image",
 	    Media = "media",
 	    Text = "text",
 	    Video = "video",
+	}
+	export class Endpoint {
+	    node: string;
+	    port: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Endpoint(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.node = source["node"];
+	        this.port = source["port"];
+	    }
+	}
+	export class Edge {
+	    from: Endpoint;
+	    to: Endpoint;
+	
+	    static createFrom(source: any = {}) {
+	        return new Edge(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.from = this.convertValues(source["from"], Endpoint);
+	        this.to = this.convertValues(source["to"], Endpoint);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class GraphNode {
+	    id: string;
+	    type: string;
+	    params?: number[];
+	
+	    static createFrom(source: any = {}) {
+	        return new GraphNode(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.type = source["type"];
+	        this.params = source["params"];
+	    }
+	}
+	export class Graph {
+	    requestId?: string;
+	    nodes: GraphNode[];
+	    edges: Edge[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Graph(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.requestId = source["requestId"];
+	        this.nodes = this.convertValues(source["nodes"], GraphNode);
+	        this.edges = this.convertValues(source["edges"], Edge);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class NodeRun {
+	    status: string;
+	    output?: number[];
+	    error?: string;
+	    code?: models.Code;
+	    jobIds?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new NodeRun(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = source["status"];
+	        this.output = source["output"];
+	        this.error = source["error"];
+	        this.code = source["code"];
+	        this.jobIds = source["jobIds"];
+	    }
+	}
+	export class GraphResult {
+	    order: string[];
+	    nodes: Record<string, NodeRun>;
+	
+	    static createFrom(source: any = {}) {
+	        return new GraphResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.order = source["order"];
+	        this.nodes = this.convertValues(source["nodes"], NodeRun, true);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class Option {
+	    value: string;
+	    label: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Option(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.value = source["value"];
+	        this.label = source["label"];
+	    }
 	}
 	export class Param {
 	    name: string;
@@ -371,10 +597,11 @@ export namespace engine {
 export namespace events {
 	
 	export enum Event {
+	    AccountsUpdated = "accounts:updated",
 	    AppReady = "app:ready",
 	    ConfigUpdated = "config:updated",
-	    ErrorOccurred = "error:occurred",
-	    MuseAccountsUpdated = "muse:accounts-updated",
+	    FlowImageTaskUpdated = "flow:image-task-updated",
+	    FlowImageTasksChanged = "flow:image-tasks-changed",
 	    MuseJobUpdated = "muse:job-updated",
 	    MuseJobsChanged = "muse:jobs-changed",
 	}
@@ -391,6 +618,13 @@ export namespace flow {
 	    FourK = "4K",
 	    OneK = "1K",
 	    TwoK = "2K",
+	}
+	export enum ImageTaskStatus {
+	    Cancelled = "cancelled",
+	    Failed = "failed",
+	    Queued = "queued",
+	    Running = "running",
+	    Succeeded = "succeeded",
 	}
 	export class EditVideoRequest {
 	    sourceId?: string;
@@ -496,22 +730,6 @@ export namespace flow {
 	        this.id = source["id"];
 	        this.name = source["name"];
 	        this.previewUrl = source["previewUrl"];
-	    }
-	}
-	export class FlowProjectImageReference {
-	    base64: string;
-	    mimeType: string;
-	    fileName: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new FlowProjectImageReference(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.base64 = source["base64"];
-	        this.mimeType = source["mimeType"];
-	        this.fileName = source["fileName"];
 	    }
 	}
 	export class FlowVideoCost {
@@ -748,6 +966,172 @@ export namespace flow {
 	        this.error = source["error"];
 	    }
 	}
+	export class ImageTaskReference {
+	    localUrl: string;
+	    fileName: string;
+	    mimeType: string;
+	    size: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageTaskReference(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.localUrl = source["localUrl"];
+	        this.fileName = source["fileName"];
+	        this.mimeType = source["mimeType"];
+	        this.size = source["size"];
+	    }
+	}
+	export class ImageTask {
+	    id: string;
+	    batchId: string;
+	    prompt: string;
+	    modelId: string;
+	    aspectRatio: string;
+	    quality: ImageQuality;
+	    count: number;
+	    references: ImageTaskReference[];
+	    outputDir: string;
+	    held?: boolean;
+	    status: ImageTaskStatus;
+	    step?: string;
+	    requestId?: string;
+	    rechecks?: number;
+	    nextCheckAt?: string;
+	    results: GeneratedImageItem[];
+	    savedFiles: string[];
+	    error?: string;
+	    createdAt: string;
+	    startedAt?: string;
+	    finishedAt?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageTask(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.batchId = source["batchId"];
+	        this.prompt = source["prompt"];
+	        this.modelId = source["modelId"];
+	        this.aspectRatio = source["aspectRatio"];
+	        this.quality = source["quality"];
+	        this.count = source["count"];
+	        this.references = this.convertValues(source["references"], ImageTaskReference);
+	        this.outputDir = source["outputDir"];
+	        this.held = source["held"];
+	        this.status = source["status"];
+	        this.step = source["step"];
+	        this.requestId = source["requestId"];
+	        this.rechecks = source["rechecks"];
+	        this.nextCheckAt = source["nextCheckAt"];
+	        this.results = this.convertValues(source["results"], GeneratedImageItem);
+	        this.savedFiles = source["savedFiles"];
+	        this.error = source["error"];
+	        this.createdAt = source["createdAt"];
+	        this.startedAt = source["startedAt"];
+	        this.finishedAt = source["finishedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImageQueueState {
+	    tasks: ImageTask[];
+	    warning?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageQueueState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tasks = this.convertValues(source["tasks"], ImageTask);
+	        this.warning = source["warning"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	export class ImageTaskRequest {
+	    prompts: string[];
+	    modelId: string;
+	    aspectRatio: string;
+	    quality: ImageQuality;
+	    count: number;
+	    references: ImageTaskReference[];
+	    outputDir: string;
+	    hold: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageTaskRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.prompts = source["prompts"];
+	        this.modelId = source["modelId"];
+	        this.aspectRatio = source["aspectRatio"];
+	        this.quality = source["quality"];
+	        this.count = source["count"];
+	        this.references = this.convertValues(source["references"], ImageTaskReference);
+	        this.outputDir = source["outputDir"];
+	        this.hold = source["hold"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	
 	export class StudioConfig {
 	    videoExtensions: string[];
@@ -878,11 +1262,48 @@ export namespace media {
 export namespace models {
 	
 	export enum Code {
+	    Conflict = 409,
 	    Internal = 500,
 	    InvalidArgument = 400,
 	    NotFound = 404,
 	    OK = 200,
 	    Unavailable = 503,
+	}
+	export class Response_SnakeMedia_internal_accounts_Account_ {
+	    success: boolean;
+	    data: accounts.Account;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_accounts_Account_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], accounts.Account);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class Response_SnakeMedia_internal_buildinfo_Info_ {
 	    success: boolean;
@@ -934,6 +1355,42 @@ export namespace models {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
 	        this.data = this.convertValues(source["data"], config.AppConfig);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_engine_GraphResult_ {
+	    success: boolean;
+	    data: engine.GraphResult;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_engine_GraphResult_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], engine.GraphResult);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }
@@ -1064,20 +1521,92 @@ export namespace models {
 		    return a;
 		}
 	}
-	export class Response_SnakeMedia_internal_providers_flow_FlowProjectImageReference_ {
+	export class Response_SnakeMedia_internal_providers_flow_ImageQueueState_ {
 	    success: boolean;
-	    data: flow.FlowProjectImageReference;
+	    data: flow.ImageQueueState;
 	    error?: string;
 	    code: Code;
 	
 	    static createFrom(source: any = {}) {
-	        return new Response_SnakeMedia_internal_providers_flow_FlowProjectImageReference_(source);
+	        return new Response_SnakeMedia_internal_providers_flow_ImageQueueState_(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], flow.FlowProjectImageReference);
+	        this.data = this.convertValues(source["data"], flow.ImageQueueState);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_flow_ImageTaskReference_ {
+	    success: boolean;
+	    data: flow.ImageTaskReference;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_flow_ImageTaskReference_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], flow.ImageTaskReference);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_flow_ImageTask_ {
+	    success: boolean;
+	    data: flow.ImageTask;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_flow_ImageTask_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], flow.ImageTask);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }
@@ -1172,150 +1701,6 @@ export namespace models {
 		    return a;
 		}
 	}
-	export class Response_SnakeMedia_internal_providers_flow_session_AccountProfile_ {
-	    success: boolean;
-	    data: session.AccountProfile;
-	    error?: string;
-	    code: Code;
-	
-	    static createFrom(source: any = {}) {
-	        return new Response_SnakeMedia_internal_providers_flow_session_AccountProfile_(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], session.AccountProfile);
-	        this.error = source["error"];
-	        this.code = source["code"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class Response_SnakeMedia_internal_providers_flow_session_LoginProcessInfo_ {
-	    success: boolean;
-	    data: session.LoginProcessInfo;
-	    error?: string;
-	    code: Code;
-	
-	    static createFrom(source: any = {}) {
-	        return new Response_SnakeMedia_internal_providers_flow_session_LoginProcessInfo_(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], session.LoginProcessInfo);
-	        this.error = source["error"];
-	        this.code = source["code"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class Response_SnakeMedia_internal_providers_flow_session_LoginStatusInfo_ {
-	    success: boolean;
-	    data: session.LoginStatusInfo;
-	    error?: string;
-	    code: Code;
-	
-	    static createFrom(source: any = {}) {
-	        return new Response_SnakeMedia_internal_providers_flow_session_LoginStatusInfo_(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], session.LoginStatusInfo);
-	        this.error = source["error"];
-	        this.code = source["code"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class Response_SnakeMedia_internal_providers_muse_MuseAccount_ {
-	    success: boolean;
-	    data: muse.MuseAccount;
-	    error?: string;
-	    code: Code;
-	
-	    static createFrom(source: any = {}) {
-	        return new Response_SnakeMedia_internal_providers_muse_MuseAccount_(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], muse.MuseAccount);
-	        this.error = source["error"];
-	        this.code = source["code"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
 	export class Response_SnakeMedia_internal_providers_muse_MuseJob_ {
 	    success: boolean;
 	    data: muse.MuseJob;
@@ -1388,164 +1773,20 @@ export namespace models {
 		    return a;
 		}
 	}
-	export class Response_SnakeMedia_internal_providers_muse_Production_ {
+	export class Response_SnakeMedia_internal_proxy_CheckResult_ {
 	    success: boolean;
-	    data: muse.Production;
+	    data: proxy.CheckResult;
 	    error?: string;
 	    code: Code;
 	
 	    static createFrom(source: any = {}) {
-	        return new Response_SnakeMedia_internal_providers_muse_Production_(source);
+	        return new Response_SnakeMedia_internal_proxy_CheckResult_(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], muse.Production);
-	        this.error = source["error"];
-	        this.code = source["code"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class Response_SnakeMedia_internal_providers_muse_ProxyCheckResult_ {
-	    success: boolean;
-	    data: muse.ProxyCheckResult;
-	    error?: string;
-	    code: Code;
-	
-	    static createFrom(source: any = {}) {
-	        return new Response_SnakeMedia_internal_providers_muse_ProxyCheckResult_(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], muse.ProxyCheckResult);
-	        this.error = source["error"];
-	        this.code = source["code"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class Response_SnakeMedia_internal_providers_muse_StudioAsset_ {
-	    success: boolean;
-	    data: muse.StudioAsset;
-	    error?: string;
-	    code: Code;
-	
-	    static createFrom(source: any = {}) {
-	        return new Response_SnakeMedia_internal_providers_muse_StudioAsset_(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], muse.StudioAsset);
-	        this.error = source["error"];
-	        this.code = source["code"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class Response_SnakeMedia_internal_providers_muse_StudioData_ {
-	    success: boolean;
-	    data: muse.StudioData;
-	    error?: string;
-	    code: Code;
-	
-	    static createFrom(source: any = {}) {
-	        return new Response_SnakeMedia_internal_providers_muse_StudioData_(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], muse.StudioData);
-	        this.error = source["error"];
-	        this.code = source["code"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class Response_SnakeMedia_internal_providers_muse_StudioProject_ {
-	    success: boolean;
-	    data: muse.StudioProject;
-	    error?: string;
-	    code: Code;
-	
-	    static createFrom(source: any = {}) {
-	        return new Response_SnakeMedia_internal_providers_muse_StudioProject_(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], muse.StudioProject);
+	        this.data = this.convertValues(source["data"], proxy.CheckResult);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }
@@ -1582,6 +1823,78 @@ export namespace models {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
 	        this.data = this.convertValues(source["data"], services.SystemInfo);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response___SnakeMedia_internal_accounts_Account_ {
+	    success: boolean;
+	    data: accounts.Account[];
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response___SnakeMedia_internal_accounts_Account_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], accounts.Account);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response___SnakeMedia_internal_engine_Option_ {
+	    success: boolean;
+	    data: engine.Option[];
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response___SnakeMedia_internal_engine_Option_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], engine.Option);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }
@@ -1892,20 +2205,20 @@ export namespace models {
 		    return a;
 		}
 	}
-	export class Response___SnakeMedia_internal_providers_flow_session_AccountProfile_ {
+	export class Response___SnakeMedia_internal_providers_flow_ImageTaskReference_ {
 	    success: boolean;
-	    data: session.AccountProfile[];
+	    data: flow.ImageTaskReference[];
 	    error?: string;
 	    code: Code;
 	
 	    static createFrom(source: any = {}) {
-	        return new Response___SnakeMedia_internal_providers_flow_session_AccountProfile_(source);
+	        return new Response___SnakeMedia_internal_providers_flow_ImageTaskReference_(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], session.AccountProfile);
+	        this.data = this.convertValues(source["data"], flow.ImageTaskReference);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }
@@ -1928,20 +2241,20 @@ export namespace models {
 		    return a;
 		}
 	}
-	export class Response___SnakeMedia_internal_providers_muse_MuseAccount_ {
+	export class Response___SnakeMedia_internal_providers_flow_ImageTask_ {
 	    success: boolean;
-	    data: muse.MuseAccount[];
+	    data: flow.ImageTask[];
 	    error?: string;
 	    code: Code;
 	
 	    static createFrom(source: any = {}) {
-	        return new Response___SnakeMedia_internal_providers_muse_MuseAccount_(source);
+	        return new Response___SnakeMedia_internal_providers_flow_ImageTask_(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], muse.MuseAccount);
+	        this.data = this.convertValues(source["data"], flow.ImageTask);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }
@@ -2000,6 +2313,42 @@ export namespace models {
 		    return a;
 		}
 	}
+	export class Response___SnakeMedia_internal_providers_muse_MuseLibraryItem_ {
+	    success: boolean;
+	    data: muse.MuseLibraryItem[];
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response___SnakeMedia_internal_providers_muse_MuseLibraryItem_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.MuseLibraryItem);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Response___SnakeMedia_internal_providers_muse_MuseReference_ {
 	    success: boolean;
 	    data: muse.MuseReference[];
@@ -2036,56 +2385,20 @@ export namespace models {
 		    return a;
 		}
 	}
-	export class Response___SnakeMedia_internal_providers_muse_Production_ {
+	export class Response___SnakeMedia_internal_proxy_CheckResult_ {
 	    success: boolean;
-	    data: muse.Production[];
+	    data: proxy.CheckResult[];
 	    error?: string;
 	    code: Code;
 	
 	    static createFrom(source: any = {}) {
-	        return new Response___SnakeMedia_internal_providers_muse_Production_(source);
+	        return new Response___SnakeMedia_internal_proxy_CheckResult_(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], muse.Production);
-	        this.error = source["error"];
-	        this.code = source["code"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class Response___SnakeMedia_internal_providers_muse_ProxyCheckResult_ {
-	    success: boolean;
-	    data: muse.ProxyCheckResult[];
-	    error?: string;
-	    code: Code;
-	
-	    static createFrom(source: any = {}) {
-	        return new Response___SnakeMedia_internal_providers_muse_ProxyCheckResult_(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], muse.ProxyCheckResult);
+	        this.data = this.convertValues(source["data"], proxy.CheckResult);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }
@@ -2167,20 +2480,8 @@ export namespace models {
 
 export namespace muse {
 	
-	export enum MuseAccountSource {
-	    Browser = "browser",
-	    Cookies = "cookies",
-	}
-	export enum MuseAccountStatus {
-	    Error = "error",
-	    SignedIn = "signed_in",
-	    SignedOut = "signed_out",
-	    SigningIn = "signing_in",
-	    Unverified = "unverified",
-	}
 	export enum MuseJobKind {
 	    Image = "image",
-	    V2V = "v2v",
 	    Video = "video",
 	}
 	export enum MuseJobStatus {
@@ -2190,118 +2491,12 @@ export namespace muse {
 	    Queued = "queued",
 	    Succeeded = "succeeded",
 	}
-	export class MuseQuota {
-	    percentUsed: number;
-	    resetsAt?: string;
-	    status: string;
-	    tier: string;
-	    paid: boolean;
-	    topupBalance: number;
-	    topupTotal: number;
-	    label: string;
-	    subtitle: string;
-	    checkedAt: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new MuseQuota(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.percentUsed = source["percentUsed"];
-	        this.resetsAt = source["resetsAt"];
-	        this.status = source["status"];
-	        this.tier = source["tier"];
-	        this.paid = source["paid"];
-	        this.topupBalance = source["topupBalance"];
-	        this.topupTotal = source["topupTotal"];
-	        this.label = source["label"];
-	        this.subtitle = source["subtitle"];
-	        this.checkedAt = source["checkedAt"];
-	    }
-	}
-	export class MuseAccount {
-	    id: string;
-	    name: string;
-	    source: MuseAccountSource;
-	    profileDir: string;
-	    status: MuseAccountStatus;
-	    enabled: boolean;
-	    quota?: MuseQuota;
-	    proxy?: string;
-	    proxyAuto?: string;
-	    proxyStatus?: string;
-	    proxyIp?: string;
-	    pausedUntil?: string;
-	    message?: string;
-	    lastCheckedAt?: string;
-	    lastSentAt?: string;
-	    createdAt: string;
-	    updatedAt: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new MuseAccount(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.name = source["name"];
-	        this.source = source["source"];
-	        this.profileDir = source["profileDir"];
-	        this.status = source["status"];
-	        this.enabled = source["enabled"];
-	        this.quota = this.convertValues(source["quota"], MuseQuota);
-	        this.proxy = source["proxy"];
-	        this.proxyAuto = source["proxyAuto"];
-	        this.proxyStatus = source["proxyStatus"];
-	        this.proxyIp = source["proxyIp"];
-	        this.pausedUntil = source["pausedUntil"];
-	        this.message = source["message"];
-	        this.lastCheckedAt = source["lastCheckedAt"];
-	        this.lastSentAt = source["lastSentAt"];
-	        this.createdAt = source["createdAt"];
-	        this.updatedAt = source["updatedAt"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
 	export class MuseJob {
 	    id: string;
 	    kind: MuseJobKind;
 	    prompt: string;
-	    ratio: string;
-	    count: number;
 	    label?: string;
-	    projectId: string;
 	    references: string[];
-	    manifest?: string;
-	    sourceVideo?: string;
-	    keepAudio?: boolean;
-	    v2vTurn?: number;
-	    thread?: string;
-	    pinAccount?: string;
-	    threadError?: string;
-	    productionId?: string;
-	    productionPart?: string;
-	    historyBase?: number;
-	    seenPaths?: string[];
 	    rechecks?: number;
 	    held?: boolean;
 	    status: MuseJobStatus;
@@ -2315,7 +2510,10 @@ export namespace muse {
 	    savedFiles?: string[];
 	    createdAt: string;
 	    startedAt?: string;
+	    sentAt?: string;
 	    finishedAt?: string;
+	    limitReplies?: number;
+	    nextCheckAt?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new MuseJob(source);
@@ -2326,22 +2524,8 @@ export namespace muse {
 	        this.id = source["id"];
 	        this.kind = source["kind"];
 	        this.prompt = source["prompt"];
-	        this.ratio = source["ratio"];
-	        this.count = source["count"];
 	        this.label = source["label"];
-	        this.projectId = source["projectId"];
 	        this.references = source["references"];
-	        this.manifest = source["manifest"];
-	        this.sourceVideo = source["sourceVideo"];
-	        this.keepAudio = source["keepAudio"];
-	        this.v2vTurn = source["v2vTurn"];
-	        this.thread = source["thread"];
-	        this.pinAccount = source["pinAccount"];
-	        this.threadError = source["threadError"];
-	        this.productionId = source["productionId"];
-	        this.productionPart = source["productionPart"];
-	        this.historyBase = source["historyBase"];
-	        this.seenPaths = source["seenPaths"];
 	        this.rechecks = source["rechecks"];
 	        this.held = source["held"];
 	        this.status = source["status"];
@@ -2355,21 +2539,19 @@ export namespace muse {
 	        this.savedFiles = source["savedFiles"];
 	        this.createdAt = source["createdAt"];
 	        this.startedAt = source["startedAt"];
+	        this.sentAt = source["sentAt"];
 	        this.finishedAt = source["finishedAt"];
+	        this.limitReplies = source["limitReplies"];
+	        this.nextCheckAt = source["nextCheckAt"];
 	    }
 	}
 	export class MuseJobRequest {
 	    kind: MuseJobKind;
 	    prompts: string[];
-	    ratio: string;
-	    count: number;
+	    repeat: number;
 	    references: string[];
-	    sourceVideo: string;
-	    keepAudio: boolean;
-	    held: boolean;
-	    projectId: string;
 	    label: string;
-	    pairMode: boolean;
+	    held: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new MuseJobRequest(source);
@@ -2379,56 +2561,62 @@ export namespace muse {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
 	        this.prompts = source["prompts"];
-	        this.ratio = source["ratio"];
-	        this.count = source["count"];
+	        this.repeat = source["repeat"];
 	        this.references = source["references"];
-	        this.sourceVideo = source["sourceVideo"];
-	        this.keepAudio = source["keepAudio"];
+	        this.label = source["label"];
 	        this.held = source["held"];
-	        this.projectId = source["projectId"];
-	        this.label = source["label"];
-	        this.pairMode = source["pairMode"];
 	    }
 	}
-	export class VoiceOption {
-	    value: string;
-	    label: string;
-	    gender: string;
+	export class MuseLibraryItem {
+	    id: string;
+	    jobId: string;
+	    kind: MuseJobKind;
+	    localUrl: string;
+	    savedPath?: string;
+	    prompt: string;
+	    label?: string;
+	    accountId?: string;
+	    createdAt: string;
 	
 	    static createFrom(source: any = {}) {
-	        return new VoiceOption(source);
+	        return new MuseLibraryItem(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.value = source["value"];
+	        this.id = source["id"];
+	        this.jobId = source["jobId"];
+	        this.kind = source["kind"];
+	        this.localUrl = source["localUrl"];
+	        this.savedPath = source["savedPath"];
+	        this.prompt = source["prompt"];
 	        this.label = source["label"];
-	        this.gender = source["gender"];
+	        this.accountId = source["accountId"];
+	        this.createdAt = source["createdAt"];
 	    }
 	}
-	export class RatioOption {
-	    value: string;
-	    label: string;
+	export class MuseModel {
+	    id: string;
+	    name: string;
 	
 	    static createFrom(source: any = {}) {
-	        return new RatioOption(source);
+	        return new MuseModel(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.value = source["value"];
-	        this.label = source["label"];
+	        this.id = source["id"];
+	        this.name = source["name"];
 	    }
 	}
 	export class MuseOptions {
-	    ratios: RatioOption[];
-	    maxImagesPerJob: number;
-	    maxReferences: number;
-	    maxPromptLength: number;
-	    maxPromptsPerRun: number;
-	    maxAttachmentBytes: number;
+	    known: boolean;
+	    maxFileBytes: number;
+	    maxFiles: number;
 	    imageExtensions: string[];
-	    voices: VoiceOption[];
+	    models: MuseModel[];
+	    checkedAt: string;
+	    journalWarning: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new MuseOptions(source);
@@ -2436,14 +2624,13 @@ export namespace muse {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.ratios = this.convertValues(source["ratios"], RatioOption);
-	        this.maxImagesPerJob = source["maxImagesPerJob"];
-	        this.maxReferences = source["maxReferences"];
-	        this.maxPromptLength = source["maxPromptLength"];
-	        this.maxPromptsPerRun = source["maxPromptsPerRun"];
-	        this.maxAttachmentBytes = source["maxAttachmentBytes"];
+	        this.known = source["known"];
+	        this.maxFileBytes = source["maxFileBytes"];
+	        this.maxFiles = source["maxFiles"];
 	        this.imageExtensions = source["imageExtensions"];
-	        this.voices = this.convertValues(source["voices"], VoiceOption);
+	        this.models = this.convertValues(source["models"], MuseModel);
+	        this.checkedAt = source["checkedAt"];
+	        this.journalWarning = source["journalWarning"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2464,7 +2651,6 @@ export namespace muse {
 		    return a;
 		}
 	}
-	
 	export class MuseReference {
 	    localUrl: string;
 	    fileName: string;
@@ -2481,137 +2667,12 @@ export namespace muse {
 	        this.size = source["size"];
 	    }
 	}
-	export class SceneItem {
-	    text: string;
-	    voiceover?: string;
-	    img?: string;
-	    product?: string;
+
+}
+
+export namespace proxy {
 	
-	    static createFrom(source: any = {}) {
-	        return new SceneItem(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.text = source["text"];
-	        this.voiceover = source["voiceover"];
-	        this.img = source["img"];
-	        this.product = source["product"];
-	    }
-	}
-	export class ScriptConfig {
-	    prefix: string;
-	    ratio: string;
-	    duration: string;
-	    voice: string;
-	    host: string;
-	    style: string;
-	    audio: string;
-	    merge: boolean;
-	    music: boolean;
-	    board: string;
-	    characterTag?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new ScriptConfig(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.prefix = source["prefix"];
-	        this.ratio = source["ratio"];
-	        this.duration = source["duration"];
-	        this.voice = source["voice"];
-	        this.host = source["host"];
-	        this.style = source["style"];
-	        this.audio = source["audio"];
-	        this.merge = source["merge"];
-	        this.music = source["music"];
-	        this.board = source["board"];
-	        this.characterTag = source["characterTag"];
-	    }
-	}
-	export class Production {
-	    id: string;
-	    title: string;
-	    config: ScriptConfig;
-	    scenes: SceneItem[];
-	    refs: string[];
-	    status: string;
-	    step?: string;
-	    error?: string;
-	    boardFiles?: string[];
-	    threadSessionId?: string;
-	    threadAccountId?: string;
-	    currentSceneIdx: number;
-	    sceneVideoFiles?: string[];
-	    finalVideoFile?: string;
-	    boardJobId?: string;
-	    currentJobId?: string;
-	    createdAt: string;
-	    updatedAt: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new Production(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.title = source["title"];
-	        this.config = this.convertValues(source["config"], ScriptConfig);
-	        this.scenes = this.convertValues(source["scenes"], SceneItem);
-	        this.refs = source["refs"];
-	        this.status = source["status"];
-	        this.step = source["step"];
-	        this.error = source["error"];
-	        this.boardFiles = source["boardFiles"];
-	        this.threadSessionId = source["threadSessionId"];
-	        this.threadAccountId = source["threadAccountId"];
-	        this.currentSceneIdx = source["currentSceneIdx"];
-	        this.sceneVideoFiles = source["sceneVideoFiles"];
-	        this.finalVideoFile = source["finalVideoFile"];
-	        this.boardJobId = source["boardJobId"];
-	        this.currentJobId = source["currentJobId"];
-	        this.createdAt = source["createdAt"];
-	        this.updatedAt = source["updatedAt"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class PromptTemplate {
-	    id: string;
-	    name: string;
-	    text: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new PromptTemplate(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.name = source["name"];
-	        this.text = source["text"];
-	    }
-	}
-	export class ProxyCheckResult {
+	export class CheckResult {
 	    raw: string;
 	    status: string;
 	    ok: boolean;
@@ -2623,7 +2684,7 @@ export namespace muse {
 	    checkedAt: string;
 	
 	    static createFrom(source: any = {}) {
-	        return new ProxyCheckResult(source);
+	        return new CheckResult(source);
 	    }
 	
 	    constructor(source: any = {}) {
@@ -2639,126 +2700,6 @@ export namespace muse {
 	        this.checkedAt = source["checkedAt"];
 	    }
 	}
-	
-	
-	
-	export class StudioAsset {
-	    id: string;
-	    tag: string;
-	    name: string;
-	    role: string;
-	    lockNotes?: string;
-	    images: string[];
-	    projectId?: string;
-	    createdAt: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new StudioAsset(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.tag = source["tag"];
-	        this.name = source["name"];
-	        this.role = source["role"];
-	        this.lockNotes = source["lockNotes"];
-	        this.images = source["images"];
-	        this.projectId = source["projectId"];
-	        this.createdAt = source["createdAt"];
-	    }
-	}
-	export class StudioRotateConfig {
-	    on: boolean;
-	    images: string[];
-	    index: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new StudioRotateConfig(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.on = source["on"];
-	        this.images = source["images"];
-	        this.index = source["index"];
-	    }
-	}
-	export class StudioModelConfig {
-	    on: boolean;
-	    images: string[];
-	
-	    static createFrom(source: any = {}) {
-	        return new StudioModelConfig(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.on = source["on"];
-	        this.images = source["images"];
-	    }
-	}
-	export class StudioProject {
-	    id: string;
-	    name: string;
-	    paused: boolean;
-	    createdAt: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new StudioProject(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.name = source["name"];
-	        this.paused = source["paused"];
-	        this.createdAt = source["createdAt"];
-	    }
-	}
-	export class StudioData {
-	    activeProject: string;
-	    projects: StudioProject[];
-	    assets: StudioAsset[];
-	    promptTemplates: PromptTemplate[];
-	    modelConfig: StudioModelConfig;
-	    rotateConfig: StudioRotateConfig;
-	
-	    static createFrom(source: any = {}) {
-	        return new StudioData(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.activeProject = source["activeProject"];
-	        this.projects = this.convertValues(source["projects"], StudioProject);
-	        this.assets = this.convertValues(source["assets"], StudioAsset);
-	        this.promptTemplates = this.convertValues(source["promptTemplates"], PromptTemplate);
-	        this.modelConfig = this.convertValues(source["modelConfig"], StudioModelConfig);
-	        this.rotateConfig = this.convertValues(source["rotateConfig"], StudioRotateConfig);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	
-	
-	
 
 }
 
@@ -2781,148 +2722,6 @@ export namespace services {
 	        this.goVersion = source["goVersion"];
 	        this.uptime = source["uptime"];
 	    }
-	}
-
-}
-
-export namespace session {
-	
-	export enum AccountStatus {
-	    Connected = "connected",
-	    Error = "error",
-	    Expired = "expired",
-	    SignedIn = "signed_in",
-	    Unverified = "unverified",
-	}
-	export class AccountProfile {
-	    id: string;
-	    email: string;
-	    gaiaId: string;
-	    name: string;
-	    profileDir: string;
-	    status: AccountStatus;
-	    balance?: chrome.FlowCredits;
-	    balanceError?: string;
-	    cookieCount: number;
-	    lastVerifiedAt?: string;
-	    createdAt: string;
-	    updatedAt: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new AccountProfile(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.email = source["email"];
-	        this.gaiaId = source["gaiaId"];
-	        this.name = source["name"];
-	        this.profileDir = source["profileDir"];
-	        this.status = source["status"];
-	        this.balance = this.convertValues(source["balance"], chrome.FlowCredits);
-	        this.balanceError = source["balanceError"];
-	        this.cookieCount = source["cookieCount"];
-	        this.lastVerifiedAt = source["lastVerifiedAt"];
-	        this.createdAt = source["createdAt"];
-	        this.updatedAt = source["updatedAt"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class LoginProcessInfo {
-	    sessionId: string;
-	    port: number;
-	    profileDir: string;
-	    expiresAt: string;
-	    policy: config.AccountConfig;
-	
-	    static createFrom(source: any = {}) {
-	        return new LoginProcessInfo(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.sessionId = source["sessionId"];
-	        this.port = source["port"];
-	        this.profileDir = source["profileDir"];
-	        this.expiresAt = source["expiresAt"];
-	        this.policy = this.convertValues(source["policy"], config.AccountConfig);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class LoginStatusInfo {
-	    isConnected: boolean;
-	    isLoggedIn: boolean;
-	    profile?: AccountProfile;
-	    browserVersion?: string;
-	    activePage?: string;
-	    message: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new LoginStatusInfo(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.isConnected = source["isConnected"];
-	        this.isLoggedIn = source["isLoggedIn"];
-	        this.profile = this.convertValues(source["profile"], AccountProfile);
-	        this.browserVersion = source["browserVersion"];
-	        this.activePage = source["activePage"];
-	        this.message = source["message"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
 	}
 
 }

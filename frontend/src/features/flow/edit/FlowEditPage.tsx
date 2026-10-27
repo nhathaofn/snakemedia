@@ -2,7 +2,7 @@ import React from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import '../shared/FlowStudio.css';
 import './FlowEditPage.css';
-import { api } from '../../../services/api';
+import { api, isTransportFailure } from '../../../services/api';
 import { EditVideoRequest } from '../../../types';
 import {
   FlowModePanel,
@@ -11,6 +11,7 @@ import {
   SelectField,
   VideoCard,
   selectedModelOf,
+  turnLifecycle,
   useGeneration,
   useModelCatalog,
   useRestoreJobs,
@@ -177,18 +178,11 @@ function EditWorkspace() {
     void generate(
       async () => {
         const result = await api.editVideos(request);
-        if (result.success) current.acceptAttempt(requestId);
+        // A reply from Go settles this ID; a bridge failure keeps it for the retry.
+        if (!isTransportFailure(result)) current.settleAttempt(requestId);
         return result;
       },
-      {
-        onStart: () => useFlowEditStore.getState().beginTurn(turn),
-        onSuccess: (results) => useFlowEditStore.getState().completeTurn(turn.id, results),
-        onFailure: (message, promptRestored) => {
-          const current = useFlowEditStore.getState();
-          if (promptRestored) current.removeTurn(turn.id);
-          else current.failTurn(turn.id, message);
-        },
-      },
+      turnLifecycle(useFlowEditStore.getState, turn),
     );
   };
 

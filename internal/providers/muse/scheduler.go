@@ -4,12 +4,13 @@ import (
 	"slices"
 	"time"
 
+	"SnakeMedia/internal/accounts"
 	"SnakeMedia/internal/config"
 )
 
 // pausedUntil returns when an account may work again, or the zero time when it
-// may work now. A used-up weekly quota rests it until the reset (unless top-up
-// tokens or KeepGoing allow more); Muse saying "limit" rests it for a while.
+// may work now. A used-up weekly usage rests it until the reset, unless it may
+// go on with its additional tokens; Muse saying "limit" rests it for a while.
 func pausedUntil(acc MuseAccount, cfg config.MuseConfig, now time.Time) time.Time {
 	if acc.PausedUntil != "" {
 		if until, err := time.Parse(time.RFC3339, acc.PausedUntil); err == nil && until.After(now) {
@@ -17,7 +18,7 @@ func pausedUntil(acc MuseAccount, cfg config.MuseConfig, now time.Time) time.Tim
 		}
 	}
 	q := acc.Quota
-	if !q.weeklyOut() || cfg.KeepGoing {
+	if !q.weeklyOut() {
 		return time.Time{}
 	}
 	reset := q.resetsAt()
@@ -35,7 +36,22 @@ func pausedUntil(acc MuseAccount, cfg config.MuseConfig, now time.Time) time.Tim
 
 // usable reports whether an account may take new jobs.
 func usable(acc MuseAccount, cfg config.MuseConfig, now time.Time) bool {
-	return acc.Enabled && acc.Status == MuseAccountSignedIn && pausedUntil(acc, cfg, now).IsZero()
+	return acc.Enabled && acc.Status == accounts.StatusSignedIn && acc.NoRoute == "" && pausedUntil(acc, cfg, now).IsZero()
+}
+
+// due leaves out the jobs held back until a later time (NextCheckAt), so plan
+// never starts them early. An unreadable hold does not hold the job.
+func due(jobs []MuseJob, now time.Time) []MuseJob {
+	out := make([]MuseJob, 0, len(jobs))
+	for _, j := range jobs {
+		if j.NextCheckAt != "" {
+			if t, err := time.Parse(time.RFC3339Nano, j.NextCheckAt); err == nil && t.After(now) {
+				continue
+			}
+		}
+		out = append(out, j)
+	}
+	return out
 }
 
 // assignment pairs a job with the account that runs it.
@@ -50,8 +66,8 @@ type assignment struct {
 // A job already sent (it has a SessionID) resumes only on the account that
 // sent it, because only that account can read the chat. Queued jobs go to
 // usable accounts within the thread limits, oldest first.
-func plan(jobs []MuseJob, accounts []MuseAccount, cfg config.MuseConfig, running map[string]string, pausedProjects map[string]bool, now time.Time) []assignment {
-	busy := make(map[string]int, len(accounts))
+func plan(jobs []MuseJob, accs []MuseAccount, cfg config.MuseConfig, running map[string]string, now time.Time) []assignment {
+	busy := make(map[string]int, len(accs))
 	for _, accID := range running {
 		busy[accID]++
 	}
@@ -76,11 +92,11 @@ func plan(jobs []MuseJob, accounts []MuseAccount, cfg config.MuseConfig, running
 		out = append(out, assignment{jobID: job.ID, accountID: acc.ID})
 	}
 	find := func(id string) (MuseAccount, bool) {
-		i := slices.IndexFunc(accounts, func(a MuseAccount) bool { return a.ID == id })
+		i := slices.IndexFunc(accs, func(a MuseAccount) bool { return a.ID == id })
 		if i < 0 {
 			return MuseAccount{}, false
 		}
-		return accounts[i], true
+		return accs[i], true
 	}
 
 	for _, job := range jobs {
@@ -88,7 +104,7 @@ func plan(jobs []MuseJob, accounts []MuseAccount, cfg config.MuseConfig, running
 			continue
 		}
 		// Quota does not matter here: the generation already happened.
-		if acc, ok := find(job.AccountID); ok && acc.Enabled && acc.Status == MuseAccountSignedIn && canTake(acc) {
+		if acc, ok := find(job.AccountID); ok && acc.Enabled && acc.Status == accounts.StatusSignedIn && acc.NoRoute == "" && canTake(acc) {
 			take(job, acc)
 		}
 	}
@@ -96,9 +112,6 @@ func plan(jobs []MuseJob, accounts []MuseAccount, cfg config.MuseConfig, running
 	queued := make([]MuseJob, 0)
 	for _, job := range jobs {
 		if _, ok := running[job.ID]; !ok && job.Status == MuseJobQueued && !job.Held {
-			if pausedProjects != nil && pausedProjects[job.ProjectID] {
-				continue
-			}
 			queued = append(queued, job)
 		}
 	}
@@ -113,30 +126,12 @@ func plan(jobs []MuseJob, accounts []MuseAccount, cfg config.MuseConfig, running
 	})
 	for _, job := range queued {
 		var pool []MuseAccount
-		for _, acc := range accounts {
+		for _, acc := range accs {
 			if usable(acc, cfg, now) && canTake(acc) {
 				pool = append(pool, acc)
 			}
 		}
-		var pin *MuseAccount
-		if job.Thread != "" && job.PinAccount != "" {
-			if acc, ok := find(job.PinAccount); ok && usable(acc, cfg, now) {
-				pin = &acc
-			}
-		}
-		if pin != nil {
-			var pinnedPool []MuseAccount
-			for _, acc := range pool {
-				if acc.ID == pin.ID {
-					pinnedPool = append(pinnedPool, acc)
-				}
-			}
-			pool = pinnedPool
-		}
 		if len(pool) == 0 {
-			if pin != nil {
-				continue
-			}
 			break
 		}
 		if cfg.Mode != config.MuseModeSequential {

@@ -11,6 +11,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// ErrNoRuntimeSiteKey means the account's loaded Flow page did not expose its
+// reCAPTCHA site key, so the runtime minter could not run.
+var ErrNoRuntimeSiteKey = errors.New("Flow chưa cung cấp site key reCAPTCHA runtime. Hãy tải lại project.")
+
 // MintRuntimeRecaptchaToken uses the existing mint block unchanged, substituting
 // only its fallback key with a key discovered from this account's loaded page.
 // recaptcha.go remains untouched; absent runtime configuration is an error.
@@ -65,7 +69,7 @@ func MintRuntimeRecaptchaToken(ctx context.Context, port int, policy config.Acco
 			return "", err
 		}
 		if !regexp.MustCompile(`^[A-Za-z0-9_-]{20,}$`).MatchString(key) {
-			return "", errors.New("Flow chưa cung cấp site key reCAPTCHA runtime. Hãy tải lại project.")
+			return "", ErrNoRuntimeSiteKey
 		}
 		script := strings.ReplaceAll(BuildRecaptchaMintScript(action), FlowRecaptchaSiteKey, key)
 		var result mintResult

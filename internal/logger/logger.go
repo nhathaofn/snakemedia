@@ -1,8 +1,9 @@
 // Package logger provides the process-wide structured logger built on log/slog.
 //
-// Logs are written to <Dir>/app.log (rotated by size at startup) and mirrored to
-// stdout. Release GUI builds on Windows have no console, so the file is the primary
-// sink; it is written first so a failing stdout never drops a record.
+// Logs are written to <Dir>/app.log (rotated by size at startup and while the
+// app runs) and mirrored to stdout. Release GUI builds on Windows have no
+// console, so the file is the primary sink; it is written first so a failing
+// stdout never drops a record.
 package logger
 
 import (
@@ -18,7 +19,7 @@ import (
 const (
 	fileName = "app.log"
 
-	// DefaultMaxSizeBytes is the size at which app.log is rotated on startup.
+	// DefaultMaxSizeBytes is the size at which app.log is rotated.
 	DefaultMaxSizeBytes int64 = 5 << 20
 	// DefaultMaxBackups is how many rotated files (app.log.1 … app.log.N) are kept.
 	DefaultMaxBackups = 3
@@ -36,7 +37,7 @@ var (
 	mu      sync.Mutex
 	level   = new(slog.LevelVar)
 	current = slog.Default()
-	logFile *os.File
+	logFile *rotatingFile
 )
 
 // Init (re)configures the global logger and sets it as the slog default.
@@ -120,7 +121,7 @@ func closeFileLocked() error {
 	return err
 }
 
-func openLogFile(opts Options) (*os.File, error) {
+func openLogFile(opts Options) (*rotatingFile, error) {
 	if err := os.MkdirAll(opts.Dir, 0o755); err != nil {
 		return nil, err
 	}
@@ -133,11 +134,75 @@ func openLogFile(opts Options) (*os.File, error) {
 		maxBackups = DefaultMaxBackups
 	}
 
-	path := filepath.Join(opts.Dir, fileName)
-	if err := rotate(path, maxSize, maxBackups); err != nil {
-		return nil, fmt.Errorf("rotate %s: %w", path, err)
+	f := &rotatingFile{path: filepath.Join(opts.Dir, fileName), maxSize: maxSize, maxBackups: maxBackups}
+	if err := rotate(f.path, maxSize, maxBackups); err != nil {
+		return nil, fmt.Errorf("rotate %s: %w", f.path, err)
 	}
-	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err := f.open(); err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+// rotatingFile is app.log that rotates itself once it grows past maxSize, so
+// an app left running for days never fills the disk with one file.
+type rotatingFile struct {
+	mu         sync.Mutex
+	path       string
+	maxSize    int64
+	maxBackups int
+	file       *os.File
+	size       int64
+}
+
+func (f *rotatingFile) open() error {
+	file, err := os.OpenFile(f.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return err
+	}
+	f.file, f.size = file, info.Size()
+	return nil
+}
+
+func (f *rotatingFile) Write(p []byte) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.file == nil {
+		return 0, os.ErrClosed
+	}
+	if f.size > 0 && f.size+int64(len(p)) > f.maxSize {
+		// Windows cannot rename an open file: close, shift, reopen. A failed
+		// rotation keeps appending rather than losing records.
+		_ = f.file.Close()
+		f.file = nil
+		rotateErr := rotate(f.path, f.size, f.maxBackups)
+		if err := f.open(); err != nil {
+			return 0, err
+		}
+		if rotateErr != nil {
+			fmt.Fprintf(os.Stderr, "logger: rotate %s: %v\n", f.path, rotateErr)
+		}
+	}
+	n, err := f.file.Write(p)
+	f.size += int64(n)
+	return n, err
+}
+
+// Close closes the current file.
+func (f *rotatingFile) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.file == nil {
+		return nil
+	}
+	err := f.file.Close()
+	f.file = nil
+	return err
 }
 
 // rotate shifts app.log -> app.log.1 -> … -> app.log.N when app.log exceeds maxSize.

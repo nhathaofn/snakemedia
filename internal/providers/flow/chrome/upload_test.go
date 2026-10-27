@@ -59,7 +59,7 @@ func TestUploadVideoUsesResumableProtocol(t *testing.T) {
 		return nil, nil
 	})
 
-	client, err := NewFlowClient(c, config.DefaultAccountConfig())
+	client, err := NewFlowClient(c, config.DefaultFlowPagePolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestUploadVideoStopsOnClientError(t *testing.T) {
 		calls++
 		return &http.Response{StatusCode: http.StatusForbidden, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
 	})
-	client, err := NewFlowClient(flowTestCredentials(), config.DefaultAccountConfig())
+	client, err := NewFlowClient(flowTestCredentials(), config.DefaultFlowPagePolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestUploadVideoStopsOnClientError(t *testing.T) {
 }
 
 func TestUploadTargetStaysOnGoogle(t *testing.T) {
-	client, err := NewFlowClient(flowTestCredentials(), config.DefaultAccountConfig())
+	client, err := NewFlowClient(flowTestCredentials(), config.DefaultFlowPagePolicy())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,11 +16,13 @@ import (
 	"testing"
 	"time"
 
+	"SnakeMedia/internal/browser"
+	"SnakeMedia/internal/config"
 	"github.com/gorilla/websocket"
 )
 
 // fakeDevTools serves /json and one tab's debugger socket. Runtime.evaluate
-// answers by the window.__mss method named in the expression.
+// answers by the page script method named in the expression.
 type fakeDevTools struct {
 	t       *testing.T
 	server  *httptest.Server
@@ -42,7 +44,7 @@ func newFakeDevTools(t *testing.T, tabURL string) *fakeDevTools {
 	f.port = listener.Addr().(*net.TCPAddr).Port
 	mux := http.NewServeMux()
 	mux.HandleFunc("/json", func(w http.ResponseWriter, _ *http.Request) {
-		json.NewEncoder(w).Encode([]target{{ID: "1", Type: "page", URL: f.tabURL, WebSocketDebuggerURL: fmt.Sprintf("ws://127.0.0.1:%d/devtools/page/1", f.port)}})
+		json.NewEncoder(w).Encode([]browser.Target{{ID: "1", Type: "page", URL: f.tabURL, WebSocketDebuggerURL: fmt.Sprintf("ws://127.0.0.1:%d/devtools/page/1", f.port)}})
 	})
 	mux.HandleFunc("/devtools/page/1", f.serveSocket)
 	f.server = &httptest.Server{Listener: listener, Config: &http.Server{Handler: mux}}
@@ -74,7 +76,7 @@ func (f *fakeDevTools) serveSocket(w http.ResponseWriter, r *http.Request) {
 		result := map[string]any{}
 		if msg.Method == "Runtime.evaluate" {
 			m := callPattern.FindStringSubmatch(msg.Params.Expression)
-			if m == nil || !strings.Contains(msg.Params.Expression, "function pageMain(CHUNK)") {
+			if m == nil || !strings.Contains(msg.Params.Expression, "function pageMain(CHUNK)") || !strings.Contains(msg.Params.Expression, `window["`+pageKey+`"]`) {
 				f.t.Errorf("unexpected expression tail: %.80q", msg.Params.Expression[max(0, len(msg.Params.Expression)-120):])
 				return
 			}
@@ -110,12 +112,12 @@ func TestChromePageCallsAndChunkedDownload(t *testing.T) {
 	}
 	f.answers["closeFile"] = func([]json.RawMessage) any { closed = true; return nil }
 
-	page := &chromePage{port: f.port, callTimeout: 5 * time.Second, sendTimeout: 5 * time.Second}
+	page := &chromePage{port: f.port, policy: config.DefaultAccountConfig(), callTimeout: 5 * time.Second, sendTimeout: 5 * time.Second}
 	ctx := context.Background()
 	if state, err := page.Login(ctx); err != nil || !state.LoggedIn {
 		t.Fatalf("login = %+v, %v", state, err)
 	}
-	if res, err := page.Send(ctx, "hello", nil, ""); err != nil || !res.OK || res.SessionID != "s1" {
+	if res, err := page.Send(ctx, "hello", nil); err != nil || !res.OK || res.SessionID != "s1" {
 		t.Fatalf("send = %+v, %v", res, err)
 	}
 	var out bytes.Buffer
@@ -127,7 +129,7 @@ func TestChromePageCallsAndChunkedDownload(t *testing.T) {
 
 func TestChromePageWithoutMuseTab(t *testing.T) {
 	f := newFakeDevTools(t, "https://example.com/")
-	page := &chromePage{port: f.port, callTimeout: 5 * time.Second}
+	page := &chromePage{port: f.port, policy: config.DefaultAccountConfig(), callTimeout: 5 * time.Second}
 	if _, err := page.Login(context.Background()); err != errTabMissing {
 		t.Fatalf("err = %v", err)
 	}

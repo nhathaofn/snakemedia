@@ -50,7 +50,7 @@ func TestResolverMatchesReferenceBundleWhenPresent(t *testing.T) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		t.Skip("optional reference bundle not present")
 	}
-	p := config.DefaultAccountConfig()
+	p := config.DefaultFlowPagePolicy()
 	registry, err := resolveRPCs([]string{"https://www.gstatic.com/reference.js"}, p.MaxDiscoveryScripts, p.MaxResponseBytes, func(string) ([]byte, error) { return os.ReadFile(path) })
 	if err != nil || !registry.valid() {
 		t.Fatalf("resolver does not match documented bundle format: %v", err)
@@ -67,7 +67,7 @@ func TestStudioMethodsResolveFromRealReferenceBundles(t *testing.T) {
 		}
 		sources = append(sources, "https://www.gstatic.com/"+name)
 	}
-	registry, err := resolveRPCs(sources, config.DefaultAccountConfig().MaxDiscoveryScripts, config.DefaultAccountConfig().MaxDiscoveryBytes, func(source string) ([]byte, error) { return os.ReadFile(filepath.Join(root, filepath.Base(source))) }, MethodModels, MethodProjects, MethodCreateProject, MethodEditVideo, MethodVideoStatus, MethodProjectContents, MethodMedia, MethodUploadImage, MethodUpsampleImage, MethodGenerateVideoText, MethodGenerateVideoReferences)
+	registry, err := resolveRPCs(sources, config.DefaultFlowPagePolicy().MaxDiscoveryScripts, config.DefaultFlowPagePolicy().MaxDiscoveryBytes, func(source string) ([]byte, error) { return os.ReadFile(filepath.Join(root, filepath.Base(source))) }, MethodModels, MethodProjects, MethodCreateProject, MethodEditVideo, MethodVideoStatus, MethodProjectContents, MethodMedia, MethodUploadImage, MethodUpsampleImage, MethodGenerateVideoText, MethodGenerateVideoReferences)
 	if err != nil || !registry.Has(MethodModels, MethodProjects, MethodCreateProject, MethodEditVideo, MethodVideoStatus, MethodProjectContents, MethodMedia, MethodUploadImage, MethodUpsampleImage, MethodGenerateVideoText, MethodGenerateVideoReferences) {
 		t.Fatalf("real bundle studio descriptors: %v", err)
 	}

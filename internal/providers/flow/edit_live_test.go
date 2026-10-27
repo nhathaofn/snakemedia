@@ -1,6 +1,7 @@
 package flow
 
 import (
+	sharedaccounts "SnakeMedia/internal/accounts"
 	"context"
 	"math"
 	"net/http"
@@ -42,7 +43,7 @@ func TestLiveReplayUploadedSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	accounts := session.NewService(realPaths, realConfig)
+	accounts := liveAccounts(t, realPaths, realConfig)
 	store := media.NewStore(filepath.Join(output, "media"))
 	s := New(accounts, cfg, store)
 	var source sourceRecord
@@ -126,7 +127,7 @@ func TestLiveResumeVideoEdit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	accounts := session.NewService(realPaths, realConfig)
+	accounts := liveAccounts(t, realPaths, realConfig)
 	s := New(accounts, cfg, media.NewStore(filepath.Join(output, "media")))
 	trace := &liveRequestLog{base: http.DefaultTransport}
 	http.DefaultTransport = trace
@@ -200,7 +201,7 @@ func TestLiveVideoEdit(t *testing.T) {
 	if _, err := cfg.Update(realConfig.Get()); err != nil {
 		t.Fatal(err)
 	}
-	accounts := session.NewService(realPaths, realConfig)
+	accounts := liveAccounts(t, realPaths, realConfig)
 	var selected Accounts = accounts
 	if value := os.Getenv("SNAKEMEDIA_LIVE_ACCOUNT_INDEX"); value != "" {
 		all, err := accounts.GetConnectedStoredAccounts()
@@ -215,7 +216,7 @@ func TestLiveVideoEdit(t *testing.T) {
 		t.Logf("real account index=%d", index)
 	}
 	store := media.NewStore(filepath.Join(output, "media"))
-	imported := store.ImportVideo(func() (string, error) { return input, nil })
+	imported := store.ImportVideo((&Provider{}).SourceVideoExtensions(), func() (string, error) { return input, nil })
 	if !imported.Success {
 		t.Fatal(imported.Error)
 	}
@@ -261,4 +262,12 @@ func TestLiveVideoEdit(t *testing.T) {
 			t.Fatal("restart recovery failed")
 		}
 	}
+}
+
+// liveAccounts serves the Flow accounts saved in a real data directory.
+func liveAccounts(t *testing.T, realPaths paths.Paths, cfg *config.Manager) *session.Service {
+	t.Helper()
+	shared := sharedaccounts.New(filepath.Join(realPaths.DataDir, "accounts"), cfg, session.NewSite(cfg))
+	t.Cleanup(shared.Close)
+	return session.NewService(shared, cfg)
 }

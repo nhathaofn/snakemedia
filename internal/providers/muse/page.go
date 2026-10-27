@@ -7,13 +7,27 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"strings"
+	"sync"
 	"time"
+
+	"SnakeMedia/internal/browser"
+	"SnakeMedia/internal/config"
 )
 
 //go:embed page.js
 var pageSource string
+
+// pageKey is the window property the page script lives under. It changes with
+// the script, so a tab still holding a script from an older build of the app
+// gets the current one.
+var pageKey = func() string {
+	h := fnv.New32a()
+	h.Write([]byte(pageSource))
+	return fmt.Sprintf("__mss_%08x", h.Sum32())
+}()
 
 // visibleShim keeps Muse (a Next.js app) rendering in a hidden or background
 // tab: it always reports "visible", and falls back to a 16 ms timer when
@@ -36,77 +50,46 @@ const visibleShim = `(() => {
 var errTabMissing = errors.New("Chrome của tài khoản không có tab Muse.")
 
 // chromePage drives the muse.ai tab of one account's Chrome over CDP. Each call
-// opens its own short connection; the injected window.__mss keeps page state
-// (open files) between calls.
+// opens its own short connection; the script injected under pageKey keeps page
+// state (open files) between calls.
 type chromePage struct {
 	port        int
+	policy      config.AccountConfig
 	callTimeout time.Duration
 	sendTimeout time.Duration
+	// nav is shared by every job on the account's tab: calls hold it for
+	// reading, and loading another page waits for them and holds it alone, so
+	// a navigation never cuts another job's send or status read short. Nil
+	// for a one-off page (an account check).
+	nav *sync.RWMutex
 }
 
-func (p *chromePage) tab(ctx context.Context) (target, error) {
-	var targets []target
-	if err := devtoolsJSON(ctx, "GET", p.port, "/json", &targets); err != nil {
-		return target{}, err
-	}
-	for _, t := range targets {
-		if t.musePage() {
-			return t, nil
-		}
-	}
-	return target{}, errTabMissing
-}
-
-// openMuseTab makes sure the browser shows muse.ai, reusing a blank tab when
-// there is one. The visibility shim is installed before the page loads.
-func openMuseTab(ctx context.Context, port int) error {
-	var targets []target
-	if err := devtoolsJSON(ctx, "GET", port, "/json", &targets); err != nil {
-		return err
-	}
-	var blank *target
-	for i, t := range targets {
-		if t.musePage() {
-			return nil
-		}
-		if t.Type == "page" && blank == nil {
-			blank = &targets[i]
-		}
-	}
-	if blank == nil {
-		var created target
-		if err := devtoolsJSON(ctx, "PUT", port, "/json/new?about:blank", &created); err != nil {
-			return err
-		}
-		blank = &created
-	}
-	return navigateHome(ctx, *blank, port)
-}
-
-func navigateHome(ctx context.Context, t target, port int) error {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	conn, err := dialTarget(ctx, t, port)
+func (p *chromePage) tab(ctx context.Context) (browser.Target, error) {
+	t, found, err := browser.FindTab(ctx, p.port, p.policy, museURL)
 	if err != nil {
-		return err
+		return browser.Target{}, err
 	}
-	defer conn.Close()
-	if err := conn.call(ctx, "Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": visibleShim}, nil); err != nil {
-		return err
+	if !found {
+		return browser.Target{}, errTabMissing
 	}
-	return conn.call(ctx, "Page.navigate", map[string]any{"url": MuseURL}, nil)
+	return t, nil
 }
 
-// invoke calls window.__mss[name](...args), injecting the page script first
-// when the tab does not have it yet (a fresh load or a navigation).
+// invoke calls window[pageKey][name](...args), injecting the page script
+// first when the tab does not have it yet (a fresh load or a navigation).
 func (p *chromePage) invoke(ctx context.Context, timeout time.Duration, name string, out any, args ...any) error {
+	if p.nav != nil {
+		p.nav.RLock()
+		defer p.nav.RUnlock()
+	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	t, err := p.tab(ctx)
 	if err != nil {
 		return err
 	}
-	conn, err := dialTarget(ctx, t, p.port)
+	// One file chunk is chunkSize bytes base64-encoded inside a JSON string.
+	conn, err := browser.Dial(ctx, t, p.port, 4*chunkSize)
 	if err != nil {
 		return err
 	}
@@ -119,8 +102,9 @@ func (p *chromePage) invoke(ctx context.Context, timeout time.Duration, name str
 		return err
 	}
 	encodedName, _ := json.Marshal(name)
-	expr := fmt.Sprintf("(async()=>JSON.stringify(await (window.__mss || (%s)(%d))[%s](...%s)))()", pageSource, chunkSize, encodedName, encodedArgs)
-	return conn.evaluate(ctx, expr, out)
+	key, _ := json.Marshal(pageKey)
+	expr := fmt.Sprintf("(async()=>JSON.stringify(await (window[%s] || (window[%s] = (%s)(%d)))[%s](...%s)))()", key, key, pageSource, chunkSize, encodedName, encodedArgs)
+	return conn.Evaluate(ctx, expr, out)
 }
 
 func (p *chromePage) Login(ctx context.Context) (LoginState, error) {
@@ -129,26 +113,36 @@ func (p *chromePage) Login(ctx context.Context) (LoginState, error) {
 	return state, err
 }
 
-// Send posts into thread, or starts a new chat. A page without Muse's chat
-// client (an odd route the user clicked to) is sent home and tried once more;
-// nothing was sent then.
-func (p *chromePage) Send(ctx context.Context, text string, atts []Attachment, thread string) (SendResult, error) {
+// Send starts a new chat. A page without Muse's chat client (an odd route the
+// user clicked to) is sent home and tried once more; nothing was sent then.
+func (p *chromePage) Send(ctx context.Context, text string, atts []Attachment) (SendResult, error) {
 	var r SendResult
-	if err := p.invoke(ctx, p.sendTimeout, "send", &r, text, atts, thread); err != nil {
+	if err := p.invoke(ctx, p.sendTimeout, "send", &r, text, atts, ""); err != nil {
 		return r, err
 	}
 	if !strings.HasPrefix(r.Reason, "not_ready") {
 		return r, nil
 	}
+	if err := p.Home(ctx); err != nil {
+		return r, nil
+	}
+	err := p.invoke(ctx, p.sendTimeout, "send", &r, text, atts, "")
+	return r, err
+}
+
+// Home loads Muse's home page once no other call is using the tab.
+func (p *chromePage) Home(ctx context.Context) error {
+	if p.nav != nil {
+		p.nav.Lock()
+		defer p.nav.Unlock()
+	}
+	ctx, cancel := context.WithTimeout(ctx, p.callTimeout)
+	defer cancel()
 	t, err := p.tab(ctx)
 	if err != nil {
-		return r, nil
+		return err
 	}
-	if err := navigateHome(ctx, t, p.port); err != nil {
-		return r, nil
-	}
-	err = p.invoke(ctx, p.sendTimeout, "send", &r, text, atts, thread)
-	return r, err
+	return browser.Navigate(ctx, t, p.port, musePage)
 }
 
 func (p *chromePage) Status(ctx context.Context, sessionID string) (string, error) {
@@ -170,10 +164,20 @@ func (p *chromePage) Cancel(ctx context.Context, sessionID string) error {
 
 func (p *chromePage) Quota(ctx context.Context) (*MuseQuota, error) {
 	var sub *subscription
-	if err := p.invoke(ctx, p.callTimeout, "quota", &sub); err != nil {
+	if err := p.invoke(ctx, max(p.callTimeout, p.sendTimeout), "quota", &sub); err != nil {
 		return nil, err
 	}
 	return parseQuota(sub, time.Now()), nil
+}
+
+// Capabilities reads Muse's upload limits, which may mean scanning Muse's
+// scripts once per build, so it gets the longer send timeout.
+func (p *chromePage) Capabilities(ctx context.Context) (*MuseCapabilities, error) {
+	var raw rawCapabilities
+	if err := p.invoke(ctx, max(p.callTimeout, p.sendTimeout), "capabilities", &raw); err != nil {
+		return nil, err
+	}
+	return parseCapabilities(raw, time.Now()), nil
 }
 
 func (p *chromePage) Download(ctx context.Context, path string, sink io.Writer) (written int64, err error) {

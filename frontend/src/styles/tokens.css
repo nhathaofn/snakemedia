@@ -47,6 +47,8 @@
   --tabs-indicator-height: 2px;
   --sidebar-width: 240px;
   --sidebar-collapsed-width: 68px;
+  /* Below this window width the layout turns compact (useCompactLayout). */
+  --layout-compact-width: 1100px;
 
   /* Shadows */
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
@@ -61,6 +63,8 @@
   --icon-size-sm: 14px;
   --icon-size-md: 16px;
   --icon-size-lg: 18px;
+  --icon-size-xl: 24px;
+  --icon-size-display: 40px;
   --icon-stroke: 1.75;
 
   /* Page content column, centred in the content area */
@@ -89,10 +93,15 @@
   --font-size-label: 0.9375rem;
   --font-size-dialog-title: 1.125rem;
   --font-size-page-title: 1.375rem;
+  --font-weight-regular: 400;
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --account-card-min-width: 360px;
+  --proxy-editor-min-height: 280px;
+  --settings-number-width: 96px;
+  --settings-text-width: 320px;
   --flow-studio-panel-width: 340px;
+  --flow-studio-panel-width-compact: 280px;
   --flow-chat-thread-max-width: 1120px;
   --flow-chat-bubble-max-width: min(78%, 760px);
   --flow-chat-result-min-width: 220px;
@@ -109,10 +118,18 @@
   --muse-thumb-size: 64px;
   --muse-result-width: 240px;
   --muse-result-max-height: 320px;
+  /* Placeholder heights for off-screen list items (content-visibility). */
+  --muse-job-placeholder-height: 160px;
+  --muse-lib-item-placeholder-height: 220px;
+  --flow-task-placeholder-height: 72px;
+  --flow-task-table-min-width: 620px;
+  --flow-task-table-min-width-compact: 480px;
   --account-email-max-width: 170px;
   --account-detail-max-width: 220px;
   --empty-state-min-height: 160px;
+  --route-error-min-height: 60vh;
   --dialog-max-width: 560px;
+  --dialog-max-height: 90vh;
   --dialog-width: 90%;
   --dialog-backdrop: rgba(0, 0, 0, 0.7);
   --dialog-blur: 4px;
@@ -141,6 +158,13 @@
 
   /* Native controls (select popups, checkboxes, scrollbars) follow the theme. */
   color-scheme: dark;
+}
+
+/* Narrow windows: the studio tools panel shrinks (set by useCompactLayout). */
+:root[data-layout='compact'] {
+  --flow-studio-panel-width: var(--flow-studio-panel-width-compact);
+  --content-padding: var(--space-8);
+  --flow-task-table-min-width: var(--flow-task-table-min-width-compact);
 }
 
 [data-theme='light'] {

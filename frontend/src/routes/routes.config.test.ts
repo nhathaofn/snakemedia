@@ -26,6 +26,10 @@ describe('router', () => {
     }
   });
 
+  it('opens the app on the accounts page', () => {
+    expect(DEFAULT_PATH).toBe(ROUTES.home.accounts);
+  });
+
   it('sends the root and unknown URLs to the default page', () => {
     expect(redirectTarget('/')).toBe(DEFAULT_PATH);
     expect(redirectTarget('/nope')).toBe(DEFAULT_PATH);
@@ -52,12 +56,8 @@ describe('ROUTES', () => {
   it('is typed with literal paths', () => {
     // Compile-time checks: these fail `tsc` if a feature is renamed or moved.
     const accounts: '/home/accounts' = ROUTES.home.accounts;
-    const flow: '/flow/overview' = ROUTES.flow.overview;
+    const proxy: '/home/proxy' = ROUTES.home.proxy;
     const flowImage: '/flow/image' = ROUTES.flow.image;
-    expect([accounts, flow, flowImage]).toEqual([
-      '/home/accounts',
-      '/flow/overview',
-      '/flow/image',
-    ]);
+    expect([accounts, proxy, flowImage]).toEqual(['/home/accounts', '/home/proxy', '/flow/image']);
   });
 });

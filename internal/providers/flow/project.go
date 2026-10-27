@@ -53,7 +53,7 @@ func (s *Provider) FetchAccountProjects(ctx context.Context, client *chrome.Flow
 	if err != nil {
 		return nil, err
 	}
-	limits := s.cfg.Get().Accounts
+	limits := s.cfg.Get().FlowPagePolicy()
 	body, err := client.Do(ctx, rpcID, fReq, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
 	if err != nil {
 		return nil, err
@@ -114,7 +114,7 @@ func (s *Provider) CreateAccountProject(ctx context.Context, client *chrome.Flow
 	if err != nil {
 		return "", err
 	}
-	limits := s.cfg.Get().Accounts
+	limits := s.cfg.Get().FlowPagePolicy()
 	body, err := client.Do(ctx, rpcID, fReq, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
 	if err != nil {
 		return "", err

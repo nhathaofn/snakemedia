@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"time"
 
@@ -228,7 +229,7 @@ func (s *Provider) reserveVideoCandidateLocked(candidates []videoAccountCandidat
 			minActive = state.active
 		}
 	}
-	if !slicesContainsTrue(creditEligible) {
+	if !slices.Contains(creditEligible, true) {
 		return -1, nil, errors.New("không có tài khoản đủ credit cho yêu cầu video này; hãy làm mới số dư Flow")
 	}
 	if minActive == int(^uint(0)>>1) {
@@ -298,15 +299,6 @@ func (s *Provider) reserveVideoCandidateLocked(candidates []videoAccountCandidat
 	}
 	states[selected].waitingForCredit = states[selected].snapshotKnown && states[selected].snapshotCredits-states[selected].videoSpent-states[selected].videoReserved <= 0
 	return selected, &accountLease{provider: s, id: chosen.account.ID, cost: chosen.cost}, nil
-}
-
-func slicesContainsTrue(values []bool) bool {
-	for _, value := range values {
-		if value {
-			return true
-		}
-	}
-	return false
 }
 
 func (l *accountLease) commitVideoSpend() {
@@ -381,26 +373,32 @@ func (s *Provider) refreshAccountCredits(ctx context.Context, id string) {
 	if account == nil {
 		return
 	}
-	policy := s.cfg.Get().Accounts
+	policy := s.cfg.Get().FlowPagePolicy()
 	refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(policy.RequestTimeoutSeconds)*time.Second)
 	defer cancel()
-	credits, credentials, err := chrome.QueryCreditsDirectHTTP(refreshCtx, account.Credentials, policy)
+	b, err := s.accounts.EnsureAccountHeadlessBrowser(refreshCtx, *account)
+	if err != nil {
+		logger.Get().Warn("cannot open Chrome to refresh Flow credits", "account", id, "error", err)
+		return
+	}
+	credits, credentials, err := chrome.QueryCredits(refreshCtx, b.Port, account.Credentials, policy)
 	if err != nil {
 		logger.Get().Warn("cannot refresh Flow credits after generation", "account", id, "error", err)
 		return
 	}
 	s.rotationMu.Lock()
 	state = s.rotationAccounts[id]
-	if (state != nil && (state.activityEpoch != activityEpoch || state.active > 1 || state.videoReserved > 0)) || (state == nil && activityEpoch != 0) {
-		s.rotationMu.Unlock()
-		return
-	}
-	if err := s.accounts.UpdateBalance(id, credits, credentials); err != nil {
-		s.rotationMu.Unlock()
-		logger.Get().Warn("cannot persist refreshed Flow credits", "account", id, "error", err)
-		return
-	}
+	stale := (state != nil && (state.activityEpoch != activityEpoch || state.active > 1 || state.videoReserved > 0)) || (state == nil && activityEpoch != 0)
 	s.rotationMu.Unlock()
+	if stale {
+		return
+	}
+	// The store write happens outside rotationMu so it never blocks rotation.
+	// A spend starting in between meets a balance that does not show it yet,
+	// which rotationStateLocked already carries forward.
+	if err := s.accounts.UpdateBalance(id, credits, credentials); err != nil {
+		logger.Get().Warn("cannot persist refreshed Flow credits", "account", id, "error", err)
+	}
 }
 
 func (l *accountLease) release() {
@@ -432,7 +430,7 @@ func (l *accountLease) release() {
 // accountConcurrency is how many requests one account may run at once.
 func (s *Provider) accountConcurrency() int {
 	if s.cfg == nil {
-		return config.DefaultAccountConfig().MaxConcurrentRequestsPerAccount
+		return config.DefaultFlowConfig().MaxConcurrentRequestsPerAccount
 	}
-	return s.cfg.Get().Accounts.MaxConcurrentRequestsPerAccount
+	return s.cfg.Get().Flow.MaxConcurrentRequestsPerAccount
 }

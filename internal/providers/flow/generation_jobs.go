@@ -5,9 +5,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"SnakeMedia/internal/logger"
@@ -72,16 +75,24 @@ func (s *Provider) loadGenerationJob(id string) (generationJob, error) {
 	if err := s.readState("generation-jobs", id, &job); err != nil {
 		return generationJob{}, err
 	}
-	if job.ID != id || (job.Kind != generationJobImage && job.Kind != generationJobVideo) || job.Fingerprint == "" {
-		return generationJob{}, errors.New("Thông tin job tạo media đã lưu không hợp lệ.")
+	if err := checkGenerationJob(id, job); err != nil {
+		return generationJob{}, err
 	}
 	return job, nil
+}
+
+func checkGenerationJob(id string, job generationJob) error {
+	if job.ID != id || (job.Kind != generationJobImage && job.Kind != generationJobVideo) || job.Fingerprint == "" {
+		return errors.New("Thông tin job tạo media đã lưu không hợp lệ.")
+	}
+	return nil
 }
 
 func (s *Provider) saveGenerationJob(job generationJob) error {
 	if job.ID == "" {
 		return errors.New("Thiếu mã job tạo media.")
 	}
+	s.journals.forget("generation-jobs", job.ID)
 	return s.saveState("generation-jobs", job.ID, job)
 }
 
@@ -113,7 +124,58 @@ func definiteMutationRejection(err error) bool {
 		return remote.Status >= 400 && remote.Status < 500 && remote.Status != 408 && remote.Status != 429
 	}
 	var rpcErr *chrome.RPCError
-	return errors.As(err, &rpcErr)
+	if !errors.As(err, &rpcErr) {
+		return false
+	}
+	reason := rpcErrorReason(rpcErr.Detail)
+	definite := slices.Contains(rpcNotExecutedCodes, rpcErr.Code) ||
+		(rpcErr.Code == rpcUnauthenticated && authReason.MatchString(reason))
+	noteRPCError(rpcErr, reason, definite)
+	return definite
+}
+
+// rpcNotExecutedCodes are the google.rpc status codes Flow returns before a
+// mutation runs: INVALID_ARGUMENT, PERMISSION_DENIED, RESOURCE_EXHAUSTED and
+// FAILED_PRECONDITION. Any other status (UNKNOWN, DEADLINE_EXCEEDED, ABORTED,
+// INTERNAL, UNAVAILABLE, or none parsed) may come after the server already ran
+// it, so the job is reconciled, never re-sent. The table is not yet checked
+// against real Flow errors: every RPC error seen is logged once ("flow rpc
+// error seen") so it can be confirmed from app.log.
+var rpcNotExecutedCodes = []int{3, 7, 8, 9}
+
+// rpcUnauthenticated (16) normally means the request was refused before it
+// ran, but it is only treated as definite when Flow names an auth reason
+// (an expired or missing token, credentials, session); a bare 16 is reconciled.
+const rpcUnauthenticated = 16
+
+var (
+	authReason   = regexp.MustCompile(`TOKEN|CREDENTIAL|AUTH|LOGIN|SESSION|COOKIE`)
+	reasonToken  = regexp.MustCompile(`"([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)"`)
+	seenRPCError sync.Map
+)
+
+// rpcErrorReason returns the first google.rpc reason (an UPPER_SNAKE word)
+// in an RPC error's status envelope, or "" when it names none.
+func rpcErrorReason(detail string) string {
+	if m := reasonToken.FindStringSubmatch(detail); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// noteRPCError logs each distinct (RPC, status, reason) once per run, with
+// how it was classified, so the code table can be checked against real
+// Flow errors.
+func noteRPCError(err *chrome.RPCError, reason string, definite bool) {
+	key := fmt.Sprintf("%s|%d|%s", err.ID, err.Code, reason)
+	if _, seen := seenRPCError.LoadOrStore(key, true); seen {
+		return
+	}
+	treatedAs := "unknown"
+	if definite {
+		treatedAs = "definite"
+	}
+	logger.Get().Info("flow rpc error seen", "method", err.ID, "code", err.Code, "reason", reason, "treatedAs", treatedAs)
 }
 
 type mutationRejection struct{ cause error }
@@ -191,8 +253,8 @@ func (s *Provider) submissionLost(job generationJob) bool {
 	if err != nil {
 		return false
 	}
-	limits := s.cfg.Get().Accounts
-	grace := time.Duration(limits.GenerationTimeoutSeconds+limits.RequestTimeoutSeconds) * time.Second
+	limits := s.cfg.Get().FlowPagePolicy()
+	grace := time.Duration(s.cfg.Get().Flow.GenerationTimeoutSeconds+limits.RequestTimeoutSeconds) * time.Second
 	return time.Since(created) > grace
 }
 
@@ -212,23 +274,20 @@ func newGenerationJob(id, kind, fingerprint, accountID string) generationJob {
 	}
 }
 
-// pendingGenerationJobs lists unfinished jobs of kind. Along the way it skips
-// unreadable journals instead of failing every recovery, deletes finished
-// journals past retention, and gives up unconfirmed jobs that made no progress
-// within retention so they are not listed as pending forever.
+// pendingGenerationJobs lists unfinished jobs of kind. Journals are decoded
+// only when they changed since the last listing (journalCache); broken ones are
+// moved aside instead of failing every recovery. Along the way it deletes
+// finished journals past retention and gives up unconfirmed jobs that made no
+// progress within retention so they are not listed as pending forever.
 func (s *Provider) pendingGenerationJobs(kind string) ([]generationJob, error) {
-	entries, err := s.stateEntries("generation-jobs")
+	entries, err := listJournals(s, "generation-jobs", checkGenerationJob)
 	if err != nil {
 		return nil, err
 	}
 	retention := s.jobRetention()
 	jobs := make([]generationJob, 0, len(entries))
 	for _, entry := range entries {
-		job, err := s.loadGenerationJob(entry.id)
-		if err != nil {
-			logger.Get().Warn("skipping unreadable generation job", "job", entry.id, "error", err)
-			continue
-		}
+		job := entry.value
 		terminal := job.Phase == generationComplete || job.Phase == generationRejected
 		if time.Since(entry.modified) > retention {
 			s.expireGenerationJob(job, terminal)
@@ -245,15 +304,15 @@ func (s *Provider) pendingGenerationJobs(kind string) ([]generationJob, error) {
 // expireGenerationJob deletes a finished journal or closes an abandoned one.
 // A job being followed right now is left for the next listing.
 func (s *Provider) expireGenerationJob(job generationJob, terminal bool) {
-	lock := s.jobLock(job.ID)
-	if !lock.TryLock() {
+	unlock, ok := s.tryJobLock(job.ID)
+	if !ok {
 		return
 	}
-	defer lock.Unlock()
+	defer unlock()
 	var err error
 	if terminal {
 		err = s.removeState("generation-jobs", job.ID)
-		s.jobLocks.Delete(job.ID)
+		s.journals.forget("generation-jobs", job.ID)
 	} else {
 		job.Phase, job.Message = generationRejected, "Flow không xác nhận job trong thời gian lưu giữ; đã ngừng theo dõi."
 		err = s.saveGenerationJob(job)

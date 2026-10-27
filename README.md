@@ -32,19 +32,45 @@ Config and logs are stored under the OS user config directory, e.g. `%AppData%\S
 ## Checks
 All commands in `.agents/verify.json` must pass; CI runs the same set. See `AGENTS.md` for the full command table and conventions.
 
-## Accounts and Google Flow sessions
-The Account screen launches an isolated Chrome profile for each login. The backend owns the profile and browser endpoint, verifies email and Gaia ID before storing the account, and exposes metadata rather than cookies or tokens to React. The saved account card appears before any balance RPC; one separate refresh enriches it with credits and quota information. Enrichment failures retain the card and show a diagnostic rather than treating the user as signed out. A past balance is shown with its last verification time.
+## Accounts and proxies
 
-Account runtime policy lives in `config.json` under `accounts`: polling intervals, login/request/browser startup timeouts, refresh cooldown, response size, and script discovery limits. Defaults and validation are defined once in `internal/config/accounts.go`. `cdpPort` is an optional preferred port; zero lets the OS allocate an isolated port which is passed explicitly to Chrome. The launcher avoids Chrome's special `--remote-debugging-port=0` automation mode. An occupied unmanaged port is never adopted as an account session.
+**Trang chủ > Tài khoản** lists the accounts of every provider (a tab each for
+Google Flow and Muse); **Trang chủ > Proxy** holds the proxy list they share.
+Each account has its own Chrome profile under `%AppData%\SnakeMedia\accounts\profiles`.
+Add one by signing in through the Chrome window the app opens (it notices the
+session by itself) or by pasting cookies exported from a signed-in page; cookies
+for other sites are dropped. Accounts, imported cookies and the proxy list are
+stored DPAPI-encrypted under `accounts/` (owner-only files on other platforms);
+a corrupt store is moved aside and blocks writes for that run. React only sees
+account metadata, never cookies or session tokens.
 
-Build labels, CSRF/session tokens, language, User-Agent and cookies come from the active Flow page. The adapter reads compiled script sources from Chrome through CDP (including lazy bundles), discovers RPC IDs for the active build, caches discovery with bounded retries, and batches credits with optional availability queries. Discovery accepts metadata property order/quoting variations. Unsupported bundle/schema changes produce an enrichment error instead of falling back to captured values. Availability is retained as the server's raw code; missing optional availability metadata cannot hide a signed-in account or a valid balance and is not a guarantee of region, age, model or generation eligibility.
+Every account browser runs on its proxy: an explicit line, "none", or the least
+shared live line of the list, kept for that account. Chrome and the app's own
+requests for the account go through a local bridge on `127.0.0.1`; when the
+proxy fails the account stops instead of using the machine's real IP. WebRTC is
+limited to the proxy as well. Only "Không dùng proxy" goes direct: with an empty
+proxy list every other account refuses to start, and a signed-in account whose
+proxy stops answering waits for it (or for the user to pick another line)
+rather than moving to a different IP. Idle headless account browsers close after
+`accounts.idleBrowserMinutes`.
 
-On Windows, `accounts.json` contains a versioned DPAPI-encrypted store bound to the current OS user. Other platforms use owner-only file permissions. Legacy plaintext stores migrate on read; old credentials and unverified balances are discarded because older refresh logic could associate them with the wrong account. Chrome profile directories are preserved. Invalid JSON is quarantined and account writes are blocked for that run so corrupt data cannot be silently overwritten.
+Removing an account closes its Chrome and deletes its profile directory
+(cookies, cache, login data); it does not delete the account on the site. Shared
+browser policy (headless, timeouts, polling) lives under `accounts` in
+`config.json` and on **Cài đặt > Chung**; defaults and validation are defined
+once in `internal/config/accounts.go`. Chrome gets an OS-assigned debugging
+port passed explicitly, never Chrome's `--remote-debugging-port=0` automation mode.
 
-Removing an account closes its managed Chrome session and permanently deletes its application credentials and profile directory (cookies, cache and local login data). Removal is restricted to directories under the managed profiles root; linked directories and profiles shared by other accounts are rejected. A deletion failure keeps the account listed so it can be retried. This does not delete the Google account itself. Closing an unfinished login cancels its work, closes the owned browser and removes the unsaved profile. Completed account browsers stay available until application shutdown. Automatic polling stops after success, cancellation or timeout; refresh work is serialized and respects the configured cooldown and server `Retry-After`.
+For Flow, the session values (build label, CSRF token, language, User-Agent,
+cookies) come from the account's Flow page; RPC IDs are discovered from the
+compiled scripts of the running build, and the balance is read through the page.
+A balance error keeps the account signed in and is shown on its card.
 
-Regression tests use synthetic sessions and local CDP/HTTP responses. To run the optional real Chrome lifecycle smoke test with a temporary profile and `about:blank`, set `SNAKEMEDIA_TEST_CHROME=1` and run `go test ./internal/services/chrome -run TestBrowserLifecycle -v`. This does not test an interactive Google login.
-
+Regression tests use synthetic sessions and local CDP/HTTP responses. To run the
+optional real Chrome lifecycle smoke test with a temporary profile and
+`about:blank`, set `SNAKEMEDIA_TEST_CHROME=1` and run
+`go test ./internal/browser -run TestBrowserLifecycle -v`. This does not test an
+interactive sign-in.
 
 ### Edit video runtime
 
@@ -67,9 +93,11 @@ resuming never sends another generation request. Jobs do not contain cookies,
 CSRF tokens or reCAPTCHA tokens. Runtime RPC descriptors and the reCAPTCHA key are
 discovered from the active account's page, including its lazily loaded studio.
 
-Upload retry/size policy, trim step/minimum and polling backoff live under `flow`
-in `config.json`.
-Script discovery has a separate `accounts.maxDiscoveryBytes` budget, so studio
+Upload retry policy and polling backoff live under `flow` in `config.json`.
+Flow's own limits (source size, trim minimum and step, accepted types) are not
+settings; those Flow does not expose are named fallbacks in
+`internal/providers/flow/limits.go`, logged on first use.
+Script discovery has a separate `flow.maxDiscoveryBytes` budget, so studio
 bundles do not compete with the HTTP response limit. Downloads stream atomically
 to disk rather than buffering entire videos in memory.
 
@@ -82,18 +110,34 @@ the intended edit, then run
 folder. This test uploads a real file and can consume Flow credits; it does not
 substitute simulated server results.
 
+`SNAKEMEDIA_LIVE_APP` runs the whole app on the real data folder and accounts
+(`go test . -run '^TestLiveApp$' -v -count=1`); its value lists the steps:
+`list`, `rpcs`, `credits` (free), `flow-image`, `flow-video` (cheapest video,
+wait cancelled midway then resumed), `muse-image`, `muse-video`. The paid steps
+spend real credits or quota. `SNAKEMEDIA_LIVE_DIRECT` lists account IDs to set
+to "no proxy" first.
+
+## Flow image queue
+
+**Flow > Ảnh > Hàng loạt** queues prompts in Go (`flow/image-queue.json`), runs
+them with the thread count and spacing of **Cài đặt Flow**, and saves results to
+the chosen folder. Each task writes its request ID before sending, so after a
+restart a running task is checked again under that ID, never sent again.
+
 ## Muse
 
 The **Muse** tab queues image and video jobs on muse.ai and spreads them over
-the Muse accounts saved under **Muse > Tài khoản Muse**. Each account has its
-own Chrome profile under `%AppData%\SnakeMedia\muse\profiles`; add one by
-signing in through Chrome or by pasting cookies exported from a signed-in
-muse.ai page. Accounts and imported cookies are stored DPAPI-encrypted in
-`muse/accounts.json`; the queue is journaled in `muse/jobs.json`.
+the Muse accounts of **Trang chủ > Tài khoản**; the queue is journaled in
+`muse/jobs.json`. Made files are also recorded in the library
+(`muse/library.json`), which keeps them when finished jobs are cleared from the
+queue.
 
 A job that Muse already accepted is only checked again in its own chat, also
 after a restart, so an interruption never spends a second generation. Timing,
-retry and thread limits live under `muse` in `config.json`.
+retry and thread limits live under `muse` in `config.json` (**Muse > Cài đặt
+Muse**). What Muse itself allows (weekly quota and additional tokens, accepted
+reference images and their sizes, models) is read from muse.ai when an account
+is checked and is never configured in the app (ADR 0011).
 
 To open muse.ai anonymously in a real Chrome and check the page script, run
 `SNAKEMEDIA_TEST_MUSE=1 go test ./internal/providers/muse -run TestLiveAnonymousPage -v`.

@@ -26,7 +26,7 @@ const useStudioModes = create<{
 
 /**
  * Two-column studio layout shared by every Flow media page: a fixed-width tools
- * panel with mode tabs (Single / All) on the left and the selected workspace on the right.
+ * panel with mode tabs (Đơn / Hàng loạt) on the left and the selected workspace on the right.
  * Pages using it are registered with `layout: 'full'`.
  */
 export function FlowStudioLayout<T extends string>({

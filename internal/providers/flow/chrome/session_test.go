@@ -107,7 +107,7 @@ func TestInspectSessionCorrelatesEventsAndValidatesOrigin(t *testing.T) {
 			defer server.Close()
 			u, _ := url.Parse(server.URL)
 			port, _ := strconv.Atoi(u.Port())
-			got, err := InspectFlowSession(context.Background(), port, config.DefaultAccountConfig())
+			got, err := InspectFlowSession(context.Background(), port, config.DefaultFlowPagePolicy())
 			if malicious {
 				if err == nil {
 					t.Fatal("substring origin accepted")
@@ -127,7 +127,7 @@ func TestBoundedResponsesAndCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := InspectFlowSession(ctx, 0, config.DefaultAccountConfig()); err == nil {
+	if _, err := InspectFlowSession(ctx, 0, config.DefaultFlowPagePolicy()); err == nil {
 		t.Fatal("canceled work continued")
 	}
 	if err := responseError(http.StatusTooManyRequests, "60"); err.(*HTTPError).RetryAfter != time.Minute {
@@ -186,7 +186,7 @@ func TestSignedInIdentitySurvivesRPCDiscoveryFailure(t *testing.T) {
 			if identityOnly {
 				inspect = InspectFlowIdentity
 			}
-			got, err := inspect(context.Background(), port, config.DefaultAccountConfig())
+			got, err := inspect(context.Background(), port, config.DefaultFlowPagePolicy())
 			if err != nil || got == nil || !got.IsLoggedIn || got.CreditsVerified {
 				t.Fatalf("signed-in identity hidden by RPC failure: %+v %v", got, err)
 			}

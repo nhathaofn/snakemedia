@@ -5,7 +5,6 @@ import type { MuseJob } from '../../../types';
 
 const backend = vi.hoisted(() => ({
   listMuseJobs: vi.fn(),
-  getMuseAccounts: vi.fn(),
   getMuseOptions: vi.fn(),
 }));
 
@@ -23,13 +22,13 @@ describe('museStore', () => {
   beforeEach(() => {
     useMuseStore.setState({
       jobs: [],
-      accounts: [],
       options: null,
       loaded: false,
       loadError: null,
     });
+    backend.listMuseJobs.mockReset();
+    backend.getMuseOptions.mockReset();
     backend.listMuseJobs.mockResolvedValue(ok([job]));
-    backend.getMuseAccounts.mockResolvedValue(ok([]));
     backend.getMuseOptions.mockResolvedValue(ok({}));
   });
 
@@ -53,10 +52,41 @@ describe('museStore', () => {
     expect(state.loadError).toBe('journal unreadable');
   });
 
-  it('loads jobs, accounts and options', async () => {
+  it('loads jobs and options', async () => {
     await useMuseStore.getState().load();
     const state = useMuseStore.getState();
     expect(state.loadError).toBeNull();
     expect(state.jobs).toEqual([job]);
+  });
+
+  // Review #40: an event that lands while a list call is in flight is newer
+  // than that call's snapshot and must survive it.
+  it('keeps events that arrive while the list loads', async () => {
+    let answer: (value: unknown) => void = () => {};
+    backend.listMuseJobs.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    const loading = useMuseStore.getState().loadJobs();
+    const done = { ...job, status: 'succeeded' } as MuseJob;
+    const added = { id: 'j2', prompt: 'y' } as MuseJob;
+    useMuseStore.getState().setJob(done);
+    useMuseStore.getState().setJob(added);
+    useMuseStore.getState().dropJob('j3');
+    answer(ok([job, { id: 'j3', prompt: 'z' } as MuseJob]));
+    await loading;
+    const ids = useMuseStore.getState().jobs.map((j) => j.id);
+    expect(ids.sort()).toEqual(['j1', 'j2']);
+    expect(useMuseStore.getState().jobs.find((j) => j.id === 'j1')?.status).toBe('succeeded');
+  });
+
+  it('shares one reload between calls made while it runs', async () => {
+    await Promise.all([useMuseStore.getState().loadJobs(), useMuseStore.getState().loadJobs()]);
+    expect(backend.listMuseJobs).toHaveBeenCalledTimes(1);
+    expect(backend.getMuseOptions).not.toHaveBeenCalled();
+  });
+
+  it('treats a null job list as empty', async () => {
+    backend.listMuseJobs.mockResolvedValue(ok(null));
+    await useMuseStore.getState().loadJobs();
+    expect(useMuseStore.getState().jobs).toEqual([]);
+    expect(useMuseStore.getState().loadError).toBeNull();
   });
 });

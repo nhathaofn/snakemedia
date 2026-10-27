@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"SnakeMedia/internal/accounts"
 	"SnakeMedia/internal/config"
 	"SnakeMedia/internal/media"
 )
@@ -20,9 +21,16 @@ func TestLiveAnonymousPage(t *testing.T) {
 	}
 	dir := t.TempDir()
 	cfg, _ := config.NewManager(filepath.Join(dir, "config.json"))
-	p := New(dir, cfg, media.NewStore(filepath.Join(dir, "media")))
-	defer p.browsers.closeAll()
-	acc := p.newAccount("live", MuseSourceBrowser)
+	accts := accounts.New(filepath.Join(dir, "accounts"), cfg, NewSite(cfg))
+	defer accts.Close()
+	p := New(dir, filepath.Join(dir, "out"), cfg, media.NewStore(filepath.Join(dir, "media")), accts)
+	acc := accounts.Record{
+		Account:    accounts.Account{ID: "live", Provider: accounts.ProviderMuse, Name: "live", Enabled: true},
+		ProfileDir: filepath.Join(dir, "accounts", "profiles", "live"),
+	}
+	if err := accts.Seed(acc); err != nil {
+		t.Fatal(err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()

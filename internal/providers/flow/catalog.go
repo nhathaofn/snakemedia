@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 	"unicode"
 
+	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/models"
 	"SnakeMedia/internal/providers/flow/chrome"
 )
@@ -40,7 +42,7 @@ type modelCache struct {
 // GetImageModels returns the image models Google Flow reports for the account
 // whose turn is next in the rotation.
 func (s *Provider) GetImageModels(ctx context.Context) models.Response[[]FlowModel] {
-	acc, err := s.pickAccount(false)
+	acc, err := s.catalogAccount()
 	if err != nil {
 		return models.ErrorResponse[[]FlowModel](
 			"Không thể lấy model: "+err.Error(),
@@ -68,10 +70,12 @@ func (s *Provider) modelsFor(ctx context.Context, acc session.StoredAccount) ([]
 	}
 	s.mu.Unlock()
 
-	list, err := s.fetchLiveModels(ctx, acc)
+	// Concurrent requests needing this account's catalogue share one read.
+	v, err := s.catalogFlights.do("image:"+acc.ID, func() (any, error) { return s.fetchLiveModels(ctx, acc) })
 	if err != nil {
 		return nil, err
 	}
+	list := v.([]FlowModel)
 	s.mu.Lock()
 	s.models[acc.ID] = modelCache{buildLabel: acc.Credentials.BuildLabel, tier: accountTier(acc), models: list, expires: time.Now().Add(s.modelCacheTTL())}
 	s.mu.Unlock()
@@ -85,20 +89,6 @@ func cloneFlowModels(models []FlowModel) []FlowModel {
 		cloned[i].AvailableQualities = append([]ImageQuality(nil), models[i].AvailableQualities...)
 	}
 	return cloned
-}
-
-// findImageModel returns the account's image model with this ID.
-func (s *Provider) findImageModel(ctx context.Context, acc session.StoredAccount, modelID string) (FlowModel, error) {
-	list, err := s.modelsFor(ctx, acc)
-	if err != nil {
-		return FlowModel{}, fmt.Errorf("không đọc được danh sách model của tài khoản: %w", err)
-	}
-	for _, m := range list {
-		if m.ID == modelID {
-			return m, nil
-		}
-	}
-	return FlowModel{}, fmt.Errorf("Model %q không có trong danh sách model của tài khoản.", modelID)
 }
 
 // checkReferenceLimit enforces the model's own reference image limit.
@@ -459,7 +449,10 @@ func (u videoUsage) resolutionCodes() []int {
 
 // videoModels lists families usable for text-to-video on the tier.
 func videoModels(families []videoFamily, defaultID string, tier int) []FlowVideoModel {
-	ratioName := map[int]string{1: "9:16", 2: "16:9"}
+	ratioName := make(map[int]string, len(FlowVideoAspect))
+	for name, code := range FlowVideoAspect {
+		ratioName[code] = name
+	}
 	var list []FlowVideoModel
 	for _, f := range families {
 		durations := map[int]bool{}
@@ -471,6 +464,9 @@ func videoModels(families []videoFamily, defaultID string, tier int) []FlowVideo
 			}
 			for _, r := range u.resolutionCodes() {
 				resolutions[r] = true
+				if !slices.Contains(slices.Collect(maps.Values(FlowVideoResolution)), r) {
+					unmappedVideoCode("resolution", r)
+				}
 			}
 			if !u.anyDuration {
 				durations[u.duration] = true
@@ -478,6 +474,8 @@ func videoModels(families []videoFamily, defaultID string, tier int) []FlowVideo
 			for _, a := range u.aspects {
 				if name, ok := ratioName[a]; ok {
 					ratios[name] = true
+				} else {
+					unmappedVideoCode("aspect", a)
 				}
 			}
 		}
@@ -495,11 +493,13 @@ func videoModels(families []videoFamily, defaultID string, tier int) []FlowVideo
 			m.Durations = append(m.Durations, d)
 		}
 		sort.Ints(m.Durations)
-		for _, name := range []string{"16:9", "9:16"} {
-			if ratios[name] {
-				m.AspectRatios = append(m.AspectRatios, name)
-			}
+		for name := range ratios {
+			m.AspectRatios = append(m.AspectRatios, name)
 		}
+		// Landscape first, as Flow's picker lists them.
+		sort.Slice(m.AspectRatios, func(i, j int) bool {
+			return FlowVideoAspect[m.AspectRatios[i]] > FlowVideoAspect[m.AspectRatios[j]]
+		})
 		for _, name := range videoResolutionOrder {
 			if resolutions[FlowVideoResolution[name]] {
 				m.Resolutions = append(m.Resolutions, name)
@@ -508,6 +508,15 @@ func videoModels(families []videoFamily, defaultID string, tier int) []FlowVideo
 		list = append(list, m)
 	}
 	return list
+}
+
+// unmappedVideoCode logs, once per value, a catalogue code the app has no wire
+// name for: Flow offers something new that the studios cannot show yet.
+func unmappedVideoCode(kind string, code int) {
+	key := fmt.Sprintf("video %s %d", kind, code)
+	if _, seen := fallbacksUsed.LoadOrStore(key, true); !seen {
+		logger.Get().Warn("Flow lists a video value the app cannot name yet", "kind", kind, "code", code)
+	}
 }
 
 // textVideoCosts lists one price per text-to-video variant, cheapest first.
@@ -573,11 +582,11 @@ func (s *Provider) videoFamiliesFor(ctx context.Context, acc session.StoredAccou
 	if ok && time.Now().Before(cached.expires) && cached.buildLabel == acc.Credentials.BuildLabel && cached.tier == accountTier(acc) {
 		return cached.families, cached.defaultID, nil
 	}
-	payload, err := s.fetchModelsPayload(ctx, acc)
+	v, err := s.catalogFlights.do("video:"+acc.ID, func() (any, error) { return s.fetchModelsPayload(ctx, acc) })
 	if err != nil {
 		return nil, "", err
 	}
-	families, defaultID, err := parseVideoFamilies(payload, accountTier(acc))
+	families, defaultID, err := parseVideoFamilies(v.(string), accountTier(acc))
 	if err != nil {
 		return nil, "", err
 	}
@@ -594,6 +603,9 @@ func (s *Provider) fetchModelsPayloadFromAccount(ctx context.Context, acc sessio
 	if s.accounts == nil {
 		return "", errors.New("dịch vụ tài khoản chưa được khởi tạo")
 	}
+	// The account's browser serves the call; hold it so it is not restarted
+	// (proxy change, idle close) while the catalogue is read.
+	defer s.accounts.AcquireProfile(acc.ProfileDir)()
 	payload, err := s.readModelsPayload(ctx, acc)
 	if !isUnauthorized(err) {
 		return payload, err
@@ -606,7 +618,7 @@ func (s *Provider) fetchModelsPayloadFromAccount(ctx context.Context, acc sessio
 }
 
 func (s *Provider) readModelsPayload(ctx context.Context, acc session.StoredAccount) (string, error) {
-	limits := s.cfg.Get().Accounts
+	limits := s.cfg.Get().FlowPagePolicy()
 	client, err := s.catalogueClient(ctx, acc)
 	if err != nil {
 		return "", err
@@ -626,7 +638,7 @@ func (s *Provider) readModelsPayload(ctx context.Context, acc session.StoredAcco
 
 // GetVideoModels returns the text-to-video families of the account whose turn is next.
 func (s *Provider) GetVideoModels(ctx context.Context) models.Response[[]FlowVideoModel] {
-	acc, err := s.pickAccount(false)
+	acc, err := s.catalogAccount()
 	if err != nil {
 		return models.ErrorResponse[[]FlowVideoModel]("Không thể lấy model video: "+err.Error(), models.CodeUnavailable)
 	}

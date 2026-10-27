@@ -12,65 +12,29 @@ import (
 	"strings"
 	"time"
 
+	"SnakeMedia/internal/accounts"
 	"SnakeMedia/internal/config"
 	"SnakeMedia/internal/logger"
-	"SnakeMedia/internal/media"
 )
 
-// RatioOption is one aspect ratio Muse understands, with the wording sent to it.
-type RatioOption struct {
-	Value string `json:"value"`
-	Label string `json:"label"`
+// kindRequest is how a message asks Muse's agent for each kind. Muse's media
+// tools take only a prompt and images (no ratio, duration or count
+// parameters), so everything else stays in the user's prompt, unchanged.
+var kindRequest = map[MuseJobKind]string{
+	MuseJobImage: "Tạo ảnh",
+	MuseJobVideo: "Tạo video",
 }
 
-// Ratios lists the aspect ratios offered for Muse jobs, in display order.
-var Ratios = []RatioOption{
-	{"9:16", "9:16 dọc"}, {"16:9", "16:9 ngang"}, {"1:1", "1:1 vuông"}, {"4:3", "4:3 ngang"}, {"3:4", "3:4 dọc"},
-}
+// kindMime is the result MIME prefix each kind collects.
+var kindMime = map[MuseJobKind]string{MuseJobImage: "image/", MuseJobVideo: "video/"}
 
-// imageTypes are the reference image formats Muse accepts.
-var imageTypes = map[string]string{".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+// kindName words a kind in messages to the user.
+var kindName = map[MuseJobKind]string{MuseJobImage: "ảnh", MuseJobVideo: "video"}
 
-// resultExtensions name downloaded files whose type Muse reports.
-var resultExtensions = map[string]string{"video/mp4": ".mp4", "image/webp": ".webp", "image/png": ".png", "image/jpeg": ".jpg"}
-
-const v2vAnalysisPrompt = "Analyze this video in detail: camera angle, character motion, timing, and ambient audio style."
-const v2vRemakePrefix = "Based on the camera movement, timing, and character actions from the video above, recreate the scene with the following specifications:"
-
-// buildMessage is the chat message sent for a job: what to make, the ratio,
-// then the user's prompt unchanged, followed by any reference manifest.
+// buildMessage is the chat message sent for a job: what to make, then the
+// user's prompt unchanged.
 func buildMessage(job MuseJob) string {
-	var head string
-	if job.Kind == MuseJobV2V {
-		head = "Generate photorealistic video"
-		for _, r := range Ratios {
-			if r.Value == job.Ratio {
-				head += " · aspect ratio " + r.Value
-			}
-		}
-		msg := head + "\n" + v2vRemakePrefix + "\n" + job.Prompt
-		if job.Manifest != "" {
-			msg += "\n\n" + job.Manifest
-		}
-		return msg
-	}
-	head = "Tạo video"
-	if job.Kind == MuseJobImage {
-		head = "Tạo ảnh"
-		if job.Count > 1 {
-			head += fmt.Sprintf(" · %d ảnh", job.Count)
-		}
-	}
-	for _, r := range Ratios {
-		if r.Value == job.Ratio {
-			head += " · tỷ lệ " + r.Label
-		}
-	}
-	msg := head + "\n" + job.Prompt
-	if job.Manifest != "" {
-		msg += "\n\n" + job.Manifest
-	}
-	return msg
+	return kindRequest[job.Kind] + "\n" + job.Prompt
 }
 
 // rejectedSend is Muse definitely refusing a send: nothing was started.
@@ -108,13 +72,17 @@ func (p *Provider) runOne(ctx context.Context, jobID, accountID string) {
 
 func (p *Provider) execute(ctx context.Context, jobID, accountID string) error {
 	job, ok := p.jobs.get(jobID)
-	if !ok {
+	if !ok || job.finished() {
 		return nil
 	}
-	acc, err := p.accounts.get(accountID)
+	acc, err := p.accounts.Record(accountID)
 	if err != nil {
 		return err
 	}
+	// The account's browser stays as it is (no sign-in window, no restart on
+	// a new proxy, no removal) while this job works in it.
+	release := p.accounts.Acquire(accountID)
+	defer release()
 	cfg := p.cfg.Get().Muse
 	if job.Status == MuseJobQueued {
 		started := false
@@ -125,6 +93,7 @@ func (p *Provider) execute(ctx context.Context, jobID, accountID string) error {
 			}
 			started = true
 			resetForQueue(j)
+			j.NextCheckAt = ""
 			j.Status, j.AccountID, j.Step = MuseJobProcessing, accountID, "Kiểm tra đăng nhập"
 			j.StartedAt = p.now().UTC().Format(time.RFC3339)
 			j.Attempts++
@@ -136,94 +105,55 @@ func (p *Provider) execute(ctx context.Context, jobID, accountID string) error {
 			return nil
 		}
 	}
+	if !job.Kind.valid() {
+		return &inputError{msg: fmt.Sprintf("Muse không còn hỗ trợ loại tác vụ %q.", job.Kind)}
+	}
+	// Until the send, a failure (browser, proxy, page not ready) costs nothing
+	// on Muse: it is marked notSent so it does not use up an attempt.
 	page, err := p.pageFor(ctx, acc)
 	if err != nil {
-		return err
+		return &notSentError{err: err}
 	}
-	if signedIn, err := p.waitSignedIn(ctx, page, time.Duration(cfg.PageReadySeconds)*time.Second); err != nil {
+	if err := p.waitSignedIn(ctx, page, time.Duration(p.cfg.Get().Accounts.PageReadySeconds)*time.Second); err != nil {
 		return err
-	} else if !signedIn {
-		return errNotSignedIn
 	}
 
-	if job.Kind == MuseJobV2V {
-		return p.executeV2V(ctx, job, acc, page, cfg)
-	}
-	resumed := job.SessionID != ""
-	if !resumed {
-		if job, err = p.sendNew(ctx, job, acc, page, cfg); err != nil {
+	if job.SessionID == "" {
+		atts, err := p.attachments(ctx, job, acc, page)
+		if err != nil {
+			var input *inputError
+			if !errors.As(err, &input) && ctx.Err() == nil {
+				err = &notSentError{err: err}
+			}
+			return err
+		}
+		if job, err = p.send(ctx, job, acc, page, cfg, buildMessage(job), atts); err != nil {
 			return err
 		}
 	}
-	if err := p.poll(ctx, job, page, cfg, resumed); err != nil {
+	if err := p.poll(ctx, job, page, cfg); err != nil {
 		return err
 	}
-	return p.collect(ctx, job, accountID, page, cfg)
+	return p.collect(ctx, job, accountID, page)
 }
 
-// executeV2V runs the two turns of a video-to-video job in one chat: Muse
-// analyses the source video, then remakes it from the prompt and images.
-func (p *Provider) executeV2V(ctx context.Context, job MuseJob, acc storedAccount, page Page, cfg config.MuseConfig) error {
-	resumed := job.SessionID != ""
-	if !resumed {
-		video, err := p.sourceAttachment(job, cfg)
-		if err != nil {
-			return err
-		}
-		job, err = p.send(ctx, job, acc, page, cfg, v2vAnalysisPrompt, []Attachment{video}, "", "Chặng 1: gửi video nguồn để Muse phân tích")
-		if err != nil {
-			return err
-		}
-	}
-	if job.V2VTurn < 2 {
-		if err := p.poll(ctx, job, page, cfg, resumed); err != nil {
-			return err
-		}
-		atts, err := p.attachments(job, cfg)
-		if err != nil {
-			return err
-		}
-		sent, err := p.send(ctx, job, acc, page, cfg, buildMessage(job), atts, job.SessionID, "Chặng 2: gửi ảnh và prompt để làm video mới")
-		if err != nil {
-			return err
-		}
-		job, resumed = sent, false
-	}
-	if err := p.poll(ctx, job, page, cfg, resumed); err != nil {
-		return err
-	}
-	return p.collect(ctx, job, acc.ID, page, cfg)
-}
-
-// sendNew sends a regular job: into its storyboard chat when it continues one
-// on this account, otherwise (or when that chat refuses) into a new chat.
-func (p *Provider) sendNew(ctx context.Context, job MuseJob, acc storedAccount, page Page, cfg config.MuseConfig) (MuseJob, error) {
-	atts, err := p.attachments(job, cfg)
+// send waits for the account's send slot and its send gap, then posts the
+// message in a new chat. Only a definite answer from Muse comes back
+// retryable; a lost answer is errSendUnknown.
+//
+// One send per account runs at a time, gap included: two jobs on one account
+// (ThreadsPerAccount > 1) would otherwise read the same last send time and
+// send together.
+func (p *Provider) send(ctx context.Context, job MuseJob, acc accounts.Record, page Page, cfg config.MuseConfig, text string, atts []Attachment) (MuseJob, error) {
+	release, err := p.sendSlot(ctx, acc.ID)
 	if err != nil {
 		return job, err
 	}
-	text := buildMessage(job)
-	if job.Thread != "" && (job.PinAccount == "" || job.PinAccount == acc.ID) {
-		sent, err := p.send(ctx, job, acc, page, cfg, text, atts, job.Thread, "Gửi lệnh vào chat storyboard")
-		var rejected *rejectedSend
-		if !errors.As(err, &rejected) {
-			return sent, err
-		}
-		p.updateJob(job.ID, func(j *MuseJob) {
-			j.ThreadError = "Không gửi được vào chat storyboard (" + rejected.reason + "), làm ở chat mới"
-		})
-	}
-	return p.send(ctx, job, acc, page, cfg, text, atts, "", "Gửi lệnh")
-}
-
-// send waits out the account's send gap, then posts one message. Only a
-// definite answer from Muse comes back retryable; a lost answer is
-// errSendUnknown. A message into a thread keeps that thread's session.
-func (p *Provider) send(ctx context.Context, job MuseJob, acc storedAccount, page Page, cfg config.MuseConfig, text string, atts []Attachment, thread, step string) (MuseJob, error) {
-	if fresh, err := p.accounts.get(acc.ID); err == nil {
+	defer release()
+	if fresh, err := p.accounts.Record(acc.ID); err == nil {
 		acc = fresh
 	}
-	if last, err := time.Parse(time.RFC3339Nano, acc.LastSentAt); err == nil {
+	if last, err := time.Parse(time.RFC3339Nano, museView(acc).LastSentAt); err == nil {
 		if wait := last.Add(p.gap(cfg)).Sub(p.now()); wait > 0 {
 			p.updateJob(job.ID, func(j *MuseJob) {
 				j.Step = fmt.Sprintf("Nghỉ ~%ds rồi mới gửi (tránh gửi dồn)", int(wait.Seconds()+0.5))
@@ -233,20 +163,7 @@ func (p *Provider) send(ctx context.Context, job MuseJob, acc storedAccount, pag
 			}
 		}
 	}
-	// A message into an existing chat lands after earlier replies and files;
-	// remember them so collect only takes what this message produces.
-	var base int
-	var seen []string
-	if thread != "" {
-		history, err := page.Result(ctx, thread)
-		if err != nil {
-			return job, err
-		}
-		base, seen = len(history), mediaPaths(history)
-	}
-	job, err := p.updateJob(job.ID, func(j *MuseJob) {
-		j.Sending, j.Step, j.HistoryBase, j.SeenPaths = true, step, base, seen
-	})
+	job, err = p.updateJob(job.ID, func(j *MuseJob) { j.Sending, j.Step = true, "Gửi lệnh" })
 	if err != nil {
 		return job, err
 	}
@@ -256,7 +173,7 @@ func (p *Provider) send(ctx context.Context, job MuseJob, acc storedAccount, pag
 	// stopping the app interrupts it (the job then fails as unknown on restart).
 	sendCtx, stopSend := p.sendContext(ctx)
 	defer stopSend()
-	res, err := page.Send(sendCtx, text, atts, thread)
+	res, err := page.Send(sendCtx, text, atts)
 	if err != nil {
 		if sendCtx.Err() != nil {
 			return job, sendCtx.Err()
@@ -264,8 +181,14 @@ func (p *Provider) send(ctx context.Context, job MuseJob, acc storedAccount, pag
 		logger.Get().Warn("muse send outcome unknown", "job", job.ID, "error", err)
 		return job, errSendUnknown
 	}
-	p.updateAccount(acc.ID, func(a *storedAccount) { a.LastSentAt = p.now().UTC().Format(time.RFC3339Nano) })
-	if !res.OK || res.SessionID == "" {
+	p.updateAccount(acc.ID, func(_ *accounts.Record, d *museData) { d.LastSentAt = p.now().UTC().Format(time.RFC3339Nano) })
+	if res.OK && res.SessionID == "" {
+		// Muse took the message but named no chat: it may be generating, and
+		// without its chat the job can neither be read back nor safely re-sent.
+		logger.Get().Warn("muse accepted a send without a session", "job", job.ID)
+		return job, errSendUnknown
+	}
+	if !res.OK {
 		p.updateJob(job.ID, func(j *MuseJob) { j.Sending = false })
 		// A refusal is often a used-up quota; read it so the account rests.
 		p.refreshQuota(sendCtx, acc.ID, page)
@@ -273,9 +196,7 @@ func (p *Provider) send(ctx context.Context, job MuseJob, acc storedAccount, pag
 	}
 	job, err = p.updateJob(job.ID, func(j *MuseJob) {
 		j.SessionID, j.Sending = res.SessionID, false
-		if j.Kind == MuseJobV2V {
-			j.V2VTurn++
-		}
+		j.SentAt = p.now().UTC().Format(time.RFC3339)
 		if j.Status == MuseJobProcessing {
 			j.Step = "Muse đang làm"
 		}
@@ -299,33 +220,57 @@ func (p *Provider) sendContext(ctx context.Context) (context.Context, func()) {
 	}
 }
 
-// mediaPaths lists every file path in a chat history.
-func mediaPaths(events []AssistantEvent) []string {
-	var paths []string
-	for _, e := range events {
-		for _, m := range append(append([]ResultMedia(nil), e.Videos...), e.Images...) {
-			if m.Path != "" {
-				paths = append(paths, m.Path)
-			}
-		}
-	}
-	return paths
+// sessionRunning is the session state Muse reports while it works.
+const sessionRunning = "running"
+
+// sessionEnded lists the session states that mean Muse stopped working on a
+// chat. Any other state, or a session not listed (yet), keeps the job waiting:
+// reading a chat too early would find no file and send the job again.
+// Only "idle" is confirmed from muse.ai; the others are the usual words for an
+// ended run. Every distinct state is logged once ("muse session status seen"),
+// so this table is corrected from the logs.
+var sessionEnded = map[string]bool{
+	"idle": true, "completed": true, "done": true, "finished": true,
+	"failed": true, "error": true, "cancelled": true, "canceled": true, "stopped": true,
 }
 
-// poll waits until the session stops running. A fresh session may take a few
-// seconds to be listed, so "not running" counts only after it was seen running
-// or after a grace period.
-func (p *Provider) poll(ctx context.Context, job MuseJob, page Page, cfg config.MuseConfig, resumed bool) error {
+// statusLog remembers which session states were logged.
+var statusLog = onceSet{seen: map[string]bool{}}
+
+// noteStatus logs a session state the first time it is seen, with how the
+// runner treats it, and reports whether it logged.
+func noteStatus(status string) bool {
+	if !statusLog.first(status) {
+		return false
+	}
+	treated := "unknown"
+	switch {
+	case status == sessionRunning:
+		treated = "running"
+	case sessionEnded[status]:
+		treated = "ended"
+	}
+	logger.Get().Info("muse session status seen", "status", status, "treated", treated)
+	return true
+}
+
+// poll waits until the session has ended. While its state is unknown (not
+// listed, or a state not in sessionEnded) the chat itself is read: files of the
+// job's kind mean it is done. The time limit counts from the send; at the limit
+// the chat is read once more before Muse is asked to stop.
+func (p *Provider) poll(ctx context.Context, job MuseJob, page Page, cfg config.MuseConfig) error {
 	limit := time.Duration(cfg.VideoTimeoutMinutes) * time.Minute
 	if job.Kind == MuseJobImage {
 		limit = time.Duration(cfg.ImageTimeoutMinutes) * time.Minute
 	}
-	started, err := time.Parse(time.RFC3339, job.StartedAt)
+	sent, err := time.Parse(time.RFC3339, job.SentAt)
 	if err != nil {
-		started = p.now()
+		if sent, err = time.Parse(time.RFC3339, job.StartedAt); err != nil {
+			sent = p.now()
+		}
 	}
-	sentAt := p.now()
-	seen := resumed
+	pollStart := p.now()
+	// A fresh session may take a few seconds to be listed.
 	const grace = 30 * time.Second
 	for errorsInRow := 0; ; {
 		if err := p.sleep(ctx, time.Duration(cfg.PollIntervalMS)*time.Millisecond); err != nil {
@@ -339,59 +284,75 @@ func (p *Provider) poll(ctx context.Context, job MuseJob, page Page, cfg config.
 			if errorsInRow++; errorsInRow >= cfg.PollErrorLimit {
 				return fmt.Errorf("Không đọc được trạng thái phiên Muse: %w", err)
 			}
-			status = "running"
+			status = sessionRunning
 		} else {
 			errorsInRow = 0
+			noteStatus(status)
 		}
-		if status == "running" {
-			seen = true
-		} else if seen || p.now().Sub(sentAt) > grace {
+		if sessionEnded[status] {
 			return nil
 		}
-		if p.now().Sub(started) > limit {
-			_ = page.Cancel(ctx, job.SessionID)
+		unknown := status != sessionRunning && p.now().Sub(pollStart) > grace
+		overdue := p.now().Sub(sent) > limit
+		if (unknown || overdue) && p.chatHasResult(ctx, job, page) {
+			return nil
+		}
+		if overdue {
+			if err := page.Cancel(ctx, job.SessionID); err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				// Muse may still be making the file: check the chat again
+				// later rather than send a second generation.
+				return fmt.Errorf("Quá %d phút Muse chưa làm xong và không dừng được phiên: %w", int(limit.Minutes()), err)
+			}
 			return &museError{msg: fmt.Sprintf("Quá %d phút Muse chưa làm xong.", int(limit.Minutes()))}
 		}
 	}
 }
 
-// collect reads the finished session and downloads its files.
-func (p *Provider) collect(ctx context.Context, job MuseJob, accountID string, page Page, cfg config.MuseConfig) error {
+// chatHasResult reports whether the chat already holds a file of the job's kind.
+func (p *Provider) chatHasResult(ctx context.Context, job MuseJob, page Page) bool {
+	events, err := page.Result(ctx, job.SessionID)
+	if err != nil {
+		return false
+	}
+	wanted, _ := wantedMedia(events, job.Kind)
+	return len(wanted) > 0
+}
+
+// wantedMedia picks the result files of kind from a chat, and reports whether
+// Muse listed files of that kind it could not hand over (missing).
+func wantedMedia(events []AssistantEvent, kind MuseJobKind) (wanted []ResultMedia, missing bool) {
+	for _, e := range events {
+		for _, m := range append(append([]ResultMedia(nil), e.Videos...), e.Images...) {
+			if m.Path == "" || !strings.HasPrefix(m.Mime, kindMime[kind]) {
+				continue
+			}
+			if m.Missing {
+				missing = true
+				continue
+			}
+			wanted = append(wanted, m)
+		}
+	}
+	return wanted, missing
+}
+
+// collect reads the finished chat and downloads every file of the job's kind.
+func (p *Provider) collect(ctx context.Context, job MuseJob, accountID string, page Page) error {
 	events, err := page.Result(ctx, job.SessionID)
 	if err != nil {
 		return err
 	}
-	what, prefix := "video", "video/"
-	if job.Kind == MuseJobImage {
-		what, prefix = "ảnh", "image/"
-	}
-	// Only replies after this job's message count. History may be capped, so
-	// files are also matched against what the chat already held.
-	replies := events
-	if job.HistoryBase > 0 && job.HistoryBase <= len(events) {
-		replies = events[job.HistoryBase:]
-	}
-	seen := make(map[string]bool, len(job.SeenPaths))
-	for _, path := range job.SeenPaths {
-		seen[path] = true
-	}
-	var wanted []ResultMedia
-	var texts []string
-	for _, e := range replies {
-		if e.Text != "" {
-			texts = append(texts, e.Text)
-		}
-		for _, m := range append(append([]ResultMedia(nil), e.Videos...), e.Images...) {
-			if !m.Missing && m.Path != "" && !seen[m.Path] && strings.HasPrefix(m.Mime, prefix) {
-				wanted = append(wanted, m)
-			}
-		}
-	}
-	if job.Kind == MuseJobImage && len(wanted) > max(job.Count, 1) {
-		wanted = wanted[:max(job.Count, 1)]
+	wanted, missing := wantedMedia(events, job.Kind)
+	if len(wanted) == 0 && missing {
+		// Muse made the file but cannot hand it over right now: read the chat
+		// again later instead of paying for a new one.
+		return fmt.Errorf("Muse đã tạo %s nhưng chưa lấy được file", kindName[job.Kind])
 	}
 	if len(wanted) == 0 {
-		err := classifyReply(strings.Join(texts, "\n"), what)
+		err := classifyEvents(events, kindName[job.Kind])
 		var usage *usageError
 		if errors.As(err, &usage) {
 			p.refreshQuota(ctx, accountID, page)
@@ -401,37 +362,43 @@ func (p *Provider) collect(ctx context.Context, job MuseJob, accountID string, p
 	p.updateJob(job.ID, func(j *MuseJob) { j.Step = "Tải file" })
 	files := make([]string, 0, len(wanted))
 	for k, m := range wanted {
-		url, err := p.download(ctx, page, m, fmt.Sprintf("muse-%s-%d", job.ID, k+1), cfg.MaxDownloadBytes)
+		url, err := p.download(ctx, page, m, fmt.Sprintf("muse-%s-%d", job.ID, k+1))
 		if err != nil {
 			return err
 		}
 		files = append(files, url)
 	}
-	if job.Kind == MuseJobV2V && job.KeepAudio {
-		p.updateJob(job.ID, func(j *MuseJob) { j.Step = "Ghép âm thanh gốc" })
-		for i, url := range files {
-			if replaced, err := p.keepSourceAudio(ctx, job, url, i); err != nil {
-				logger.Get().Warn("muse v2v audio not kept", "job", job.ID, "error", err)
-				p.updateJob(job.ID, func(j *MuseJob) { j.ThreadError = "Không ghép được âm thanh gốc: " + err.Error() })
-			} else {
-				files[i] = replaced
-			}
-		}
-	}
 	saved := p.saveOutputs(job, files)
-	p.updateJob(job.ID, func(j *MuseJob) {
+	succeeded := false
+	done, err := p.updateJob(job.ID, func(j *MuseJob) {
 		if j.Status != MuseJobProcessing {
 			return // cancelled meanwhile: keep the user's decision
 		}
 		j.Status, j.Files, j.Error, j.SavedFiles = MuseJobSucceeded, files, "", saved
 		j.Step = fmt.Sprintf("Đã tải %d file", len(files))
 		j.FinishedAt = p.now().UTC().Format(time.RFC3339)
+		succeeded = true
 	})
-	go p.refreshQuota(context.WithoutCancel(ctx), accountID, page)
+	if err == nil && succeeded {
+		p.addToLibrary(done)
+	}
+	// The quota is read in the background (tracked, so Close waits for it).
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		p.refreshQuota(p.lifetime(), accountID, page)
+	}()
 	return nil
 }
 
-func (p *Provider) download(ctx context.Context, page Page, m ResultMedia, id string, limit int64) (string, error) {
+// download stores one result file. Muse reports each file's size, which is
+// both the expected length and the limit. A file whose size Muse left out is
+// read whole (the page reads the file's own size) under the app's download cap.
+func (p *Provider) download(ctx context.Context, page Page, m ResultMedia, id string) (string, error) {
+	limit := m.ByteLen
+	if limit <= 0 {
+		limit = p.cfg.Get().Accounts.MaxDownloadBytes
+	}
 	reader, writer := io.Pipe()
 	defer reader.Close()
 	go func() {
@@ -441,66 +408,168 @@ func (p *Provider) download(ctx context.Context, page Page, m ResultMedia, id st
 		}
 		writer.CloseWithError(err)
 	}()
-	ext := resultExtensions[m.Mime]
-	if ext == "" {
-		ext = ".bin"
-	}
-	return p.media.PutReader(id, m.Mime, ext, reader, limit)
+	return p.media.PutReader(id, m.Mime, filepath.Ext(m.Path), reader, limit)
 }
 
-// attachments loads the job's reference images in order.
-func (p *Provider) attachments(job MuseJob, cfg config.MuseConfig) ([]Attachment, error) {
+// capabilitiesTTL is how long limits read from Muse are trusted before they
+// are read again; Muse may change them with a new build.
+const capabilitiesTTL = 24 * time.Hour
+
+// capabilities returns what the account may send: the stored limits while
+// they are recent, otherwise read from the page (fresh forces a read). A
+// failed read falls back to the stored limits. read reports a page read.
+func (p *Provider) capabilities(ctx context.Context, acc accounts.Record, page Page, fresh bool) (caps *MuseCapabilities, read bool, err error) {
+	var data museData
+	_ = accounts.DecodeData(acc, &data)
+	stored := data.Capabilities
+	if stored != nil && !fresh {
+		if checked, err := time.Parse(time.RFC3339, stored.CheckedAt); err == nil && p.now().Sub(checked) < capabilitiesTTL {
+			return stored, false, nil
+		}
+	}
+	caps, err = page.Capabilities(ctx)
+	if err != nil || caps == nil {
+		if stored != nil {
+			return stored, false, nil
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		return nil, false, &museError{msg: "Không đọc được giới hạn đính kèm của Muse trên tài khoản này."}
+	}
+	p.updateAccount(acc.ID, func(_ *accounts.Record, d *museData) { d.Capabilities = caps })
+	return caps, true, nil
+}
+
+// attachments loads the job's reference images in order, within the limits
+// Muse's composer has for this account. Limits read earlier that refuse the
+// job are read again once before the job fails, in case Muse changed them.
+func (p *Provider) attachments(ctx context.Context, job MuseJob, acc accounts.Record, page Page) ([]Attachment, error) {
+	if len(job.References) == 0 {
+		return nil, nil
+	}
+	caps, read, err := p.capabilities(ctx, acc, page, false)
+	if err != nil {
+		return nil, err
+	}
+	atts, err := p.attach(job, caps)
+	var input *inputError
+	if errors.As(err, &input) && !read {
+		if again, read, e := p.capabilities(ctx, acc, page, true); e == nil && read {
+			return p.attach(job, again)
+		}
+	}
+	return atts, err
+}
+
+// attach reads the job's reference images and checks them against caps.
+func (p *Provider) attach(job MuseJob, caps *MuseCapabilities) ([]Attachment, error) {
+	if len(job.References) > caps.MaxFiles {
+		return nil, &inputError{msg: fmt.Sprintf("Muse nhận tối đa %d file mỗi tin nhắn (tác vụ có %d ảnh).", caps.MaxFiles, len(job.References))}
+	}
 	atts := make([]Attachment, 0, len(job.References))
-	var total int64
 	for k, ref := range job.References {
 		path, err := p.media.Path(ref)
 		if err != nil {
 			return nil, &inputError{msg: err.Error()}
 		}
-		mime, ok := imageTypes[strings.ToLower(filepath.Ext(path))]
+		ext := strings.ToLower(filepath.Ext(path))
+		mime, ok := caps.imageMime(ext)
 		if !ok {
-			return nil, &inputError{msg: "Ảnh tham chiếu không đúng định dạng: " + filepath.Base(path)}
+			return nil, &inputError{msg: "Muse không nhận định dạng ảnh này: " + filepath.Base(path)}
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil, &inputError{msg: "Không đọc được ảnh tham chiếu (có thể đã bị xoá): " + filepath.Base(path)}
 		}
-		if total += int64(len(data)); total > cfg.MaxAttachmentBytes {
-			return nil, &inputError{msg: fmt.Sprintf("Ảnh gửi kèm vượt %d MB (giới hạn của Muse). Bớt ảnh hoặc dùng ảnh nhỏ hơn.", cfg.MaxAttachmentBytes>>20)}
+		if int64(len(data)) > caps.MaxFileBytes {
+			return nil, &inputError{msg: fmt.Sprintf("%s vượt %d MB, giới hạn một file của Muse.", filepath.Base(path), caps.MaxFileBytes>>20)}
 		}
-		ext := strings.TrimPrefix(filepath.Ext(path), ".")
-		atts = append(atts, Attachment{Filename: fmt.Sprintf("anh_%d.%s", k+1, ext), MimeType: mime, DataBase64: base64.StdEncoding.EncodeToString(data), Category: "image"})
+		atts = append(atts, Attachment{Filename: fmt.Sprintf("anh_%d%s", k+1, ext), MimeType: mime, DataBase64: base64.StdEncoding.EncodeToString(data), Category: "image"})
 	}
 	return atts, nil
 }
 
+// errPageNotReady means the account's tab answered but Muse's chat client
+// never showed up: the account is signed in (or cannot be told), so nothing
+// is marked signed out and the job waits for the page.
+var errPageNotReady = errors.New("Trang Muse của tài khoản chưa sẵn sàng (chưa có khung chat).")
+
 // waitSignedIn polls the page until it reports a signed-in Muse session. A
-// page still loading reports "not signed in" or fails, so it keeps polling.
-func (p *Provider) waitSignedIn(ctx context.Context, page Page, timeout time.Duration) (bool, error) {
+// page still loading reports "not signed in" or fails, so it keeps polling. A
+// signed-in tab on another route (no chat client) is sent home once. Only a
+// session Muse refuses (an HTTP answer other than 200) means signed out; a
+// page that never got ready is notSent, so the job waits without cost.
+func (p *Provider) waitSignedIn(ctx context.Context, page Page, timeout time.Duration) error {
 	deadline := p.now().Add(timeout)
+	wentHome := false
+	var last LoginState
+	var lastErr error
 	for {
 		state, err := page.Login(ctx)
 		if err == nil && state.LoggedIn {
-			return true, nil
+			return nil
 		}
 		if ctx.Err() != nil {
-			return false, ctx.Err()
+			return ctx.Err()
+		}
+		last, lastErr = state, err
+		if err == nil && state.HTTP == 200 && !state.Chat && !wentHome {
+			wentHome = true
+			if err := page.Home(ctx); err != nil && ctx.Err() != nil {
+				return ctx.Err()
+			}
 		}
 		if !p.now().Before(deadline) {
-			return false, nil
+			break
 		}
-		if err := p.sleep(ctx, 3*time.Second); err != nil {
-			return false, err
+		if err := p.sleep(ctx, time.Duration(p.cfg.Get().Accounts.PollIntervalMS)*time.Millisecond); err != nil {
+			return err
 		}
 	}
+	switch {
+	case lastErr != nil:
+		return &notSentError{err: fmt.Errorf("Không đọc được trang Muse của tài khoản: %w", lastErr)}
+	case last.HTTP != 200 && last.HTTP != 0:
+		return errNotSignedIn
+	}
+	return &notSentError{err: errPageNotReady}
+}
+
+// Policy for jobs Muse did not run.
+const (
+	// maxLimitReplies caps how often one job may be handed on after Muse
+	// answered "limit" or "verify": each answer cost a chat turn.
+	maxLimitReplies = 3
+	// notSentWait holds a job back after its account's page was not ready.
+	notSentWait = time.Minute
+	// recheckWait is the first pause before a sent job is read again after an
+	// error; it doubles per re-check up to recheckWaitMax.
+	recheckWait    = 15 * time.Second
+	recheckWaitMax = 5 * time.Minute
+)
+
+// recheckDelay is the pause before the n-th re-check (n from 1).
+func recheckDelay(n int) time.Duration {
+	d := recheckWait
+	for i := 1; i < n && d < recheckWaitMax; i++ {
+		d *= 2
+	}
+	return min(d, recheckWaitMax)
 }
 
 // recordFailure decides what happens to a job after err:
-//   - a sent job with a transport error keeps its chat and is checked again;
+//   - a failure before anything was sent waits a while without spending an
+//     attempt (a sent job keeps its chat and waits the same way);
+//   - a sent job with a transport error keeps its chat and is checked again,
+//     later each time;
 //   - Muse's own failure (no file, too slow) retries in a new chat;
 //   - a refused prompt, a bad input or an unknown send fails at once;
-//   - an account that is signed out or out of quota hands the job to another
-//     account without spending an attempt.
+//   - an account that is signed out, out of quota or asked to verify hands
+//     the job to another account without spending an attempt, a few times
+//     at most.
+//
+// Each decision is logged (job, account, class, action), never the prompt.
 func (p *Provider) recordFailure(jobID, accountID string, err error) {
 	job, ok := p.jobs.get(jobID)
 	if !ok || job.Status != MuseJobProcessing {
@@ -509,16 +578,32 @@ func (p *Provider) recordFailure(jobID, accountID string, err error) {
 	cfg := p.cfg.Get().Muse
 	now := p.now().UTC().Format(time.RFC3339)
 	accName := accountID
-	if acc, e := p.accounts.get(accountID); e == nil {
-		accName = acc.Name
+	if acc, e := p.accounts.Record(accountID); e == nil {
+		accName = acc.Label()
 	}
+	hadSession := job.SessionID != ""
+	log := func(class, action string, detail error) {
+		args := []any{"job", jobID, "account", accountID, "class", class, "hadSession", hadSession, "action", action}
+		if detail != nil {
+			args = append(args, "error", detail)
+		}
+		logger.Get().Warn("muse job failure", args...)
+	}
+	// Every change re-checks the status under the journal lock: a cancel that
+	// lands while the failure is classified wins.
 	failed := func(msg string) {
 		p.updateJob(jobID, func(j *MuseJob) {
+			if j.Status != MuseJobProcessing {
+				return
+			}
 			j.Status, j.Error, j.Step, j.Sending, j.FinishedAt = MuseJobFailed, msg, "", false, now
 		})
 	}
 	requeue := func(msg string, spend bool) {
 		p.updateJob(jobID, func(j *MuseJob) {
+			if j.Status != MuseJobProcessing {
+				return
+			}
 			resetForQueue(j)
 			j.Error = msg
 			if !spend && j.Attempts > 0 {
@@ -526,69 +611,163 @@ func (p *Provider) recordFailure(jobID, accountID string, err error) {
 			}
 		})
 	}
+	// handOn requeues a job Muse answered with a limit instead of making it,
+	// until that happened maxLimitReplies times.
+	handOn := func(class, msg string) {
+		n := 0
+		p.updateJob(jobID, func(j *MuseJob) {
+			if j.Status == MuseJobProcessing {
+				j.LimitReplies++
+			}
+			n = j.LimitReplies
+		})
+		if n >= maxLimitReplies {
+			log(class, "failed: too many limit replies", nil)
+			failed(fmt.Sprintf("Muse trả lời hết lượt hoặc cần xác minh %d lần cho tác vụ này (mỗi lần tốn một lượt chat). Kiểm tra hạn mức các tài khoản ở Trang chủ → Tài khoản rồi bấm Chạy lại.", n))
+			return
+		}
+		log(class, "requeued to another account", nil)
+		requeue(msg, false)
+	}
+	wait := func(d time.Duration) string {
+		until := p.now().Add(d)
+		p.holdUntil(jobID, until)
+		return until.Local().Format("15:04:05")
+	}
 	var (
 		policy   *policyError
 		usage    *usageError
+		verify   *verifyError
+		rejected *rejectedSend
+		input    *inputError
+		muse     *museError
+		notSent  *notSentError
+	)
+	switch {
+	case errors.Is(err, errNotSignedIn):
+		p.updateAccount(accountID, func(r *accounts.Record, _ *museData) {
+			r.Status, r.Message = accounts.StatusSignedOut, "Phiên Muse đã đăng xuất; hãy mở Chrome để đăng nhập lại."
+		})
+		if hadSession {
+			log("signed out", "waits for sign-in", nil)
+			p.updateJob(jobID, func(j *MuseJob) {
+				if j.Status == MuseJobProcessing {
+					j.Step, j.Error = fmt.Sprintf("Chờ tài khoản %s đăng nhập lại để kiểm tra kết quả", accName), err.Error()
+				}
+			})
+			return
+		}
+		log("signed out", "requeued to another account", nil)
+		requeue(fmt.Sprintf("%s chưa đăng nhập Muse", accName), false)
+	case errors.As(err, &notSent):
+		at := wait(notSentWait)
+		if hadSession {
+			log("page not ready", "re-check later", err)
+			p.updateJob(jobID, func(j *MuseJob) {
+				if j.Status == MuseJobProcessing {
+					j.Step, j.Error = "Kiểm tra lại lúc "+at, err.Error()
+				}
+			})
+			return
+		}
+		log("page not ready", "requeued without an attempt", err)
+		requeue(fmt.Sprintf("%s: %v Thử lại lúc %s.", accName, err, at), false)
+	case errors.As(err, &policy), errors.As(err, &input), errors.Is(err, errSendUnknown):
+		log(failureClass(err), "failed", nil)
+		failed(err.Error())
+	case errors.As(err, &verify):
+		p.updateAccount(accountID, func(r *accounts.Record, _ *museData) {
+			r.Status, r.Message = accounts.StatusError, "Muse yêu cầu xác minh tài khoản; mở Chrome của tài khoản để xác minh rồi bấm Kiểm tra."
+		})
+		handOn("verify", fmt.Sprintf("%s cần xác minh trên Muse, chờ tài khoản khác", accName))
+	case errors.As(err, &usage):
+		p.restAccount(accountID, cfg)
+		handOn("usage", fmt.Sprintf("%s hết lượt Muse, chờ tài khoản khác", accName))
+	case errors.As(err, &rejected) && p.accountPaused(accountID, cfg):
+		handOn("usage", fmt.Sprintf("%s hết lượt Muse, chờ tài khoản khác", accName))
+	case hadSession && !errors.As(err, &muse):
+		// Muse already accepted this job: read it back again rather than fail
+		// it, because the obvious next step (Retry) would pay a second time.
+		if job.Rechecks+1 >= cfg.MaxRechecks {
+			log("read error", "failed after re-checks", err)
+			failed(fmt.Sprintf("Muse đã nhận lệnh nhưng app không đọc được kết quả sau %d lần (%v). Mở chat trên Muse để lấy kết quả trước khi chạy lại, vì chạy lại sẽ tốn thêm 1 lượt.", cfg.MaxRechecks, err))
+			return
+		}
+		at := wait(recheckDelay(job.Rechecks + 1))
+		log("read error", "re-check later", err)
+		p.updateJob(jobID, func(j *MuseJob) {
+			if j.Status != MuseJobProcessing {
+				return
+			}
+			j.Rechecks++
+			j.Step = "Kiểm tra lại lúc " + at
+			j.Error = fmt.Sprintf("Lỗi lần %d, đang kiểm tra lại phiên: %v", j.Rechecks, err)
+		})
+	case job.Attempts >= cfg.MaxAttempts:
+		log(failureClass(err), "failed after attempts", nil)
+		failed(err.Error())
+	default:
+		log(failureClass(err), "retry in a new chat", nil)
+		requeue(fmt.Sprintf("Lỗi lần %d, đang thử lại: %v", job.Attempts, err), true)
+	}
+}
+
+// failureClass names an error for the log without Muse's reply (which may
+// repeat the prompt).
+func failureClass(err error) string {
+	var (
+		policy   *policyError
 		rejected *rejectedSend
 		input    *inputError
 		muse     *museError
 	)
 	switch {
-	case errors.Is(err, errNotSignedIn):
-		p.updateAccount(accountID, func(a *storedAccount) {
-			a.Status, a.Message = MuseAccountSignedOut, "Phiên Muse đã đăng xuất; hãy mở Chrome để đăng nhập lại."
-		})
-		if job.SessionID != "" {
-			p.updateJob(jobID, func(j *MuseJob) {
-				j.Step, j.Error = "Chờ tài khoản đăng nhập lại để kiểm tra kết quả", err.Error()
-			})
-			return
-		}
-		requeue(fmt.Sprintf("%s chưa đăng nhập Muse", accName), false)
-	case errors.As(err, &policy), errors.As(err, &input), errors.Is(err, errSendUnknown):
-		failed(err.Error())
-	case errors.As(err, &usage):
-		p.restAccount(accountID, cfg)
-		requeue(fmt.Sprintf("%s hết lượt Muse, chờ tài khoản khác", accName), false)
-	case errors.As(err, &rejected) && p.accountPaused(accountID, cfg):
-		requeue(fmt.Sprintf("%s hết lượt Muse, chờ tài khoản khác", accName), false)
-	case job.SessionID != "" && !errors.As(err, &muse):
-		// Muse already accepted this job: read it back again rather than fail
-		// it, because the obvious next step (Retry) would pay a second time.
-		if job.Rechecks+1 >= cfg.MaxRechecks {
-			failed(fmt.Sprintf("Muse đã nhận lệnh nhưng app không đọc được kết quả sau %d lần (%v). Mở chat trên Muse để lấy kết quả trước khi chạy lại, vì chạy lại sẽ tốn thêm 1 lượt.", cfg.MaxRechecks, err))
-			return
-		}
-		p.updateJob(jobID, func(j *MuseJob) {
-			j.Rechecks++
-			j.Error = fmt.Sprintf("Lỗi lần %d, đang kiểm tra lại phiên: %v", j.Rechecks, err)
-		})
-	case job.Attempts >= cfg.MaxAttempts:
-		failed(err.Error())
-	default:
-		requeue(fmt.Sprintf("Lỗi lần %d, đang thử lại: %v", job.Attempts, err), true)
+	case errors.As(err, &policy):
+		return "policy"
+	case errors.As(err, &input):
+		return "input"
+	case errors.Is(err, errSendUnknown):
+		return "send unknown"
+	case errors.As(err, &rejected):
+		return "rejected"
+	case errors.As(err, &muse):
+		return "no result"
 	}
+	return "error"
 }
 
-// restAccount pauses an account Muse said is out of usage, until its quota
-// resets when known, otherwise for UsagePauseMinutes.
+// Why an account rests, kept so a later account check only ends the rest it
+// can judge: a rest for the weekly quota ends once the quota has room again,
+// a rest for any other limit Muse named runs its time.
+const (
+	restQuota = "quota"
+	restLimit = "limit"
+)
+
+// restAccount pauses an account Muse said is out of usage: until its weekly
+// usage resets when that is what ran out, otherwise for UsagePauseMinutes.
 func (p *Provider) restAccount(accountID string, cfg config.MuseConfig) {
 	until := p.now().Add(time.Duration(cfg.UsagePauseMinutes) * time.Minute)
-	if acc, err := p.accounts.get(accountID); err == nil {
-		if reset := acc.Quota.resetsAt(); reset.After(p.now()) {
-			until = reset
+	reason := restLimit
+	if acc, err := p.accounts.Record(accountID); err == nil {
+		if q := museView(acc).Quota; q.weeklyOut() {
+			reason = restQuota
+			if reset := q.resetsAt(); reset.After(p.now()) {
+				until = reset
+			}
 		}
 	}
-	p.updateAccount(accountID, func(a *storedAccount) {
+	p.updateAccount(accountID, func(a *accounts.Record, d *museData) {
 		a.PausedUntil = until.UTC().Format(time.RFC3339)
 		a.Message = "Muse báo hết lượt; tạm nghỉ tới " + until.Local().Format("15:04 02/01")
+		d.RestReason = reason
 	})
 }
 
 // accountPaused refreshes nothing: it reads the stored quota and pause.
 func (p *Provider) accountPaused(accountID string, cfg config.MuseConfig) bool {
-	acc, err := p.accounts.get(accountID)
-	return err == nil && !pausedUntil(acc.MuseAccount, cfg, p.now()).IsZero()
+	acc, err := p.accounts.Record(accountID)
+	return err == nil && !pausedUntil(museView(acc), cfg, p.now()).IsZero()
 }
 
 // refreshQuota reads the account's quota from its page and stores it.
@@ -599,121 +778,26 @@ func (p *Provider) refreshQuota(ctx context.Context, accountID string, page Page
 	if err != nil || q == nil {
 		return
 	}
-	p.updateAccount(accountID, func(a *storedAccount) { a.Quota = q })
+	p.updateAccount(accountID, func(_ *accounts.Record, d *museData) { d.Quota = q })
 }
 
-// sourceAttachment loads the job's source video as an attachment for V2V analysis.
-func (p *Provider) sourceAttachment(job MuseJob, cfg config.MuseConfig) (Attachment, error) {
-	if job.SourceVideo == "" {
-		return Attachment{}, &inputError{msg: "Chưa chọn video nguồn cho tác vụ V2V"}
+// outputDir is where finished files are copied: the configured folder, or
+// the app's default.
+func (p *Provider) outputDir() string {
+	if dir := p.cfg.Get().Muse.OutputDir; dir != "" {
+		return dir
 	}
-	path, err := p.media.Path(job.SourceVideo)
-	if err != nil {
-		return Attachment{}, &inputError{msg: err.Error()}
-	}
-	ext := strings.ToLower(filepath.Ext(path))
-	mime, ok := media.VideoTypes[ext]
-	if !ok {
-		return Attachment{}, &inputError{msg: "Video nguồn không đúng định dạng: " + filepath.Base(path)}
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return Attachment{}, &inputError{msg: "Không đọc được video nguồn (có thể đã bị xoá): " + filepath.Base(path)}
-	}
-	if cfg.MaxSourceVideoBytes > 0 && int64(len(data)) > cfg.MaxSourceVideoBytes {
-		return Attachment{}, &inputError{msg: fmt.Sprintf("Video gửi kèm vượt %d MB (giới hạn của Muse). Chọn video nhỏ hơn.", cfg.MaxSourceVideoBytes>>20)}
-	}
-	return Attachment{
-		Filename:   filepath.Base(path),
-		MimeType:   mime,
-		DataBase64: base64.StdEncoding.EncodeToString(data),
-		Category:   "video",
-	}, nil
+	return p.defaultOutputDir
 }
 
-// keepSourceAudio extracts the audio from job.SourceVideo and replaces the audio
-// track of the generated video at url, saving the result as a new media file.
-func (p *Provider) keepSourceAudio(ctx context.Context, job MuseJob, url string, i int) (string, error) {
-	if job.SourceVideo == "" {
-		return url, errors.New("không có video nguồn để lấy âm thanh")
-	}
-	srcPath, err := p.media.Path(job.SourceVideo)
-	if err != nil {
-		return url, fmt.Errorf("không tìm thấy file video nguồn: %w", err)
-	}
-	videoPath, err := p.media.Path(url)
-	if err != nil {
-		return url, fmt.Errorf("không tìm thấy file video đã tạo: %w", err)
-	}
-
-	cfg := p.cfg.Get().Muse
-	ffmpegExe, err := findFFmpeg(cfg.FFmpegPath)
-	if err != nil {
-		return url, err
-	}
-
-	tmpOut, err := os.CreateTemp("", "muse-v2v-mux-*.mp4")
-	if err != nil {
-		return url, err
-	}
-	tmpOutPath := tmpOut.Name()
-	_ = tmpOut.Close()
-	defer os.Remove(tmpOutPath)
-
-	muxFn := p.muxAudio
-	if muxFn == nil {
-		muxFn = defaultMuxAudio
-	}
-	if err := muxFn(ctx, ffmpegExe, videoPath, srcPath, tmpOutPath); err != nil {
-		return url, err
-	}
-
-	data, err := os.ReadFile(tmpOutPath)
-	if err != nil {
-		return url, fmt.Errorf("đọc video sau khi ghép âm thanh lỗi: %w", err)
-	}
-	return p.media.Put(fmt.Sprintf("muse-v2v-%s-%d", job.ID, i+1), "video/mp4", ".mp4", data)
-}
-
-func defaultMuxAudio(ctx context.Context, ffmpegExe, videoPath, sourcePath, outPath string) error {
-	tmpAudio, err := os.CreateTemp("", "muse-v2v-aud-*.aac")
-	if err != nil {
-		return err
-	}
-	tmpAudioPath := tmpAudio.Name()
-	_ = tmpAudio.Close()
-	defer os.Remove(tmpAudioPath)
-
-	if err := extractAudio(ctx, ffmpegExe, sourcePath, tmpAudioPath); err != nil {
-		return fmt.Errorf("trích âm thanh gốc lỗi: %w", err)
-	}
-	if err := replaceAudio(ctx, ffmpegExe, videoPath, tmpAudioPath, outPath); err != nil {
-		return fmt.Errorf("ghép âm thanh gốc lỗi: %w", err)
-	}
-	return nil
-}
-
-// saveOutputs copies successful output files to OutputDir if AutoSave is enabled.
+// saveOutputs copies finished files into a dated folder under outputDir when
+// AutoSave is on. A job cancelled meanwhile keeps the user's decision: its
+// files stay in the media folder and are not copied out.
 func (p *Provider) saveOutputs(job MuseJob, files []string) []string {
-	cfg := p.cfg.Get().Muse
-	if !cfg.AutoSave || len(files) == 0 {
+	if !p.cfg.Get().Muse.AutoSave || len(files) == 0 {
 		return nil
 	}
-	outDir := cfg.OutputDir
-	if outDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			logger.Get().Warn("muse autosave: cannot find home directory", "error", err)
-			return nil
-		}
-		outDir = filepath.Join(home, "Videos", "SnakeMedia Muse")
-	}
-	dateDir := filepath.Join(outDir, p.now().Format("2006-01-02"))
-	if err := os.MkdirAll(dateDir, 0o755); err != nil {
-		logger.Get().Warn("muse autosave: mkdir failed", "dir", dateDir, "error", err)
-		return nil
-	}
-
+	dateDir := filepath.Join(p.outputDir(), p.now().Format("2006-01-02"))
 	name := job.Label
 	if name == "" {
 		name = job.Prompt
@@ -722,40 +806,27 @@ func (p *Provider) saveOutputs(job MuseJob, files []string) []string {
 
 	var saved []string
 	for k, fileURL := range files {
-		srcPath, err := p.media.Path(fileURL)
+		if current, ok := p.jobs.get(job.ID); !ok || current.Status != MuseJobProcessing {
+			return saved
+		}
+		path, err := p.media.SaveTo(fileURL, dateDir, fmt.Sprintf("%s-%d", slug, k+1))
 		if err != nil {
-			logger.Get().Warn("muse autosave: media path failed", "url", fileURL, "error", err)
+			logger.Get().Warn("muse autosave failed", "job", job.ID, "dir", dateDir, "error", err)
 			continue
 		}
-		ext := filepath.Ext(srcPath)
-		baseName := fmt.Sprintf("%s-%d", slug, k+1)
-		destPath := filepath.Join(dateDir, baseName+ext)
-		for suffix := 2; fileExists(destPath); suffix++ {
-			destPath = filepath.Join(dateDir, fmt.Sprintf("%s-%d%s", baseName, suffix, ext))
-		}
-
-		data, err := os.ReadFile(srcPath)
-		if err != nil {
-			logger.Get().Warn("muse autosave: read src failed", "path", srcPath, "error", err)
-			continue
-		}
-		if err := os.WriteFile(destPath, data, 0o644); err != nil {
-			logger.Get().Warn("muse autosave: write dest failed", "path", destPath, "error", err)
-			continue
-		}
-		saved = append(saved, destPath)
+		saved = append(saved, path)
 	}
 	return saved
 }
 
+// sanitizeSlug turns the first line of s into a short file name.
 func sanitizeSlug(s string) string {
 	if idx := strings.IndexAny(s, "\r\n"); idx != -1 {
 		s = s[:idx]
 	}
-	s = strings.TrimSpace(s)
 	var b strings.Builder
-	for _, r := range s {
-		if r == '/' || r == '\\' || r == ':' || r == '*' || r == '?' || r == '"' || r == '<' || r == '>' || r == '|' || r < 32 {
+	for _, r := range strings.TrimSpace(s) {
+		if strings.ContainsRune(`/\:*?"<>|`, r) || r < 32 {
 			b.WriteRune('-')
 		} else {
 			b.WriteRune(r)
@@ -766,17 +837,11 @@ func sanitizeSlug(s string) string {
 		clean = strings.ReplaceAll(clean, "--", "-")
 	}
 	clean = strings.Trim(clean, "- .")
-	if len(clean) > 60 {
-		clean = strings.TrimSpace(clean[:60])
-		clean = strings.Trim(clean, "- .")
+	if r := []rune(clean); len(r) > 60 {
+		clean = strings.Trim(string(r[:60]), "- .")
 	}
 	if clean == "" {
 		return "muse"
 	}
 	return clean
-}
-
-func fileExists(p string) bool {
-	_, err := os.Stat(p)
-	return err == nil
 }

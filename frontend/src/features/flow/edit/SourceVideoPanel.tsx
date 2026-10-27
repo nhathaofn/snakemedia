@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlertCircle, FileVideo, RefreshCw } from 'lucide-react';
-import { Spinner } from '../../../components/ui';
+import { Icon, Spinner } from '../../../components/ui';
 import { api } from '../../../services/api';
 import { useAppStore } from '../../../stores';
 import { formatBytes } from '../../../utils';
@@ -90,7 +90,7 @@ export function SourceVideoPanel() {
           onClick={() => void pick()}
           disabled={generating}
         >
-          <FileVideo size={28} className="reference-dropzone-icon" />
+          <Icon icon={FileVideo} size="xl" className="reference-dropzone-icon" />
           <span className="reference-dropzone-text">
             Chọn video
             {config?.videoExtensions.length ? ` ${config.videoExtensions.join(', ')}` : ''}
@@ -115,7 +115,7 @@ export function SourceVideoPanel() {
           onClick={() => void pick()}
           disabled={generating}
         >
-          <RefreshCw size={12} />
+          <Icon icon={RefreshCw} size="sm" />
           Đổi video
         </button>
       </div>
@@ -128,7 +128,7 @@ export function SourceVideoPanel() {
         )}
         {visibleError && (
           <div className="flow-edit-preview-overlay flow-edit-preview-error">
-            <AlertCircle size={24} />
+            <Icon icon={AlertCircle} size="xl" />
             <span>{visibleError}</span>
           </div>
         )}

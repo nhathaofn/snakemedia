@@ -1,7 +1,7 @@
 import './Icon.css';
 import type { IconComponent } from '../../../types';
 
-export type IconSize = 'sm' | 'md' | 'lg';
+export type IconSize = 'sm' | 'md' | 'lg' | 'xl' | 'display';
 
 export interface IconProps {
   icon: IconComponent;

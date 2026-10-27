@@ -1,4 +1,5 @@
 import { AlertCircle, ChevronDown, RefreshCw } from 'lucide-react';
+import { Icon } from '../../../components/ui';
 
 export interface SelectOption<T extends string | number> {
   value: T;
@@ -40,12 +41,12 @@ export function SelectField<T extends string | number>({
           <select id={id} className="flow-select" disabled>
             <option>Đang tải...</option>
           </select>
-          <RefreshCw size={14} className="flow-select-arrow spin" />
+          <Icon icon={RefreshCw} size="sm" className="flow-select-arrow spin" />
         </div>
       ) : error ? (
         <div className="flow-error-banner" role="alert">
           <div className="flow-error-banner-title">
-            <AlertCircle size={14} />
+            <Icon icon={AlertCircle} size="sm" />
             <strong>{error.title}</strong>
           </div>
           <span>{error.message}</span>
@@ -55,7 +56,7 @@ export function SelectField<T extends string | number>({
           <select id={id} className="flow-select" disabled>
             <option>{emptyLabel}</option>
           </select>
-          <ChevronDown size={14} className="flow-select-arrow" />
+          <Icon icon={ChevronDown} size="sm" className="flow-select-arrow" />
         </div>
       ) : (
         <div className="flow-select-wrapper">
@@ -74,7 +75,7 @@ export function SelectField<T extends string | number>({
               </option>
             ))}
           </select>
-          <ChevronDown size={14} className="flow-select-arrow" />
+          <Icon icon={ChevronDown} size="sm" className="flow-select-arrow" />
         </div>
       )}
     </div>

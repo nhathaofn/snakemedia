@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"SnakeMedia/internal/browser"
 	"SnakeMedia/internal/config"
 	"SnakeMedia/internal/media"
 	"SnakeMedia/internal/providers/flow/session"
@@ -8,10 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"SnakeMedia/internal/logger"
@@ -24,7 +25,8 @@ import (
 type Accounts interface {
 	GetConnectedStoredAccounts() ([]session.StoredAccount, error)
 	AcquireProfile(profileDir string) (release func())
-	EnsureAccountHeadlessBrowser(ctx context.Context, acc session.StoredAccount) (*chrome.Browser, error)
+	EnsureAccountHeadlessBrowser(ctx context.Context, acc session.StoredAccount) (*browser.Browser, error)
+	ProxyURL(ctx context.Context, acc session.StoredAccount) (*url.URL, error)
 	SyncSession(ctx context.Context, acc session.StoredAccount) (session.StoredAccount, error)
 	UpdateCredentials(id string, c chrome.Credentials) error
 	UpdateBalance(id string, balance chrome.FlowCredits, c chrome.Credentials) error
@@ -34,16 +36,21 @@ type Accounts interface {
 // credential upkeep and the image/video capabilities (image.go, video.go) that
 // engine nodes expose.
 type Provider struct {
-	accounts            Accounts
-	cfg                 *config.Manager
-	media               *media.Store
-	rrIndex             uint64
-	jobLocks            sync.Map
+	accounts Accounts
+	cfg      *config.Manager
+	media    *media.Store
+	// jobLocks holds the request IDs a call is working on (tryJobLock).
+	jobLocksMu sync.Mutex
+	jobLocks   map[string]struct{}
+	journals   journalCache
+	// queue runs the image batch queue (Ảnh → All); see image_queue.go.
+	queue               *imageQueue
 	balanceRefreshLocks sync.Map
 	projectResolveLocks sync.Map // account ID -> serialises resolveProject
+	pageLocks           sync.Map // browser port -> *sync.RWMutex (pageLock)
 	// undiscoverableBuilds remembers Flow builds whose project page lacked
 	// the BatchGenerateImages descriptor.
-	undiscoverableBuilds map[string]bool
+	undiscoverableBuilds map[string]time.Time
 	mu                   sync.Mutex
 	rotationMu           sync.Mutex
 	rotationAccounts     map[string]*rotationAccountState
@@ -53,6 +60,7 @@ type Provider struct {
 	// Both caches are keyed by account ID: catalogue defaults depend on the
 	// account tier, and projects belong to one account.
 	models               map[string]modelCache
+	catalogFlights       flightGroup
 	projects             map[string]string
 	dailyImageProjects   map[dailyImageProjectKey]string
 	generatedImageCounts map[string]int
@@ -90,6 +98,7 @@ func New(accounts Accounts, cfg *config.Manager, store *media.Store, productName
 		imageProjectLocks:    make(map[dailyImageProjectKey]*sync.Mutex),
 		videoModels:          make(map[string]videoModelCache),
 	}
+	s.queue = newImageQueue(s)
 	s.fetchLiveModels = s.queryModelsFromAccount
 	s.generateLiveImages = s.generateImagesFromAccount
 	s.fetchModelsPayload = s.fetchModelsPayloadFromAccount
@@ -119,37 +128,11 @@ func (s *Provider) readyAccount(ctx context.Context) (*session.StoredAccount, fu
 }
 
 func (s *Provider) readyAccountFrom(ctx context.Context, valid []session.StoredAccount) (*session.StoredAccount, func(), error) {
-	if len(valid) == 0 {
-		_, err := s.NextAccount()
+	_, synced, _, release, err := readyCandidate(ctx, s, valid, sameAccount, s.leastBusy)
+	if err != nil {
 		return nil, nil, err
 	}
-	var skipped []string
-	for len(valid) > 0 {
-		acc, lease, err := s.acquireLeastBusy(ctx, valid)
-		if err != nil {
-			return nil, nil, err
-		}
-		releaseProfile := s.accounts.AcquireProfile(acc.ProfileDir)
-		synced, err := s.syncSession(ctx, acc)
-		if err == nil {
-			return &synced, func() {
-				releaseProfile()
-				lease.release()
-			}, nil
-		}
-		releaseProfile()
-		lease.release()
-		if !errors.Is(err, session.ErrSessionSignedOut) {
-			return nil, nil, fmt.Errorf("không đồng bộ được phiên Flow của %s: %w", acc.Email, err)
-		}
-		skipped = append(skipped, acc.Email)
-		valid = removeAccount(valid, acc.ID)
-	}
-	if len(skipped) > 0 {
-		return nil, nil, fmt.Errorf("các tài khoản đã đăng xuất khỏi Google (%s); hãy đăng nhập lại ở mục Tài khoản", strings.Join(skipped, ", "))
-	}
-	_, err := s.NextAccount() // reports that no account is usable
-	return nil, nil, err
+	return &synced, release, nil
 }
 
 func removeAccount(accounts []session.StoredAccount, id string) []session.StoredAccount {
@@ -212,27 +195,17 @@ func (s *Provider) GetValidConnectedAccounts() ([]session.StoredAccount, error) 
 	return valid, nil
 }
 
-// NextAccount returns the next valid connected account using atomic round-robin rotation.
-func (s *Provider) NextAccount() (*session.StoredAccount, error) {
-	return s.pickAccount(true)
-}
-
-// pickAccount selects from the rotation; only generation advances it, so reading
-// metadata never skips an account's turn.
-func (s *Provider) pickAccount(advance bool) (*session.StoredAccount, error) {
+// catalogAccount picks the account whose model lists the screens show: the
+// first valid one. Reading metadata never reserves or rotates accounts.
+func (s *Provider) catalogAccount() (*session.StoredAccount, error) {
 	valid, err := s.GetValidConnectedAccounts()
 	if err != nil {
 		return nil, err
 	}
 	if len(valid) == 0 {
-		return nil, errors.New("không có tài khoản Google Flow nào có cookie hợp lệ. Vui lòng đăng nhập hoặc làm mới tài khoản.")
+		return nil, errNoFlowAccount
 	}
-	idx := atomic.LoadUint64(&s.rrIndex)
-	if advance {
-		idx = atomic.AddUint64(&s.rrIndex, 1) - 1
-	}
-	selected := valid[idx%uint64(len(valid))]
-	return &selected, nil
+	return &valid[0], nil
 }
 
 // GetActiveRotationCount returns the number of valid accounts currently active in rotation.
@@ -258,8 +231,9 @@ func accountTier(acc session.StoredAccount) int {
 	return -1
 }
 
-// StudioConfig holds the fixed choices and limits of both studios, so the
-// frontend renders them instead of keeping its own copies.
+// StudioConfig holds the studio choices and limits that GetModels does not
+// carry (see limits.go), so the frontend renders them instead of keeping its
+// own copies. Per-model choices come with the model lists.
 type StudioConfig struct {
 	VideoExtensions    []string `json:"videoExtensions"`
 	ImageAspectRatios  []string `json:"imageAspectRatios"`
@@ -274,13 +248,13 @@ type StudioConfig struct {
 // GetStudioConfig returns the studio choices and limits enforced by the backend.
 func (s *Provider) GetStudioConfig(_ context.Context) models.Response[StudioConfig] {
 	return models.SuccessResponse(StudioConfig{
-		VideoExtensions:    media.SupportedVideoExtensions(),
-		ImageAspectRatios:  ImageAspectRatios,
-		DefaultImageRatio:  DefaultImageAspectRatio,
-		DefaultBatchRatio:  DefaultBatchImageAspectRatio,
-		MaxImages:          MaxImagesPerRequest,
-		MaxVideos:          MaxVideosPerRequest,
-		MaxReferenceBytes:  MaxReferenceImageBytes,
-		ReferenceMimeTypes: ReferenceMimeTypes,
+		VideoExtensions:    s.SourceVideoExtensions(),
+		ImageAspectRatios:  imageAspectRatios(),
+		DefaultImageRatio:  defaultImageRatio(),
+		DefaultBatchRatio:  defaultBatchRatio(),
+		MaxImages:          maxImagesPerRequest(),
+		MaxVideos:          maxVideosPerRequest(),
+		MaxReferenceBytes:  maxReferenceImageBytes(),
+		ReferenceMimeTypes: referenceMimeTypes(),
 	})
 }

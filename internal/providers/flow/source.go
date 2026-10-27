@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -119,27 +120,15 @@ func (s *Provider) readyOwnedAccount(ctx context.Context, id string) (*session.S
 	if err != nil {
 		return nil, nil, err
 	}
-	for _, acc := range accounts {
-		if acc.ID != id {
-			continue
-		}
-		lease, err := s.acquireSpecificAccount(ctx, acc)
-		if err != nil {
-			return nil, nil, err
-		}
-		releaseProfile := s.accounts.AcquireProfile(acc.ProfileDir)
-		fresh, err := s.syncSession(ctx, acc)
-		if err != nil {
-			releaseProfile()
-			lease.release()
-			return nil, nil, err
-		}
-		return &fresh, func() {
-			releaseProfile()
-			lease.release()
-		}, nil
+	idx := slices.IndexFunc(accounts, func(acc session.StoredAccount) bool { return acc.ID == id })
+	if idx < 0 {
+		return nil, nil, errors.New("Tài khoản sở hữu nguồn/job không còn kết nối. Hãy kết nối lại tài khoản đó.")
 	}
-	return nil, nil, errors.New("Tài khoản sở hữu nguồn/job không còn kết nối. Hãy kết nối lại tài khoản đó.")
+	fresh, release, err := s.readySpecific(ctx, accounts[idx])
+	if err != nil {
+		return nil, nil, err
+	}
+	return &fresh, release, nil
 }
 
 func (s *Provider) loadSource(req EditVideoRequest) (*sourceRecord, error) {

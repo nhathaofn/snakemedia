@@ -1,0 +1,28 @@
+.route-error {
+  display: flex;
+  min-height: var(--route-error-min-height);
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-8);
+  padding: var(--space-10);
+  text-align: center;
+}
+
+.route-error-title {
+  color: var(--text-primary);
+  font-size: var(--font-size-page-title);
+  font-weight: var(--font-weight-semibold);
+}
+
+.route-error-message {
+  max-width: var(--dialog-max-width);
+  margin: 0;
+  color: var(--danger);
+}
+
+.route-error-actions {
+  display: flex;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}

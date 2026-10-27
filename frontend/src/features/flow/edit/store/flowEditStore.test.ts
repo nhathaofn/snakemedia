@@ -203,8 +203,8 @@ it('reuses the mutation ID after an uncertain response and preserves newer attem
   const changed = EditVideoRequest.createFrom({ ...first, prompt: 'changed' });
   const next = s.requestIDFor(changed);
   expect(next).not.toBe(original);
-  s.acceptAttempt(original);
+  s.settleAttempt(original);
   expect(s.requestIDFor(changed)).toBe(next);
-  s.acceptAttempt(next);
+  s.settleAttempt(next);
   expect(s.requestIDFor(changed)).not.toBe(next);
 });

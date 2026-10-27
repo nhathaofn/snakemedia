@@ -1,11 +1,9 @@
 package chrome
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -13,8 +11,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"SnakeMedia/internal/config"
 )
 
 type HTTPError struct {
@@ -128,64 +124,4 @@ func rpcBody(c Credentials) url.Values {
 	}
 	envelope, _ := json.Marshal([]any{batch})
 	return url.Values{"f.req": {string(envelope)}, "at": {c.AtToken}}
-}
-
-func readBounded(r io.Reader, limit int64) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(r, limit+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(data)) > limit {
-		return nil, errors.New("response exceeds configured size limit")
-	}
-	return data, nil
-}
-
-// QueryCreditsDirectHTTP applies cookie scope/expiry and retains Set-Cookie
-// rotation, using only credentials obtained from the matching browser profile.
-func QueryCreditsDirectHTTP(ctx context.Context, c Credentials, policy config.AccountConfig) (FlowCredits, Credentials, error) {
-	if err := c.validate(); err != nil {
-		return FlowCredits{}, c, err
-	}
-	c.Cookies = append([]CookieItem(nil), c.Cookies...)
-	origin, _ := url.Parse(FlowURL)
-	jar, err := flowCookieJar(origin, c.Cookies)
-	if err != nil {
-		return FlowCredits{}, c, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, FlowURL+batchPath+"?"+rpcParams(c).Encode(), strings.NewReader(rpcBody(c).Encode()))
-	if err != nil {
-		return FlowCredits{}, c, err
-	}
-	setBatchHeaders(req, c, FlowURL)
-	client := &http.Client{Timeout: time.Duration(policy.RequestTimeoutSeconds) * time.Second, Jar: jar, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return FlowCredits{}, c, ctx.Err()
-		}
-		// net/url errors include the request URL and its session query parameters.
-		// Surface a useful diagnostic without exposing runtime credentials to React.
-		return FlowCredits{}, c, errors.New("Không kết nối được API Flow. Kiểm tra mạng hoặc thử cập nhật lại sau.")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return FlowCredits{}, c, responseError(resp.StatusCode, resp.Header.Get("Retry-After"))
-	}
-	body, err := readBounded(resp.Body, policy.MaxResponseBytes)
-	if err != nil {
-		return FlowCredits{}, c, err
-	}
-	credits, err := ParseCreditsFromText(string(body), c.RPCs.Credits)
-	if err != nil {
-		return FlowCredits{}, c, err
-	}
-	if c.RPCs.Availability != "" {
-		// Optional capability metadata cannot invalidate a valid credits result.
-		if availability, parseErr := parseRPCPayload(string(body), c.RPCs.Availability); parseErr == nil {
-			credits.AvailabilityCode, _ = parseAvailability(availability)
-		}
-	}
-	c.Cookies = rotateCookies(c.Cookies, origin, resp)
-	return credits, c, nil
 }

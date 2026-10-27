@@ -1,6 +1,6 @@
 # 0008. Muse Provider: Chat-Client Jobs, a Durable Queue and Many Accounts
 
-- **Status:** Accepted
+- **Status:** Accepted; partly superseded (see note)
 - **Date:** 2026-10-26
 
 ## Context
@@ -17,6 +17,12 @@ what happens around that call:
   the machine's real IP when proxies fail, and scrapes the quota from the
   Settings dialog. It does classify Muse's replies well (usage limit, refused
   prompt, technical error) and imports cookies in several export formats.
+
+> **Superseded parts.** ADR 0010 replaced the shared launcher
+> (`flow/chrome.StartBrowser` → `internal/browser`), the DPAPI Muse account
+> store (→ `internal/accounts`) and the `muse:accounts-updated` event
+> (→ `accounts:updated`). ADR 0011 replaced the fixed options; ADR 0012 the
+> retry details (re-check rules, `SentAt`, the journal on `internal/jobs`).
 
 ## Decision
 1. **`internal/providers/muse`** is a new provider next to `flow`. It shares

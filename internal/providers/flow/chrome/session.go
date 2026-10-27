@@ -75,66 +75,6 @@ func (p pageEntry) flowPage() (*url.URL, bool) {
 	return u, true
 }
 
-// cdpCall correlates responses and skips unsolicited events. Cancellation closes
-// the connection, including a pending read/write or an awaited page promise.
-func cdpCall(ctx context.Context, conn *websocket.Conn, id int, method string, params any, result any, handlers ...func(string, json.RawMessage)) error {
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		return errors.New("CDP operation requires a deadline")
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	_ = conn.SetWriteDeadline(deadline)
-	_ = conn.SetReadDeadline(deadline)
-	if err := conn.WriteJSON(map[string]any{"id": id, "method": method, "params": params}); err != nil {
-		return err
-	}
-	for {
-		var msg struct {
-			Method string          `json:"method"`
-			Params json.RawMessage `json:"params"`
-			ID     int             `json:"id"`
-			Result json.RawMessage `json:"result"`
-			Error  *struct {
-				Code int `json:"code"`
-			} `json:"error"`
-		}
-		if err := conn.ReadJSON(&msg); err != nil {
-			return err
-		}
-		if msg.ID != id {
-			for _, handle := range handlers {
-				handle(msg.Method, msg.Params)
-			}
-			continue
-		}
-		if msg.Error != nil {
-			return fmt.Errorf("CDP %s failed (%d)", method, msg.Error.Code)
-		}
-		if result == nil {
-			return nil
-		}
-		return json.Unmarshal(msg.Result, result)
-	}
-}
-
-func evaluate(ctx context.Context, conn *websocket.Conn, id int, expression string, out any) error {
-	var result struct {
-		Result struct {
-			Value string `json:"value"`
-		} `json:"result"`
-		Exception json.RawMessage `json:"exceptionDetails"`
-	}
-	if err := cdpCall(ctx, conn, id, "Runtime.evaluate", map[string]any{"expression": expression, "awaitPromise": true, "returnByValue": true}, &result); err != nil {
-		return err
-	}
-	if len(result.Exception) > 0 || result.Result.Value == "" {
-		return errors.New("Flow page evaluation failed")
-	}
-	return json.Unmarshal([]byte(result.Result.Value), out)
-}
-
 // InspectFlowIdentity detects the authenticated page identity without waiting on
 // optional balance/capability APIs. A failure there must not hide the account.
 func InspectFlowIdentity(ctx context.Context, port int, policy config.AccountConfig) (*FlowSessionDetails, error) {
@@ -225,35 +165,97 @@ func inspectFlowSession(ctx context.Context, port int, policy config.AccountConf
 	if err := details.Credentials.validate(); err != nil {
 		return details, err
 	}
-	// Use the same request builder as HTTP, with runtime-derived parameters.
-	request, _ := json.Marshal(map[string]any{"path": batchPath + "?" + rpcParams(details.Credentials).Encode(), "body": rpcBody(details.Credentials).Encode(), "timeout": policy.RequestTimeoutSeconds * int(time.Second/time.Millisecond), "maxBytes": policy.MaxResponseBytes})
+	credits, err := pageCredits(ctx, conn, 3, details.Credentials, policy)
+	if err != nil {
+		return details, err
+	}
+	details.Credits = credits
+	details.CreditsVerified = true
+	return details, nil
+}
+
+// QueryCredits reads the balance through the account's own Flow tab, the same
+// way the page does, and returns the session with its current cookies. When
+// the stored session lacks the balance RPCs (a new Flow build reset them),
+// they are discovered from the tab and returned with the session.
+func QueryCredits(ctx context.Context, port int, c Credentials, policy config.AccountConfig) (FlowCredits, Credentials, error) {
+	if err := c.validateSession(); err != nil {
+		return FlowCredits{}, c, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(policy.RequestTimeoutSeconds)*time.Second)
+	defer cancel()
+	var pages []pageEntry
+	if err := localJSON(ctx, port, "/json", policy, &pages); err != nil {
+		return FlowCredits{}, c, err
+	}
+	for _, page := range pages {
+		if _, ok := page.flowPage(); !ok {
+			continue
+		}
+		if !localWebSocket(page.WebSocketDebuggerURL, port) {
+			return FlowCredits{}, c, errors.New("invalid CDP page endpoint")
+		}
+		conn, _, err := websocket.DefaultDialer.DialContext(ctx, page.WebSocketDebuggerURL, nil)
+		if err != nil {
+			return FlowCredits{}, c, err
+		}
+		defer conn.Close()
+		conn.SetReadLimit(max(policy.MaxDiscoveryBytes, 2*policy.MaxResponseBytes))
+		stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+		defer stop()
+		if !c.RPCs.valid() {
+			registry, err := discoverRPCs(ctx, conn, c.BuildLabel, policy)
+			if err != nil {
+				return FlowCredits{}, c, err
+			}
+			c.RPCs.Credits, c.RPCs.Availability = registry.Credits, registry.Availability
+			if err := c.validate(); err != nil {
+				return FlowCredits{}, c, err
+			}
+		}
+		credits, err := pageCredits(ctx, conn, 1, c, policy)
+		if err != nil {
+			return FlowCredits{}, c, err
+		}
+		var cookies struct {
+			Cookies []CookieItem `json:"cookies"`
+		}
+		if cdpCall(ctx, conn, 2, "Network.getCookies", map[string]any{"urls": []string{FlowURL}}, &cookies) == nil {
+			c.Cookies = cookies.Cookies
+		}
+		return credits, c, nil
+	}
+	return FlowCredits{}, c, ErrPageNotReady
+}
+
+// pageCredits runs the credits (and optional availability) batch from inside
+// the Flow page, with the page's own cookies and origin.
+func pageCredits(ctx context.Context, conn *websocket.Conn, id int, c Credentials, policy config.AccountConfig) (FlowCredits, error) {
+	request, _ := json.Marshal(map[string]any{"path": batchPath + "?" + rpcParams(c).Encode(), "body": rpcBody(c).Encode(), "timeout": policy.RequestTimeoutSeconds * int(time.Second/time.Millisecond), "maxBytes": policy.MaxResponseBytes})
 	expression := `(async()=>{const r=` + string(request) + `;const response=await fetch(r.path,{method:'POST',credentials:'include',signal:AbortSignal.timeout(r.timeout),headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8','X-Same-Domain':'1'},body:r.body});if(!response.ok)return JSON.stringify({status:response.status,retryAfter:response.headers.get('Retry-After')});const reader=response.body.getReader();const chunks=[];let size=0;try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>r.maxBytes){await reader.cancel();throw Error('Response too large');}chunks.push(value);}}finally{reader.releaseLock();}const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}return JSON.stringify({status:response.status,text:new TextDecoder().decode(bytes)});})()`
 	var rpc struct {
 		Status     int    `json:"status"`
 		Text       string `json:"text"`
 		RetryAfter string `json:"retryAfter"`
 	}
-	if err := evaluate(ctx, conn, 3, expression, &rpc); err != nil {
-		return details, err
+	if err := evaluate(ctx, conn, id, expression, &rpc); err != nil {
+		return FlowCredits{}, err
 	}
 	if rpc.Status != http.StatusOK {
-		return details, responseError(rpc.Status, rpc.RetryAfter)
+		return FlowCredits{}, responseError(rpc.Status, rpc.RetryAfter)
 	}
-	credits, err := ParseCreditsFromText(rpc.Text, details.Credentials.RPCs.Credits)
+	credits, err := ParseCreditsFromText(rpc.Text, c.RPCs.Credits)
 	if err != nil {
-		return details, err
+		return FlowCredits{}, err
 	}
-	details.Credits = credits
-	details.CreditsVerified = true
-	if details.Credentials.RPCs.Availability != "" {
-		if availability, parseErr := parseRPCPayload(rpc.Text, details.Credentials.RPCs.Availability); parseErr == nil {
+	if c.RPCs.Availability != "" {
+		if availability, parseErr := parseRPCPayload(rpc.Text, c.RPCs.Availability); parseErr == nil {
 			if code, availErr := parseAvailability(availability); availErr == nil {
 				credits.AvailabilityCode = code
 			}
 		}
 	}
-	details.Credits = credits
-	return details, nil
+	return credits, nil
 }
 
 func (c Credentials) validate() error {

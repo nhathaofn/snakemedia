@@ -16,14 +16,18 @@ type Event string
 const (
 	EventAppReady      Event = "app:ready"
 	EventConfigUpdated Event = "config:updated"
-	EventErrorOccurred Event = "error:occurred"
 	// EventMuseJobUpdated carries one muse.MuseJob whenever its state changes.
 	EventMuseJobUpdated Event = "muse:job-updated"
 	// EventMuseJobsChanged has no payload: several jobs changed at once (bulk
 	// removal), so listeners reload the job list.
 	EventMuseJobsChanged Event = "muse:jobs-changed"
-	// EventMuseAccountsUpdated carries the full []muse.MuseAccount list.
-	EventMuseAccountsUpdated Event = "muse:accounts-updated"
+	// EventFlowImageTaskUpdated carries one flow.ImageTask whenever its state changes.
+	EventFlowImageTaskUpdated Event = "flow:image-task-updated"
+	// EventFlowImageTasksChanged has no payload: tasks were added or removed,
+	// so listeners reload the image queue.
+	EventFlowImageTasksChanged Event = "flow:image-tasks-changed"
+	// EventAccountsUpdated carries the full []accounts.Account list.
+	EventAccountsUpdated Event = "accounts:updated"
 )
 
 // AllEvents is bound to the frontend as a TypeScript enum (events.Event).
@@ -33,10 +37,11 @@ var AllEvents = []struct {
 }{
 	{EventAppReady, "AppReady"},
 	{EventConfigUpdated, "ConfigUpdated"},
-	{EventErrorOccurred, "ErrorOccurred"},
 	{EventMuseJobUpdated, "MuseJobUpdated"},
 	{EventMuseJobsChanged, "MuseJobsChanged"},
-	{EventMuseAccountsUpdated, "MuseAccountsUpdated"},
+	{EventFlowImageTaskUpdated, "FlowImageTaskUpdated"},
+	{EventFlowImageTasksChanged, "FlowImageTasksChanged"},
+	{EventAccountsUpdated, "AccountsUpdated"},
 }
 
 // Dispatcher broadcasts events to the Wails frontend.

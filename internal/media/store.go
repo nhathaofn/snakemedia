@@ -4,6 +4,7 @@
 package media
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -39,19 +40,6 @@ var extensions = map[string]string{
 // contentTypes are sent for stored files so playback never depends on the OS registry.
 var contentTypes = map[string]string{".mp4": "video/mp4", ".m4v": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime"}
 
-// VideoTypes are the video files a user may import, with the type sent when
-// uploading them (Flow's upload whitelist: mp4, m4v, webm, quicktime).
-var VideoTypes = map[string]string{".mp4": "video/mp4", ".m4v": "video/m4v", ".webm": "video/webm", ".mov": "video/quicktime"}
-
-func SupportedVideoExtensions() []string {
-	list := make([]string, 0, len(VideoTypes))
-	for extension := range VideoTypes {
-		list = append(list, extension)
-	}
-	slices.Sort(list)
-	return list
-}
-
 var unsafeFileChars = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
 
 // SaveResult reports where a file was saved, or that the user closed the folder
@@ -83,6 +71,10 @@ type Store struct {
 	dir     string
 	mu      sync.Mutex
 	saveDir string // last folder the user saved a file to
+	// roots are the folders files may be saved into or revealed from without
+	// a dialog (see AllowRoot).
+	roots        []string
+	dynamicRoots []func() []string
 }
 
 // NewStore keeps media in dir, created on first use.
@@ -130,8 +122,7 @@ func (s *Store) Save(localURL string, chooseDir func(defaultDir string) (string,
 	if err != nil {
 		return models.ErrorResponse[SaveResult]("Tệp không hợp lệ.", models.CodeInvalidArgument)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
+	if _, err := os.Stat(path); err != nil {
 		return models.ErrorResponse[SaveResult]("Không đọc được tệp đã tải: "+err.Error(), models.CodeNotFound)
 	}
 	s.mu.Lock()
@@ -146,9 +137,7 @@ func (s *Store) Save(localURL string, chooseDir func(defaultDir string) (string,
 	}
 	name := filepath.Base(path)
 	ext := filepath.Ext(name)
-	s.mu.Lock()
-	saved, err := writeUniqueFile(dir, strings.TrimSuffix(name, ext), ext, data)
-	s.mu.Unlock()
+	saved, err := copyUniqueFile(dir, strings.TrimSuffix(name, ext), ext, path)
 	if err != nil {
 		return models.ErrorResponse[SaveResult](err.Error(), models.CodeInternal)
 	}
@@ -178,12 +167,14 @@ func (s *Store) SaveImageToTaskFolder(localURL, outputDir, taskID string) models
 	if strings.TrimSpace(outputDir) == "" {
 		return models.ErrorResponse[SaveResult]("Chưa chọn thư mục lưu.", models.CodeInvalidArgument)
 	}
+	if outputDir, err = s.CheckDir(outputDir); err != nil {
+		return models.ErrorResponse[SaveResult](err.Error(), models.CodeInvalidArgument)
+	}
 	rootInfo, err := os.Stat(outputDir)
 	if err != nil || !rootInfo.IsDir() {
 		return models.ErrorResponse[SaveResult](fmt.Sprintf("Thư mục lưu %q không tồn tại.", outputDir), models.CodeInvalidArgument)
 	}
-	data, err := os.ReadFile(mediaPath)
-	if err != nil {
+	if _, err := os.Stat(mediaPath); err != nil {
 		return models.ErrorResponse[SaveResult]("Không đọc được ảnh đã tạo: "+err.Error(), models.CodeNotFound)
 	}
 	taskDir := filepath.Join(outputDir, "task-"+id.String())
@@ -191,19 +182,40 @@ func (s *Store) SaveImageToTaskFolder(localURL, outputDir, taskID string) models
 		return models.ErrorResponse[SaveResult]("Không tạo được thư mục tác vụ: "+err.Error(), models.CodeInternal)
 	}
 
-	// Multiple image workers can save into the same task folder at once.
-	s.mu.Lock()
-	saved, err := writeUniqueFile(taskDir, strings.TrimSuffix(filepath.Base(mediaPath), filepath.Ext(mediaPath)), ext, data)
-	s.mu.Unlock()
+	// Several queue workers can save into the same task folder at once; the
+	// exclusive create keeps them from taking the same name.
+	saved, err := copyUniqueFile(taskDir, strings.TrimSuffix(filepath.Base(mediaPath), filepath.Ext(mediaPath)), ext, mediaPath)
 	if err != nil {
 		return models.ErrorResponse[SaveResult](err.Error(), models.CodeInternal)
 	}
 	return models.SuccessResponse(SaveResult{Path: saved})
 }
 
-// ImportVideo copies the video file chooseFile returns into the media folder. An
+// SaveTo copies a stored file into dir as name plus the file's extension,
+// numbering the name when it is taken (name-2, name-3, …). dir must lie inside
+// an allowed root and is created when missing. The copy is streamed, so a long
+// video is never read into memory.
+func (s *Store) SaveTo(localURL, dir, name string) (string, error) {
+	src, err := s.Path(localURL)
+	if err != nil {
+		return "", err
+	}
+	if name == "" || name == "." || name == ".." || name != filepath.Base(name) {
+		return "", fmt.Errorf("Tên tệp %q không hợp lệ.", name)
+	}
+	if dir, err = s.CheckDir(dir); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("Không tạo được thư mục %q: %w", dir, err)
+	}
+	return copyUniqueFile(dir, name, filepath.Ext(src), src)
+}
+
+// ImportVideo copies the video file chooseFile returns into the media folder,
+// refusing extensions outside accepted (the provider's upload whitelist). An
 // empty path means the user canceled.
-func (s *Store) ImportVideo(chooseFile func() (string, error)) models.Response[ImportResult] {
+func (s *Store) ImportVideo(accepted []string, chooseFile func() (string, error)) models.Response[ImportResult] {
 	src, err := chooseFile()
 	if err != nil {
 		return models.ErrorResponse[ImportResult]("Không mở được hộp thoại chọn tệp: "+err.Error(), models.CodeInternal)
@@ -212,9 +224,8 @@ func (s *Store) ImportVideo(chooseFile func() (string, error)) models.Response[I
 		return models.SuccessResponse(ImportResult{Canceled: true})
 	}
 	ext := strings.ToLower(filepath.Ext(src))
-	contentType, ok := VideoTypes[ext]
-	if !ok {
-		return models.ErrorResponse[ImportResult](fmt.Sprintf("Định dạng %q không được hỗ trợ (chỉ mp4, m4v, webm, mov).", ext), models.CodeInvalidArgument)
+	if !slices.Contains(accepted, ext) {
+		return models.ErrorResponse[ImportResult](fmt.Sprintf("Định dạng %q không được hỗ trợ (chỉ %s).", ext, strings.Join(accepted, ", ")), models.CodeInvalidArgument)
 	}
 	in, err := os.Open(src)
 	if err != nil {
@@ -238,7 +249,7 @@ func (s *Store) ImportVideo(chooseFile func() (string, error)) models.Response[I
 		_ = os.Remove(dst)
 		return models.ErrorResponse[ImportResult]("Không sao chép được tệp video: "+copyErr.Error(), models.CodeInternal)
 	}
-	return models.SuccessResponse(ImportResult{LocalURL: Route + name, FileName: filepath.Base(src), Size: size, ContentType: contentType})
+	return models.SuccessResponse(ImportResult{LocalURL: Route + name, FileName: filepath.Base(src), Size: size, ContentType: contentTypes[ext]})
 }
 
 // Middleware serves stored media under Route ahead of the asset server. It must
@@ -271,22 +282,42 @@ func fileBase(id string) string {
 	return base
 }
 
-// writeUniqueFile writes name+ext, or name-2+ext and so on when that file exists.
-func writeUniqueFile(dir, name, ext string, data []byte) (string, error) {
+// copyUniqueFile streams src into dir as name+ext, or name-2+ext and so on
+// when that file exists. The name is taken with an exclusive create, so two
+// savers never write the same file and an existing file is never replaced; a
+// failed copy leaves no partial file behind.
+func copyUniqueFile(dir, name, ext, src string) (string, error) {
 	info, err := os.Stat(dir)
 	if err != nil || !info.IsDir() {
 		return "", fmt.Errorf("Thư mục %q không tồn tại.", dir)
 	}
+	in, err := os.Open(src)
+	if err != nil {
+		return "", fmt.Errorf("Không đọc được tệp đã tải: %w", err)
+	}
+	defer in.Close()
 	for i := 1; i <= maxSaveAttempts; i++ {
 		candidate := name + ext
 		if i > 1 {
 			candidate = fmt.Sprintf("%s-%d%s", name, i, ext)
 		}
 		path := filepath.Join(dir, candidate)
-		if utils.FileExists(path) {
+		out, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if errors.Is(err, os.ErrExist) {
 			continue
 		}
-		if err := utils.WriteFileAtomic(path, data, 0o644); err != nil {
+		if err != nil {
+			return "", fmt.Errorf("Không lưu được tệp vào %q: %w", dir, err)
+		}
+		_, err = io.Copy(out, in)
+		if err == nil {
+			err = out.Sync()
+		}
+		if closeErr := out.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			_ = os.Remove(path)
 			return "", fmt.Errorf("Không lưu được tệp vào %q: %w", dir, err)
 		}
 		return path, nil

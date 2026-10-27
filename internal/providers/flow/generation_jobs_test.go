@@ -2,11 +2,17 @@ package flow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"SnakeMedia/internal/providers/flow/chrome"
 )
 
 // ageState backdates a saved record so it looks idle for d.
@@ -125,8 +131,8 @@ func TestSubmissionLostOnlyAfterTheGenerationTimeout(t *testing.T) {
 	if s.submissionLost(job) {
 		t.Fatal("a fresh submission was treated as lost")
 	}
-	limits := s.cfg.Get().Accounts
-	job.CreatedAt = time.Now().Add(-time.Duration(limits.GenerationTimeoutSeconds+limits.RequestTimeoutSeconds+1) * time.Second).UTC().Format(time.RFC3339)
+	limits := s.cfg.Get().FlowPagePolicy()
+	job.CreatedAt = time.Now().Add(-time.Duration(s.cfg.Get().Flow.GenerationTimeoutSeconds+limits.RequestTimeoutSeconds+1) * time.Second).UTC().Format(time.RFC3339)
 	if !s.submissionLost(job) {
 		t.Fatal("an old submission with no result was kept pending")
 	}
@@ -143,5 +149,147 @@ func TestSubmissionLostOnlyAfterTheGenerationTimeout(t *testing.T) {
 	}
 	if saved, _ := s.loadGenerationJob(job.ID); saved.Phase != generationRejected {
 		t.Fatalf("lost job not closed: %s", saved.Phase)
+	}
+}
+
+func TestOnlyNotExecutedRPCStatusesAreDefiniteRejections(t *testing.T) {
+	for code, want := range map[int]bool{3: true, 7: true, 8: true, 9: true, 16: false, 0: false, 2: false, 4: false, 10: false, 13: false, 14: false} {
+		if got := definiteMutationRejection(&chrome.RPCError{ID: "x", Code: code}); got != want {
+			t.Errorf("RPC status %d: definite=%v, want %v", code, got, want)
+		}
+	}
+	authDetail := `[16,null,[["type.googleapis.com/google.rpc.ErrorInfo",["ACCESS_TOKEN_EXPIRED","googleapis.com"]]]]`
+	if !definiteMutationRejection(&chrome.RPCError{ID: "x", Code: 16, Detail: authDetail}) {
+		t.Error("UNAUTHENTICATED with an auth reason must be definite")
+	}
+	otherDetail := `[16,null,[["type.googleapis.com/google.rpc.ErrorInfo",["SERVICE_DISABLED","googleapis.com"]]]]`
+	if definiteMutationRejection(&chrome.RPCError{ID: "x", Code: 16, Detail: otherDetail}) {
+		t.Error("UNAUTHENTICATED without an auth reason must be reconciled")
+	}
+	if got := rpcErrorReason(authDetail); got != "ACCESS_TOKEN_EXPIRED" {
+		t.Errorf("reason = %q", got)
+	}
+	if !definiteMutationRejection(&chrome.HTTPError{Status: 400}) || definiteMutationRejection(&chrome.HTTPError{Status: 503}) {
+		t.Error("HTTP 4xx must be definite and 5xx unknown")
+	}
+	if !definiteMutationRejection(&mutationRejection{cause: errors.New("captcha")}) {
+		t.Error("a marked rejection must be definite")
+	}
+}
+
+func TestVideoJobStaysOpenUntilEveryFinishedVideoIsDownloaded(t *testing.T) {
+	final := []pendingVideo{
+		{name: "ok", url: "https://flow/ok", status: videoStatusSuccess},
+		{name: "dl", url: "https://flow/dl", status: videoStatusSuccess},
+		{name: "blocked", status: 7, statusObserved: true},
+	}
+	downloaded := GeneratedVideoItem{ID: "ok", LocalURL: "/flow-media/ok.mp4"}
+	notDownloaded := GeneratedVideoItem{ID: "dl", Error: "Không tải được video"}
+	blocked := GeneratedVideoItem{ID: "blocked", Error: "bộ lọc an toàn"}
+	if !videosAwaitingDownload(final, []GeneratedVideoItem{downloaded, notDownloaded, blocked}) {
+		t.Fatal("a failed download must keep the job open")
+	}
+	if videosAwaitingDownload(final, []GeneratedVideoItem{downloaded, blocked, {ID: "later", Pending: true}}) {
+		t.Fatal("Flow-side failures and unknown videos do not wait for a download")
+	}
+}
+
+// reconcileTransport answers the project listing and GetMedia calls of a
+// resumed job; an empty reply sends Flow's UNAVAILABLE error envelope.
+func reconcileTransport(t *testing.T, listing, media string) {
+	t.Helper()
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	quote := func(payload string) string {
+		quoted, _ := json.Marshal(payload)
+		return string(quoted)
+	}
+	http.DefaultTransport = flowRoundTrip(func(r *http.Request) (*http.Response, error) {
+		rpc := r.URL.Query().Get("rpcids")
+		reply := map[string]string{RPCGetProjectContents: listing, RPCGetMedia: media}[rpc]
+		if reply == "" {
+			envelope := `)]}'` + "\n\n1\n" + `[["wrb.fr","` + rpc + `",null,null,null,[14],"generic"]]`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(envelope)), Request: r}, nil
+		}
+		return flowReply(r, rpc, quote(reply)), nil
+	})
+}
+
+func oldSubmission(s *Provider, job generationJob) generationJob {
+	limits := s.cfg.Get().FlowPagePolicy()
+	job.Phase, job.ProjectID, job.ClientIDs = generationSubmitting, "proj", []string{"CID-1"}
+	job.CreatedAt = time.Now().Add(-time.Duration(s.cfg.Get().Flow.GenerationTimeoutSeconds+limits.RequestTimeoutSeconds+60) * time.Second).UTC().Format(time.RFC3339)
+	return job
+}
+
+func TestVideoResumeKeepsJobPendingWhenTheListingFails(t *testing.T) {
+	accounts := testAccountService(t)
+	acc := seedFlowAccount(t, accounts, "first@example.invalid", true)
+	stored, err := accounts.findAccount(acc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconcileTransport(t, "", "")
+	s := testFlowService(accounts)
+	job := oldSubmission(s, newGenerationJob("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", generationJobVideo, "fp", acc.ID))
+	if err := s.saveGenerationJob(job); err != nil {
+		t.Fatal(err)
+	}
+	client, err := chrome.NewFlowClient(stored.Credentials, accounts.cfgManager.Get().Accounts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := s.reconcileVideoGenerationWithClient(context.Background(), client, job, GeneratedVideoItem{Prompt: "a fox"})
+	if err != nil || len(items) != 1 || !items[0].Pending {
+		t.Fatalf("a failed listing must keep the job pending, got %+v %v", items, err)
+	}
+	if saved, _ := s.loadGenerationJob(job.ID); saved.Phase != generationSubmitting {
+		t.Fatalf("a failed listing closed the job as %s", saved.Phase)
+	}
+}
+
+func TestImageResumeNeverCallsAListedJobLost(t *testing.T) {
+	accounts := testAccountService(t)
+	acc := seedFlowAccount(t, accounts, "first@example.invalid", true)
+	listing, _ := json.Marshal([]any{nil, []any{[]any{"workflow-1", nil, nil, []any{nil, nil, nil, nil, "media-1", "CID-1"}}}})
+	reconcileTransport(t, string(listing), "") // GetMedia fails
+	s := testFlowService(accounts)
+	job := oldSubmission(s, newGenerationJob("cccccccc-cccc-4ccc-8ccc-cccccccccccc", generationJobImage, "fp", acc.ID))
+	job.ImageTemplate = imageGenerationTemplate{Prompt: "a fox", ModelID: "m", AspectRatio: "16:9", Quality: ImageQuality1K}
+	if err := s.saveGenerationJob(job); err != nil {
+		t.Fatal(err)
+	}
+	res := s.ResumeImageGeneration(context.Background(), job.ID)
+	if !res.Success || len(res.Data) != 1 || !res.Data[0].Pending {
+		t.Fatalf("a listed job whose media is not readable yet must stay pending, got %+v", res)
+	}
+	if saved, _ := s.loadGenerationJob(job.ID); saved.Phase != generationAccepted {
+		t.Fatalf("Flow listed the client ID, so the job is accepted; got %s", saved.Phase)
+	}
+}
+
+func TestEditJobIsNotJournaledWhenTheBrowserIsNotReady(t *testing.T) {
+	accounts := testAccountService(t)
+	acc := seedFlowAccount(t, accounts, "first@example.invalid", true)
+	stored, err := accounts.findAccount(acc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := testFlowService(accounts)
+	inner, err := BuildEditVideoRequest("a fox", "proj", "variant", "source", 0, 24, 1, 1, "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := chrome.NewFlowClient(stored.Credentials, accounts.cfgManager.Get().Accounts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := EditVideoRequest{RequestID: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", Prompt: "a fox"}
+	if _, err := s.runEditVideoJob(context.Background(), client, stored, req, "proj", RPCEditVideo, inner, GeneratedVideoItem{}); err == nil {
+		t.Fatal("an edit that could not be sent must fail, not wait as pending")
+	}
+	var job editJob
+	if err := s.readState("jobs", req.RequestID, &job); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("an unsent edit was journaled as sent: %+v %v", job, err)
 	}
 }

@@ -1,43 +1,30 @@
-import {
-  Film,
-  FolderKanban,
-  ScrollText,
-  Settings,
-  Shield,
-  Sparkles,
-  User,
-  Wand2,
-} from 'lucide-react';
+import { Clapperboard, Film, Image, Settings, Sparkles } from 'lucide-react';
 import type { AppSection } from '../../types';
-import { MuseAccountsPage } from './accounts/MuseAccountsPage';
-import { MuseCreatePage } from './create/MuseCreatePage';
+import { MuseJobKind } from '../../types';
 import { MuseLibraryPage } from './library/MuseLibraryPage';
-import { MuseProxyPage } from './proxy/MuseProxyPage';
-import { MuseScriptPage } from './script/MuseScriptPage';
 import { MuseSettingsPage } from './settings/MuseSettingsPage';
-import { MuseStudioPage } from './studio/MuseStudioPage';
+import { MuseWorkspace } from './shared/MuseWorkspace';
 
-/** Muse tab: batch image/video generation on muse.ai across several accounts. */
+/** Muse tab: batch image and video generation with Muse's agent across the Muse accounts. */
 export const museSection = {
   id: 'muse',
   path: '/muse',
   label: 'Muse',
   icon: Sparkles,
   features: [
-    { id: 'create', path: 'create', label: 'Tạo', icon: Wand2, element: <MuseCreatePage /> },
     {
-      id: 'script',
-      path: 'script',
-      label: 'Kịch bản',
-      icon: ScrollText,
-      element: <MuseScriptPage />,
+      id: 'image',
+      path: 'image',
+      label: 'Ảnh',
+      icon: Image,
+      element: <MuseWorkspace kind={MuseJobKind.Image} />,
     },
     {
-      id: 'studio',
-      path: 'studio',
-      label: 'Studio & Tư liệu',
-      icon: FolderKanban,
-      element: <MuseStudioPage />,
+      id: 'video',
+      path: 'video',
+      label: 'Video',
+      icon: Clapperboard,
+      element: <MuseWorkspace kind={MuseJobKind.Video} />,
     },
     {
       id: 'library',
@@ -45,20 +32,6 @@ export const museSection = {
       label: 'Thư viện',
       icon: Film,
       element: <MuseLibraryPage />,
-    },
-    {
-      id: 'accounts',
-      path: 'accounts',
-      label: 'Tài khoản Muse',
-      icon: User,
-      element: <MuseAccountsPage />,
-    },
-    {
-      id: 'proxy',
-      path: 'proxy',
-      label: 'Proxy',
-      icon: Shield,
-      element: <MuseProxyPage />,
     },
     {
       id: 'settings',

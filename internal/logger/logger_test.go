@@ -91,3 +91,27 @@ func TestRotate_BelowThresholdIsNoop(t *testing.T) {
 		t.Errorf("rotation should not happen below threshold")
 	}
 }
+
+func TestLogRotatesWhileRunning(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Init(Options{Level: "info", Dir: dir, MaxSizeBytes: 512, MaxBackups: 2}); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	t.Cleanup(func() { _ = Close() })
+	for i := 0; i < 40; i++ {
+		Get().Info("filler line to grow the log past its cap", "i", i)
+	}
+	if err := Close(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dir, "app.log"))
+	if err != nil || info.Size() > 512 {
+		t.Fatalf("app.log not kept under its cap: %v %v", info, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "app.log.1")); err != nil {
+		t.Fatalf("no rotated backup: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "app.log.3")); err == nil {
+		t.Fatal("more backups kept than configured")
+	}
+}

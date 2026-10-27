@@ -48,6 +48,18 @@ func newFlowClient(base string, c Credentials, policy config.AccountConfig) (*Fl
 	return &FlowClient{base: base, origin: origin, creds: c, policy: policy, uploadPolicy: config.DefaultFlowConfig(), client: client}, nil
 }
 
+// SetProxy sends the client's own requests (batch RPCs, uploads, downloads)
+// through the account's proxy, the route its browser uses. nil goes direct.
+func (f *FlowClient) SetProxy(proxy *url.URL) {
+	if proxy == nil {
+		f.client.Transport = nil
+		return
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = http.ProxyURL(proxy)
+	f.client.Transport = transport
+}
+
 // Credentials returns the session credentials including any rotated cookies.
 func (f *FlowClient) Credentials() Credentials {
 	c := f.creds
@@ -107,7 +119,7 @@ func (f *FlowClient) FetchMedia(ctx context.Context, rawURL string, accept []str
 	req.Header.Set("User-Agent", f.creds.UserAgent)
 	req.Header.Set("Referer", f.base+"/")
 	// Cookies ride along on redirects, so every hop must stay on Google's media hosts.
-	client := &http.Client{Jar: f.client.Jar, CheckRedirect: func(next *http.Request, via []*http.Request) error {
+	client := &http.Client{Jar: f.client.Jar, Transport: f.client.Transport, CheckRedirect: func(next *http.Request, via []*http.Request) error {
 		if len(via) >= 10 || next.URL.Scheme != "https" || next.URL.User != nil || !mediaHost(next.URL.Hostname()) {
 			return errors.New("ảnh chuyển hướng đến địa chỉ không thuộc Google")
 		}

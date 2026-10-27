@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { create } from 'zustand';
 import { FLOW_SHARED_REQUEST_REUSE_MS } from '../../../constants';
 import { api, isTransportFailure } from '../../../services/api';
+import { useWailsEvent } from '../../../hooks/useWailsEvent';
 import { useAppStore } from '../../../stores';
+import { AppEvent, FlowImageProjectMode } from '../../../types';
 import type { ApiResponse, StudioConfig, ToastNotification } from '../../../types';
 
 interface StudioConfigState {
@@ -56,18 +58,29 @@ export function sharedRequest<T>(fetch: () => Promise<ApiResponse<T>>): Promise<
   return promise;
 }
 
-/** Number of connected accounts that take turns generating (0 until loaded). */
+/**
+ * Number of connected accounts that take turns generating (0 until loaded). The
+ * backend decides which accounts count; the number is read again whenever an
+ * account changes, so signing in elsewhere shows up here without a remount.
+ */
 export function useRotationCount(): number {
   const [count, setCount] = useState(0);
+  const apply = useCallback((res: ApiResponse<number>) => {
+    if (res.success && typeof res.data === 'number') setCount(res.data);
+  }, []);
   useEffect(() => {
     let active = true;
     void sharedRequest(api.getActiveRotationCount).then((res) => {
-      if (active && res.success && typeof res.data === 'number') setCount(res.data);
+      if (active) apply(res);
     });
     return () => {
       active = false;
     };
-  }, []);
+  }, [apply]);
+  const refresh = useCallback(() => {
+    void api.getActiveRotationCount().then(apply);
+  }, [apply]);
+  useWailsEvent(AppEvent.AccountsUpdated, refresh);
   return count;
 }
 
@@ -100,7 +113,7 @@ export function useModelCatalog<T>(
   return { loading, error };
 }
 
-interface GenerationState<TItem> {
+export interface GenerationState<TItem> {
   prompt: string;
   setPrompt: (prompt: string) => void;
   isGenerating: boolean;
@@ -111,7 +124,7 @@ interface GenerationState<TItem> {
 }
 
 /** A studio store read at call time, so a long generation sees the latest state. */
-interface GenerationStore<TItem> {
+export interface GenerationStore<TItem> {
   getState: () => GenerationState<TItem>;
 }
 
@@ -209,6 +222,7 @@ export async function beginGenerationAttempt(
   kind: 'image' | 'video',
   request: unknown,
 ): Promise<{ requestId: string; settle: (pending: boolean) => void }> {
+  void pruneGenerationAttempts();
   const serialized = JSON.stringify(request);
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(serialized));
   const fingerprint = Array.from(new Uint8Array(digest), (value) =>
@@ -273,6 +287,53 @@ export function clearGenerationAttempt(requestId: string): void {
         localStorage.removeItem(key);
       }
     }
+  } catch {
+    // Storage may be disabled by the host webview.
+  }
+}
+
+/**
+ * Saved attempt keys whose request ID is no longer worth keeping: neither a
+ * job the backend still reports pending nor a request this process is sending.
+ */
+export function staleGenerationKeys(
+  saved: Iterable<readonly [string, string]>,
+  keep: ReadonlySet<string>,
+): string[] {
+  const stale: string[] = [];
+  for (const [key, requestId] of saved) {
+    if (key.startsWith('flow:generation:') && !keep.has(requestId)) stale.push(key);
+  }
+  return stale;
+}
+
+let attemptsPruned = false;
+
+/**
+ * Once per session, drops saved attempt IDs the backend no longer reports as
+ * pending (settled, expired or never received), so keys of jobs that were never
+ * resumed do not pile up in storage. Nothing is dropped when a list fails.
+ */
+async function pruneGenerationAttempts(): Promise<void> {
+  if (attemptsPruned) return;
+  attemptsPruned = true;
+  const lists = await Promise.all([
+    api.listPendingImageGenerations(FlowImageProjectMode.Single),
+    api.listPendingImageGenerations(FlowImageProjectMode.All),
+    api.listPendingVideoGenerations(),
+  ]);
+  if (lists.some((res) => !res.success)) return;
+  const keep = new Set(inFlightRequestIDs);
+  for (const res of lists) for (const item of res.data ?? []) if (item.jobId) keep.add(item.jobId);
+  const savedIDs = generationRequestIDs();
+  for (const key of staleGenerationKeys(savedIDs, keep)) savedIDs.delete(key);
+  try {
+    const stored: [string, string][] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key) stored.push([key, localStorage.getItem(key) ?? '']);
+    }
+    for (const key of staleGenerationKeys(stored, keep)) localStorage.removeItem(key);
   } catch {
     // Storage may be disabled by the host webview.
   }

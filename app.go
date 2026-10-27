@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"SnakeMedia/internal/accounts"
 	"SnakeMedia/internal/buildinfo"
 	"SnakeMedia/internal/config"
 	"SnakeMedia/internal/engine"
@@ -20,8 +20,8 @@ import (
 	"SnakeMedia/internal/paths"
 	"SnakeMedia/internal/providers"
 	"SnakeMedia/internal/providers/flow"
-	"SnakeMedia/internal/providers/flow/session"
 	"SnakeMedia/internal/providers/muse"
+	"SnakeMedia/internal/proxy"
 	"SnakeMedia/internal/services"
 	"SnakeMedia/internal/window"
 )
@@ -34,7 +34,9 @@ type App struct {
 	cfg                  *config.Manager
 	system               *services.SystemService
 	settings             *services.SettingsService
-	account              *session.Service
+	accounts             *accounts.Service
+	providers            *providers.Set
+	providerEnum         accounts.ProviderEnum
 	flow                 *flow.Provider
 	muse                 *muse.Provider
 	media                *media.Store
@@ -64,17 +66,17 @@ func NewApp(info buildinfo.Info) (*App, error) {
 	log.Info("starting application",
 		"name", info.Name, "version", info.Version, "commit", info.Commit, "dataDir", p.DataDir)
 
-	accounts := session.NewService(p, cfgManager)
+	// Every provider joins through one Plugin line; its accounts Site, nodes,
+	// option sources and background work come with it.
+	set := providers.Prepare(cfgManager, flow.Plugin(), muse.Plugin())
+	accts := accounts.New(p.AccountsDir, cfgManager, set.Sites()...)
 	store := media.NewStore(p.MediaDir)
-	flowProvider := flow.New(accounts, cfgManager, store, info.ProductName)
-	museProvider := muse.New(p.DataDir, cfgManager, store)
+	// Files are saved or revealed only under the app's output folders (Muse
+	// adds its own) and folders the user picks in a dialog.
+	store.AllowRoot(p.ImageOutputDir)
+	set.Build(providers.Deps{Paths: p, Config: cfgManager, Media: store, Accounts: accts, ProductName: info.ProductName})
 	nodes := engine.NewRegistry()
-	for _, provider := range []providers.Provider{flowProvider, museProvider} {
-		if err := nodes.Register(provider.Nodes()...); err != nil {
-			return nil, err
-		}
-	}
-	if err := nodes.Register(store.SaveNode()); err != nil {
+	if err := set.Register(nodes, store.SaveNode()); err != nil {
 		return nil, err
 	}
 	return &App{
@@ -82,9 +84,11 @@ func NewApp(info buildinfo.Info) (*App, error) {
 		cfg:                  cfgManager,
 		system:               services.NewSystemService(info),
 		settings:             services.NewSettingsService(cfgManager),
-		account:              accounts,
-		flow:                 flowProvider,
-		muse:                 museProvider,
+		accounts:             accts,
+		providers:            set,
+		providerEnum:         accounts.Providers(set.Sites()...),
+		flow:                 providers.Find[*flow.Provider](set),
+		muse:                 providers.Find[*muse.Provider](set),
 		media:                store,
 		imageOutputDirectory: p.ImageOutputDir,
 		nodes:                nodes,
@@ -109,7 +113,9 @@ func (a *App) initialConfig() config.AppConfig {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.dispatcher = events.NewDispatcher(ctx)
-	a.muse.Start(ctx, func(event events.Event, data any) { a.dispatcher.Emit(event, data) })
+	emit := func(event events.Event, data any) { a.dispatcher.Emit(event, data) }
+	a.accounts.Start(ctx, emit)
+	a.providers.Start(ctx, emit)
 }
 
 func (a *App) domReady(ctx context.Context) {
@@ -143,8 +149,13 @@ func (a *App) showMainWindow(ctx context.Context) {
 }
 
 func (a *App) shutdown(_ context.Context) {
-	a.muse.Close()
-	a.account.Close()
+	// Stop waiting on Flow/Muse calls first: their journals keep the jobs
+	// resumable, while the browsers and proxy bridges they use close below.
+	if n := a.requests.CancelAll(); n > 0 {
+		logger.Get().Info("cancelled running requests on shutdown", "count", n)
+	}
+	a.providers.Close()
+	a.accounts.Close()
 	logger.Get().Info("shutting down")
 	_ = logger.Close()
 }
@@ -183,38 +194,74 @@ func (a *App) UpdateConfig(newCfg config.AppConfig) models.Response[config.AppCo
 	return res
 }
 
-// LaunchLoginBrowser launches a dedicated Chrome instance for Google sign-in.
-func (a *App) LaunchLoginBrowser(sessionID string) models.Response[session.LoginProcessInfo] {
-	return logged("LaunchLoginBrowser", a.account.LaunchLoginBrowser(a.ctx, sessionID))
+// GetAccounts lists every provider's accounts in saved order.
+func (a *App) GetAccounts() models.Response[[]accounts.Account] {
+	return logged("GetAccounts", a.accounts.List(""))
 }
 
-// OpenAccountBrowser launches Chrome with a specific account's saved profile directory.
-func (a *App) OpenAccountBrowser(id string) models.Response[session.LoginProcessInfo] {
-	return logged("OpenAccountBrowser", a.account.OpenAccountBrowser(a.ctx, id))
+// AddAccount saves an account and opens Chrome on the provider's page to sign in.
+func (a *App) AddAccount(provider accounts.Provider, name string) models.Response[accounts.Account] {
+	return logged("AddAccount", a.accounts.Add(a.ctx, provider, name))
 }
 
-// CheckLoginStatus queries the Chrome CDP port to report browser connection and page status.
-func (a *App) CheckLoginStatus(sessionID string) models.Response[session.LoginStatusInfo] {
-	return a.account.CheckLoginStatus(a.ctx, sessionID)
+// ImportAccountCookies saves an account from cookies exported on a signed-in page.
+func (a *App) ImportAccountCookies(provider accounts.Provider, name, cookies string) models.Response[accounts.Account] {
+	return logged("ImportAccountCookies", a.accounts.ImportCookies(provider, name, cookies))
 }
 
-func (a *App) CancelLogin(sessionID string) models.Response[bool] {
-	return logged("CancelLogin", a.account.CancelLogin(sessionID))
+// ReplaceAccountCookies stores a new cookie export for an existing account.
+func (a *App) ReplaceAccountCookies(id, cookies string) models.Response[accounts.Account] {
+	return logged("ReplaceAccountCookies", a.accounts.ReplaceCookies(id, cookies))
 }
 
-// GetAccounts returns the list of saved accounts.
-func (a *App) GetAccounts() models.Response[[]session.AccountProfile] {
-	return logged("GetAccounts", a.account.GetAccounts(a.ctx))
+// CheckAccount confirms an account's session and reads its usage.
+func (a *App) CheckAccount(id string) models.Response[accounts.Account] {
+	return logged("CheckAccount", a.accounts.Check(a.ctx, id))
 }
 
-// RemoveAccount deletes an account by id.
+// OpenAccountBrowser shows the account's Chrome on its provider's page.
+func (a *App) OpenAccountBrowser(id string) models.Response[accounts.Account] {
+	return logged("OpenAccountBrowser", a.accounts.OpenBrowser(a.ctx, id))
+}
+
+// RenameAccount changes an account's label.
+func (a *App) RenameAccount(id, name string) models.Response[accounts.Account] {
+	return logged("RenameAccount", a.accounts.Rename(id, name))
+}
+
+// SetAccountEnabled includes or excludes an account from work.
+func (a *App) SetAccountEnabled(id string, enabled bool) models.Response[accounts.Account] {
+	return logged("SetAccountEnabled", a.accounts.SetEnabled(id, enabled))
+}
+
+// SetAccountProxy assigns a proxy to an account ("" picks from the list, "none" goes direct).
+func (a *App) SetAccountProxy(id, proxyLine string) models.Response[accounts.Account] {
+	return logged("SetAccountProxy", a.accounts.SetProxy(id, proxyLine))
+}
+
+// RotateAccountIP asks an account's rotating proxy for a new IP.
+func (a *App) RotateAccountIP(id string) models.Response[proxy.CheckResult] {
+	return logged("RotateAccountIP", a.accounts.RotateIP(a.ctx, id))
+}
+
+// RemoveAccount deletes an account and its Chrome profile.
 func (a *App) RemoveAccount(id string) models.Response[bool] {
-	return logged("RemoveAccount", a.account.RemoveAccount(a.ctx, id))
+	return logged("RemoveAccount", a.accounts.Remove(id))
 }
 
-// RefreshAccount queries latest credits and cookies from the active Flow tab.
-func (a *App) RefreshAccount(id string) models.Response[session.AccountProfile] {
-	return logged("RefreshAccount", a.account.RefreshAccount(a.ctx, id))
+// GetProxies returns the shared proxy list.
+func (a *App) GetProxies() models.Response[string] {
+	return a.accounts.Proxies()
+}
+
+// SaveProxies replaces the shared proxy list.
+func (a *App) SaveProxies(text string) models.Response[bool] {
+	return logged("SaveProxies", a.accounts.SaveProxies(text))
+}
+
+// CheckProxies tests every proxy in the list.
+func (a *App) CheckProxies() models.Response[[]proxy.CheckResult] {
+	return logged("CheckProxies", a.accounts.CheckProxies(a.ctx))
 }
 
 // GetImageModels queries available image generation models from Google Flow using the rotated account pool.
@@ -278,13 +325,8 @@ func (a *App) ChooseImageOutputDirectory(defaultDir string) models.Response[medi
 	if dir == "" {
 		return models.SuccessResponse(media.DirectoryResult{Canceled: true})
 	}
+	a.media.AllowRoot(dir)
 	return models.SuccessResponse(media.DirectoryResult{Path: dir})
-}
-
-// SaveImageToTaskFolder saves one generated image under the selected root and
-// its prompt-batch folder.
-func (a *App) SaveImageToTaskFolder(localURL, outputDir, taskID string) models.Response[media.SaveResult] {
-	return a.media.SaveImageToTaskFolder(localURL, outputDir, taskID)
 }
 
 // GetStudioConfig returns the choices and limits shared by the Flow studios.
@@ -301,11 +343,6 @@ func (a *App) ListFlowImageProjects(mode flow.ImageProjectMode) models.Response[
 // ListFlowProjectImages lists image files in one Flow project.
 func (a *App) ListFlowProjectImages(accountID, projectID string, mode flow.ImageProjectMode) models.Response[[]flow.FlowProjectImage] {
 	return logged("ListProjectImages", a.flow.ListProjectImages(a.ctx, accountID, projectID, mode))
-}
-
-// GetFlowProjectImageReference downloads one Flow project image for generation.
-func (a *App) GetFlowProjectImageReference(accountID, projectID string, mode flow.ImageProjectMode, mediaID string) models.Response[flow.FlowProjectImageReference] {
-	return logged("GetProjectImageReference", a.flow.GetProjectImageReference(a.ctx, accountID, projectID, mode, mediaID))
 }
 
 // GetVideoModels lists the text-to-video model families of the next account in rotation.
@@ -334,12 +371,12 @@ func (a *App) ListPendingVideoGenerations() models.Response[[]flow.GeneratedVide
 
 // PickVideo asks the user for a video file and copies it into the media folder.
 func (a *App) PickVideo() models.Response[media.ImportResult] {
-	patterns := make([]string, 0, len(media.VideoTypes))
-	for ext := range media.VideoTypes {
-		patterns = append(patterns, "*"+ext)
+	extensions := a.flow.SourceVideoExtensions()
+	patterns := make([]string, len(extensions))
+	for i, ext := range extensions {
+		patterns[i] = "*" + ext
 	}
-	slices.Sort(patterns)
-	return a.media.ImportVideo(func() (string, error) {
+	return a.media.ImportVideo(extensions, func() (string, error) {
 		return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 			Title:   "Chọn video gốc",
 			Filters: []runtime.FileFilter{{DisplayName: "Video", Pattern: strings.Join(patterns, ";")}},
@@ -369,6 +406,21 @@ func (a *App) ListNodes() models.Response[[]engine.Spec] {
 	return models.SuccessResponse(a.nodes.Specs())
 }
 
+// GetNodeOptions lists the choices of a node setting (Param.OptionsFrom),
+// read from the provider; selected holds the node's other settings.
+func (a *App) GetNodeOptions(source string, selected map[string]string) models.Response[[]engine.Option] {
+	return logged("GetNodeOptions", engine.Respond(a.nodes.Options(a.ctx, source, selected)))
+}
+
+// RunGraph runs a node graph and reports each node's outcome. CancelGeneration
+// with the graph's RequestID stops it; jobs a provider already accepted keep
+// running and are reported as pending.
+func (a *App) RunGraph(g engine.Graph) models.Response[engine.GraphResult] {
+	ctx, done := a.requests.Start(a.ctx, g.RequestID)
+	defer done()
+	return logged("RunGraph", engine.Respond(a.nodes.RunGraph(ctx, g)))
+}
+
 // ListVideoEditJobs exposes the persisted edit journal for explicit recovery.
 func (a *App) ListVideoEditJobs() models.Response[[]flow.GeneratedVideoItem] {
 	return logged("ListVideoEditJobs", a.flow.ListVideoEditJobs(a.ctx))
@@ -388,56 +440,83 @@ func (a *App) CancelGeneration(requestID string) models.Response[bool] {
 	return models.SuccessResponse(a.requests.Cancel(requestID))
 }
 
-// GetMuseOptions returns the ratios and limits of the Muse create screen.
+// GetMuseOptions returns what the Muse create screens may offer, as read from Muse.
 func (a *App) GetMuseOptions() models.Response[muse.MuseOptions] {
 	return a.muse.GetOptions()
 }
 
-// GetMuseAccounts lists saved Muse accounts.
-func (a *App) GetMuseAccounts() models.Response[[]muse.MuseAccount] {
-	return logged("GetMuseAccounts", a.muse.GetAccounts())
+// GetFlowImageTasks lists the image queue (Ảnh → All).
+func (a *App) GetFlowImageTasks() models.Response[flow.ImageQueueState] {
+	return logged("GetFlowImageTasks", a.flow.ListImageTasks())
 }
 
-// AddMuseAccount saves a Muse account and opens Chrome for the user to sign in.
-func (a *App) AddMuseAccount(name string) models.Response[muse.MuseAccount] {
-	return logged("AddMuseAccount", a.muse.AddAccount(a.ctx, name))
+// SubmitFlowImageTasks queues one image task per prompt.
+func (a *App) SubmitFlowImageTasks(req flow.ImageTaskRequest) models.Response[[]flow.ImageTask] {
+	return logged("SubmitFlowImageTasks", a.flow.SubmitImageTasks(req))
 }
 
-// ImportMuseCookies saves a Muse account from cookies exported on muse.ai.
-func (a *App) ImportMuseCookies(name, cookies string) models.Response[muse.MuseAccount] {
-	return logged("ImportMuseCookies", a.muse.ImportCookies(name, cookies))
+// RunFlowImageTasks starts held tasks (all when ids is empty).
+func (a *App) RunFlowImageTasks(ids []string) models.Response[int] {
+	return logged("RunFlowImageTasks", a.flow.RunImageTasks(ids))
 }
 
-// ReplaceMuseCookies stores a new cookie export for an existing Muse account.
-func (a *App) ReplaceMuseCookies(id, cookies string) models.Response[muse.MuseAccount] {
-	return logged("ReplaceMuseCookies", a.muse.ReplaceCookies(id, cookies))
+// HoldFlowImageTasks pauses queued tasks (all when ids is empty).
+func (a *App) HoldFlowImageTasks(ids []string) models.Response[int] {
+	return logged("HoldFlowImageTasks", a.flow.HoldImageTasks(ids))
 }
 
-// CheckMuseAccount confirms an account's Muse session and reads its quota.
-func (a *App) CheckMuseAccount(id string) models.Response[muse.MuseAccount] {
-	return logged("CheckMuseAccount", a.muse.CheckAccount(a.ctx, id))
+// CancelFlowImageTask stops a queued or running task.
+func (a *App) CancelFlowImageTask(id string) models.Response[flow.ImageTask] {
+	return logged("CancelFlowImageTask", a.flow.CancelImageTask(id))
 }
 
-// OpenMuseAccountBrowser shows the account's Chrome on muse.ai.
-func (a *App) OpenMuseAccountBrowser(id string) models.Response[muse.MuseAccount] {
-	return logged("OpenMuseAccountBrowser", a.muse.OpenAccountBrowser(a.ctx, id))
+// RetryFlowImageTasks queues failed or cancelled tasks again.
+func (a *App) RetryFlowImageTasks(ids []string) models.Response[int] {
+	return logged("RetryFlowImageTasks", a.flow.RetryImageTasks(ids))
 }
 
-// SetMuseAccountEnabled includes or excludes an account from the Muse queue.
-func (a *App) SetMuseAccountEnabled(id string, enabled bool) models.Response[muse.MuseAccount] {
-	return logged("SetMuseAccountEnabled", a.muse.SetAccountEnabled(id, enabled))
+// RemoveFlowImageTasks deletes tasks that are not running.
+func (a *App) RemoveFlowImageTasks(ids []string) models.Response[int] {
+	return logged("RemoveFlowImageTasks", a.flow.RemoveImageTasks(ids))
 }
 
-// RemoveMuseAccount deletes a Muse account and its Chrome profile.
-func (a *App) RemoveMuseAccount(id string) models.Response[bool] {
-	return logged("RemoveMuseAccount", a.muse.RemoveAccount(id))
+// ClearFinishedFlowImageTasks deletes the succeeded tasks.
+func (a *App) ClearFinishedFlowImageTasks() models.Response[int] {
+	return logged("ClearFinishedFlowImageTasks", a.flow.ClearFinishedImageTasks())
+}
+
+// AddFlowImageTaskReferences adds references to tasks that have not sent a request.
+func (a *App) AddFlowImageTaskReferences(ids []string, refs []flow.ImageTaskReference) models.Response[int] {
+	return logged("AddFlowImageTaskReferences", a.flow.AddImageTaskReferences(ids, refs))
+}
+
+// PickFlowImageReferences asks the user for reference images and imports them.
+func (a *App) PickFlowImageReferences() models.Response[[]flow.ImageTaskReference] {
+	paths, err := runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:   "Chọn ảnh tham chiếu",
+		Filters: []runtime.FileFilter{{DisplayName: "Ảnh Flow nhận", Pattern: strings.Join(a.flow.ReferenceFilePatterns(), ";")}},
+	})
+	if err != nil {
+		return models.ErrorResponse[[]flow.ImageTaskReference]("Không mở được hộp thoại chọn ảnh: "+err.Error(), models.CodeInternal)
+	}
+	return logged("PickFlowImageReferences", a.flow.ImportImageReferences(paths))
+}
+
+// ImportFlowProjectImageReference copies one Flow project image for use as a queue reference.
+func (a *App) ImportFlowProjectImageReference(accountID, projectID string, mode flow.ImageProjectMode, mediaID string) models.Response[flow.ImageTaskReference] {
+	return logged("ImportFlowProjectImageReference", a.flow.ImportProjectImageReference(a.ctx, accountID, projectID, mode, mediaID))
 }
 
 // PickMuseReferences asks the user for reference images and imports them.
 func (a *App) PickMuseReferences() models.Response[[]muse.MuseReference] {
+	patterns := a.muse.ImageFilePatterns()
+	if len(patterns) == 0 {
+		// Muse's limits are read with the account; without them nothing can be checked.
+		return a.muse.ImportReferences(nil)
+	}
 	paths, err := runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{
 		Title:   "Chọn ảnh tham chiếu",
-		Filters: []runtime.FileFilter{{DisplayName: "Ảnh", Pattern: strings.Join(muse.LocalImageTypes(), ";")}},
+		Filters: []runtime.FileFilter{{DisplayName: "Ảnh Muse nhận", Pattern: strings.Join(patterns, ";")}},
 	})
 	if err != nil {
 		return models.ErrorResponse[[]muse.MuseReference]("Không mở được hộp thoại chọn ảnh: "+err.Error(), models.CodeInternal)
@@ -475,19 +554,19 @@ func (a *App) RunMuseJobs(ids []string) models.Response[int] {
 	return logged("RunMuseJobs", a.muse.RunJobs(ids))
 }
 
-// HoldMuseQueued puts all queued jobs on hold.
-func (a *App) HoldMuseQueued() models.Response[int] {
-	return logged("HoldMuseQueued", a.muse.HoldQueued())
+// HoldMuseQueued puts the queued jobs of kind (all when empty) on hold.
+func (a *App) HoldMuseQueued(kind muse.MuseJobKind) models.Response[int] {
+	return logged("HoldMuseQueued", a.muse.HoldQueued(kind))
 }
 
-// RetryMuseFailed restarts all failed or cancelled jobs.
-func (a *App) RetryMuseFailed() models.Response[int] {
-	return logged("RetryMuseFailed", a.muse.RetryFailed())
+// RetryMuseFailed restarts the failed or cancelled jobs of kind (all when empty).
+func (a *App) RetryMuseFailed(kind muse.MuseJobKind) models.Response[int] {
+	return logged("RetryMuseFailed", a.muse.RetryFailed(kind))
 }
 
-// ClearMuseFinished clears all succeeded jobs from the queue.
-func (a *App) ClearMuseFinished() models.Response[int] {
-	return logged("ClearMuseFinished", a.muse.ClearFinished())
+// ClearMuseFinished clears the succeeded jobs of kind (all when empty) from the queue.
+func (a *App) ClearMuseFinished(kind muse.MuseJobKind) models.Response[int] {
+	return logged("ClearMuseFinished", a.muse.ClearFinished(kind))
 }
 
 // RemoveMuseJobs deletes multiple jobs from the queue.
@@ -510,102 +589,12 @@ func (a *App) RevealMuseFile(path string) models.Response[bool] {
 	return logged("RevealMuseFile", a.muse.RevealFile(path))
 }
 
-// GetMuseProxies returns the raw proxy list text.
-func (a *App) GetMuseProxies() models.Response[string] {
-	return a.muse.GetProxies()
+// ListMuseLibrary lists every file finished Muse jobs made, newest first.
+func (a *App) ListMuseLibrary() models.Response[[]muse.MuseLibraryItem] {
+	return logged("ListMuseLibrary", a.muse.ListLibrary())
 }
 
-// SaveMuseProxies saves the raw proxy list text.
-func (a *App) SaveMuseProxies(text string) models.Response[bool] {
-	return logged("SaveMuseProxies", a.muse.SaveProxies(text))
-}
-
-// CheckMuseProxies tests all proxies in the list.
-func (a *App) CheckMuseProxies() models.Response[[]muse.ProxyCheckResult] {
-	return logged("CheckMuseProxies", a.muse.CheckProxies(a.ctx))
-}
-
-// SetMuseAccountProxy configures a specific proxy for an account ("" for auto, "none" for direct).
-func (a *App) SetMuseAccountProxy(id, proxyLine string) models.Response[muse.MuseAccount] {
-	return logged("SetMuseAccountProxy", a.muse.SetAccountProxy(id, proxyLine))
-}
-
-// RotateMuseAccountIP requests a new IP for a rotating proxy assigned to an account.
-func (a *App) RotateMuseAccountIP(id string) models.Response[muse.ProxyCheckResult] {
-	return logged("RotateMuseAccountIP", a.muse.RotateAccountIP(a.ctx, id))
-}
-
-// GetMuseStudio returns studio projects, tagged assets and templates.
-func (a *App) GetMuseStudio() models.Response[muse.StudioData] {
-	return a.muse.GetStudio()
-}
-
-// SaveMuseStudio saves studio projects, tagged assets and templates.
-func (a *App) SaveMuseStudio(data muse.StudioData) models.Response[bool] {
-	return logged("SaveMuseStudio", a.muse.SaveStudio(data))
-}
-
-// CreateMuseStudioProject creates a new studio project.
-func (a *App) CreateMuseStudioProject(name string) models.Response[muse.StudioProject] {
-	return logged("CreateMuseStudioProject", a.muse.CreateStudioProject(name))
-}
-
-// SetMuseProjectPaused pauses or resumes execution for a project.
-func (a *App) SetMuseProjectPaused(id string, paused bool) models.Response[bool] {
-	return logged("SetMuseProjectPaused", a.muse.SetProjectPaused(id, paused))
-}
-
-// SetMuseActiveProject sets the current active project.
-func (a *App) SetMuseActiveProject(id string) models.Response[bool] {
-	return logged("SetMuseActiveProject", a.muse.SetActiveProject(id))
-}
-
-// AddMuseStudioAsset adds a tagged reference image asset to the studio.
-func (a *App) AddMuseStudioAsset(asset muse.StudioAsset) models.Response[muse.StudioAsset] {
-	return logged("AddMuseStudioAsset", a.muse.AddStudioAsset(asset))
-}
-
-// RemoveMuseStudioAsset removes an asset from the studio.
-func (a *App) RemoveMuseStudioAsset(id string) models.Response[bool] {
-	return logged("RemoveMuseStudioAsset", a.muse.RemoveStudioAsset(id))
-}
-
-// UpdateMuseStudioAsset modifies an existing asset in the studio.
-func (a *App) UpdateMuseStudioAsset(asset muse.StudioAsset) models.Response[muse.StudioAsset] {
-	return logged("UpdateMuseStudioAsset", a.muse.UpdateStudioAsset(asset))
-}
-
-// MergeMuseVideos combines multiple video files into one output.
-func (a *App) MergeMuseVideos(videoPaths []string, customName string) models.Response[string] {
-	return logged("MergeMuseVideos", a.muse.MergeVideos(a.ctx, videoPaths, customName))
-}
-
-// SubmitMuseProduction queues a new multi-scene production.
-func (a *App) SubmitMuseProduction(prod muse.Production) models.Response[muse.Production] {
-	return logged("SubmitMuseProduction", a.muse.SubmitProduction(prod))
-}
-
-// ListMuseProductions returns all saved productions.
-func (a *App) ListMuseProductions() models.Response[[]muse.Production] {
-	return a.muse.ListProductions()
-}
-
-// ApproveMuseProductionBoard approves a storyboard under review.
-func (a *App) ApproveMuseProductionBoard(id string) models.Response[bool] {
-	return logged("ApproveMuseProductionBoard", a.muse.ApproveProductionBoard(id))
-}
-
-// RetryMuseProduction restarts failed stages of a production.
-func (a *App) RetryMuseProduction(id string) models.Response[bool] {
-	return logged("RetryMuseProduction", a.muse.RetryProduction(id))
-}
-
-// RedrawMuseProductionBoard clears current storyboard and draws again.
-func (a *App) RedrawMuseProductionBoard(id string) models.Response[bool] {
-	return logged("RedrawMuseProductionBoard", a.muse.RedrawProductionBoard(id))
-}
-
-// RemoveMuseProduction removes a production from queue.
-func (a *App) RemoveMuseProduction(id string) models.Response[bool] {
-	return logged("RemoveMuseProduction", a.muse.RemoveProduction(id))
+// RemoveMuseLibraryItems forgets library items; their files stay on disk.
+func (a *App) RemoveMuseLibraryItems(ids []string) models.Response[int] {
+	return logged("RemoveMuseLibraryItems", a.muse.RemoveLibraryItems(ids))
 }

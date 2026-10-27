@@ -7,6 +7,6 @@ import { SingleModePanel } from './single/SingleModePanel';
  * New tab = one folder with its panel + one entry here.
  */
 export const IMAGE_MODES = [
-  { value: 'single', label: 'Single', content: <SingleModePanel /> },
-  { value: 'all', label: 'All', content: <AllModePanel /> },
+  { value: 'single', label: 'Đơn', content: <SingleModePanel /> },
+  { value: 'all', label: 'Hàng loạt', content: <AllModePanel /> },
 ] as const satisfies readonly TabItem<string>[];

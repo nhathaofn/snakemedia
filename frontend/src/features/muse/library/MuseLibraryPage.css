@@ -42,13 +42,13 @@
     border-color 0.15s ease;
 }
 
-.muse-lib-item:hover {
-  border-color: var(--primary);
+.muse-lib-item {
+  content-visibility: auto;
+  contain-intrinsic-size: auto var(--muse-lib-item-placeholder-height);
 }
 
-.muse-lib-item.selected {
+.muse-lib-item:hover {
   border-color: var(--primary);
-  box-shadow: 0 0 0 2px var(--feedback-primary-border);
 }
 
 .muse-lib-preview-box {
@@ -66,16 +66,6 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-}
-
-.muse-lib-check {
-  position: absolute;
-  top: 0.5rem;
-  left: 0.5rem;
-  z-index: 2;
-  cursor: pointer;
-  width: 1.125rem;
-  height: 1.125rem;
 }
 
 .muse-lib-badge {

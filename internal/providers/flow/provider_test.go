@@ -34,16 +34,26 @@ func TestFlowServiceRotatesOnlyVerifiedAccounts(t *testing.T) {
 	}
 	var order []string
 	for i := 0; i < 4; i++ {
-		acc, err := service.NextAccount()
+		_, lease, err := service.reserveLeastBusy(mustValid(t, service))
 		if err != nil {
 			t.Fatal(err)
 		}
-		order = append(order, acc.ID)
+		order = append(order, lease.id)
+		lease.release()
 	}
 	want := []string{first.ID, second.ID, first.ID, second.ID}
 	if strings.Join(order, ",") != strings.Join(want, ",") {
 		t.Fatalf("rotation order %v, want %v", order, want)
 	}
+}
+
+func mustValid(t *testing.T, service *Provider) []session.StoredAccount {
+	t.Helper()
+	valid, err := service.GetValidConnectedAccounts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return valid
 }
 
 func TestFlowServiceRequiresAccounts(t *testing.T) {
@@ -79,8 +89,8 @@ func TestGetImageModelsCachesPerAccountWithoutTakingATurn(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("expected one live fetch within the cache window, got %d", calls)
 	}
-	if next, err := service.NextAccount(); err != nil || next.ID != first.ID {
-		t.Fatalf("reading models consumed a rotation turn: %v %v", next, err)
+	if _, lease, err := service.reserveLeastBusy(mustValid(t, service)); err != nil || lease.id != first.ID {
+		t.Fatalf("reading models consumed a rotation turn: %v", err)
 	}
 }
 
@@ -112,7 +122,7 @@ func TestGenerateImagesRejectsIncompleteRequests(t *testing.T) {
 		"missing ratio":   func(r *GenerateImageRequest) { r.AspectRatio = "" },
 		"invalid quality": func(r *GenerateImageRequest) { r.Quality = "8K" },
 		"zero count":      func(r *GenerateImageRequest) { r.Count = 0 },
-		"too many":        func(r *GenerateImageRequest) { r.Count = MaxImagesPerRequest + 1 },
+		"too many":        func(r *GenerateImageRequest) { r.Count = maxImagesPerRequest() + 1 },
 		"invalid project": func(r *GenerateImageRequest) { r.ProjectID = "default" },
 		"reference not img": func(r *GenerateImageRequest) {
 			r.References = []ReferenceImage{{Base64: "AAAA", MimeType: "text/plain", FileName: "a.txt"}}
@@ -124,7 +134,7 @@ func TestGenerateImagesRejectsIncompleteRequests(t *testing.T) {
 			r.References = []ReferenceImage{{MimeType: "image/png", FileName: "a.png"}}
 		},
 		"reference too big": func(r *GenerateImageRequest) {
-			r.References = []ReferenceImage{{Base64: strings.Repeat("A", MaxReferenceImageBytes/3*4+8), MimeType: "image/png", FileName: "a.png"}}
+			r.References = []ReferenceImage{{Base64: strings.Repeat("A", maxReferenceImageBytes()/3*4+8), MimeType: "image/png", FileName: "a.png"}}
 		},
 	}
 	for name, mutate := range cases {
@@ -258,7 +268,7 @@ func TestResolveProjectCreatesOneWhenAccountHasNone(t *testing.T) {
 	})
 
 	service := testFlowService(accounts)
-	client, err := chrome.NewFlowClient(stored.Credentials, config.DefaultAccountConfig())
+	client, err := chrome.NewFlowClient(stored.Credentials, config.DefaultFlowPagePolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +353,7 @@ func TestNodesRunTheProviderCapabilities(t *testing.T) {
 		return []FlowModel{{ID: "BELUGA", Name: "Nano Banana 2.1"}}, nil
 	}
 	service.generateLiveImages = func(_ context.Context, _ session.StoredAccount, req GenerateImageRequest) ([]GeneratedImageItem, error) {
-		return []GeneratedImageItem{{ID: "img", Prompt: req.Prompt}}, nil
+		return []GeneratedImageItem{{ID: "img", Prompt: req.Prompt, LocalURL: "/flow-media/img.png"}}, nil
 	}
 	nodes := map[string]engine.Node{}
 	for _, n := range service.Nodes() {
@@ -358,7 +368,7 @@ func TestNodesRunTheProviderCapabilities(t *testing.T) {
 	}
 
 	out, err := nodes[NodeImageGenerate].Run(context.Background(), json.RawMessage(`{"prompt":"a fox","modelId":"BELUGA","aspectRatio":"1:1","count":1}`))
-	if err != nil || out.([]GeneratedImageItem)[0].Prompt != "a fox" {
+	if res, ok := out.(ImageNodeOutput); err != nil || !ok || len(res.Images) != 1 || res.Images[0].LocalURL != "/flow-media/img.png" {
 		t.Fatalf("image node did not run the provider: %+v %v", out, err)
 	}
 	_, err = nodes[NodeImageGenerate].Run(context.Background(), json.RawMessage(`{"prompt":"a fox"}`))

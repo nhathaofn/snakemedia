@@ -6,9 +6,6 @@ import type { SegmentedOption } from '../components/ui/SegmentedControl/Segmente
 /** Default auto-dismiss delay for toasts; 0 keeps a toast until dismissed. */
 export const DEFAULT_TOAST_DURATION_MS = 4000;
 
-/** The Account page re-verifies, on open, accounts last verified longer ago than this. */
-export const ACCOUNT_AUTO_REFRESH_AFTER_MS = 60_000;
-
 /**
  * How long a Flow catalogue or account count is reused between panels that
  * mount together (Single and All tabs), so the same request is not sent twice.
@@ -43,3 +40,12 @@ export const LOG_LEVEL_OPTIONS: readonly SegmentedOption<LogLevel>[] = [
 export const WINDOW_SCALE_OPTIONS: readonly SegmentedOption<string>[] = [
   0.5, 0.6, 0.7, 0.8, 0.9, 1,
 ].map((scale) => ({ value: String(scale), label: `${Math.round(scale * 100)}%` }));
+
+/** Items a long list (Muse queue, library) shows per step as the user scrolls. */
+export const LIST_REVEAL_STEP = 40;
+
+/** Accounts checked at once by "Kiểm tra tất cả"; each check may start a browser. */
+export const ACCOUNT_CHECK_CONCURRENCY = 3;
+
+/** Largest "repeat each prompt" a batch form accepts, so a typo cannot queue hundreds of paid jobs. */
+export const BATCH_MAX_REPEAT = 20;

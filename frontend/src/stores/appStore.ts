@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { DEFAULT_TOAST_DURATION_MS } from '../constants';
-import type { AppConfig, AppInfo, SystemInfo, ToastNotification } from '../types';
+import type { AppConfig, AppInfo, ToastNotification } from '../types';
 
 interface AppState {
   // Backend-sourced state (null until loaded by useAppBootstrap)
@@ -8,8 +8,6 @@ interface AppState {
   setAppInfo: (info: AppInfo) => void;
   config: AppConfig | null;
   setConfig: (cfg: AppConfig) => void;
-  systemInfo: SystemInfo | null;
-  setSystemInfo: (info: SystemInfo) => void;
 
   // Sidebar navigation state
   sidebarCollapsed: boolean;
@@ -27,8 +25,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   setAppInfo: (appInfo) => set({ appInfo }),
   config: null,
   setConfig: (config) => set({ config }),
-  systemInfo: null,
-  setSystemInfo: (systemInfo) => set({ systemInfo }),
 
   sidebarCollapsed: false,
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),

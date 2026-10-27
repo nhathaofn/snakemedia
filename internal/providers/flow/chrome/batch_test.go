@@ -29,7 +29,7 @@ func TestFlowRequestAcceptedButReplyLost(t *testing.T) {
 	}
 	credentials := flowTestCredentials()
 	credentials.Cookies = []CookieItem{{Name: "SID", Value: "fake-session", Domain: origin.Hostname(), Path: "/"}}
-	client, err := newFlowClient(server.URL, credentials, config.DefaultAccountConfig())
+	client, err := newFlowClient(server.URL, credentials, config.DefaultFlowPagePolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestFlowClientSendsRuntimeSessionContext(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(`)]}'` + "\n[]")), Request: r}, nil
 	})
 
-	client, err := NewFlowClient(c, config.DefaultAccountConfig())
+	client, err := NewFlowClient(c, config.DefaultFlowPagePolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestFlowClientReportsHTTPStatusWithBody(t *testing.T) {
 		header := http.Header{"Retry-After": {"7"}}
 		return &http.Response{StatusCode: http.StatusTooManyRequests, Header: header, Body: io.NopCloser(strings.NewReader("PUBLIC_ERROR_UNUSUAL_ACTIVITY")), Request: r}, nil
 	})
-	client, err := NewFlowClient(flowTestCredentials(), config.DefaultAccountConfig())
+	client, err := NewFlowClient(flowTestCredentials(), config.DefaultFlowPagePolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,12 +124,12 @@ func TestFlowClientReportsHTTPStatusWithBody(t *testing.T) {
 func TestFlowClientRequiresSessionValues(t *testing.T) {
 	c := flowTestCredentials()
 	c.SessionID = ""
-	if _, err := NewFlowClient(c, config.DefaultAccountConfig()); err == nil {
+	if _, err := NewFlowClient(c, config.DefaultFlowPagePolicy()); err == nil {
 		t.Fatal("expected missing session values to be rejected")
 	}
 	c = flowTestCredentials()
 	c.Cookies = c.Cookies[1:]
-	if _, err := NewFlowClient(c, config.DefaultAccountConfig()); err == nil {
+	if _, err := NewFlowClient(c, config.DefaultFlowPagePolicy()); err == nil {
 		t.Fatal("expected a session without provider cookies to be rejected")
 	}
 }
@@ -150,7 +150,7 @@ func TestFlowClientFetchMedia(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {contentType}}, Body: io.NopCloser(strings.NewReader("PNG")), Request: r}, nil
 	})
-	client, err := NewFlowClient(flowTestCredentials(), config.DefaultAccountConfig())
+	client, err := NewFlowClient(flowTestCredentials(), config.DefaultFlowPagePolicy())
 	if err != nil {
 		t.Fatal(err)
 	}

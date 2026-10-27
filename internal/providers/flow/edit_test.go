@@ -68,6 +68,17 @@ func TestEditModelsComeFromVideoInputUsages(t *testing.T) {
 	if _, _, err := selectEditVariant(families[1], 1, 2); err == nil {
 		t.Fatal("Veo Fast has no edit usage")
 	}
+	// A quality the app has never seen is still taken when the catalogue lists it.
+	unknown := only360
+	unknown.usages = slices.Clone(only360.usages)
+	for i := range unknown.usages {
+		if unknown.usages[i].key == "abra_edit_360p" {
+			unknown.usages[i].resolutions = []int{9}
+		}
+	}
+	if u, resolution, err := selectEditVariant(unknown, 1, 1); err != nil || u.key != "abra_edit_360p" || resolution != 9 {
+		t.Fatalf("catalogue quality not used: %q at %d: %v", u.key, resolution, err)
+	}
 }
 
 func TestEditAspectFollowsSourceSize(t *testing.T) {
@@ -130,7 +141,7 @@ func TestEditVideosValidatesAndSelectsVariant(t *testing.T) {
 	if err := os.WriteFile(src, []byte("MP4"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	imported := service.media.ImportVideo(func() (string, error) { return src, nil })
+	imported := service.media.ImportVideo(service.SourceVideoExtensions(), func() (string, error) { return src, nil })
 	if !imported.Success {
 		t.Fatal(imported.Error)
 	}
@@ -187,7 +198,7 @@ func TestUploadedSourceKeepsOwnershipAcrossRotationAndRestart(t *testing.T) {
 	if err := os.WriteFile(src, []byte("MP4"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	imported := service.media.ImportVideo(func() (string, error) { return src, nil })
+	imported := service.media.ImportVideo(service.SourceVideoExtensions(), func() (string, error) { return src, nil })
 	if !imported.Success {
 		t.Fatal(imported.Error)
 	}
@@ -202,7 +213,9 @@ func TestUploadedSourceKeepsOwnershipAcrossRotationAndRestart(t *testing.T) {
 	}
 
 	// Other operations advance rotation, and the provider is recreated.
-	_, _ = service.NextAccount()
+	if _, lease, err := service.reserveLeastBusy(mustValid(t, service)); err == nil {
+		lease.release()
+	}
 	service = testFlowService(accounts)
 	service.fetchModelsPayload = func(context.Context, session.StoredAccount) (string, error) { return editModelsPayload, nil }
 	var passedReq EditVideoRequest

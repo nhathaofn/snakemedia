@@ -29,11 +29,17 @@ func (s *SettingsService) UpdateConfig(_ context.Context, newCfg config.AppConfi
 	updated, err := s.cfg.Update(newCfg)
 	if err != nil {
 		code := models.CodeInternal
-		if errors.Is(err, config.ErrInvalidConfig) {
+		switch {
+		case errors.Is(err, config.ErrInvalidConfig):
 			code = models.CodeInvalidArgument
+		case errors.Is(err, config.ErrConflict):
+			code = models.CodeConflict
 		}
 		logger.Get().Warn("config update rejected", "error", err)
-		return models.ErrorResponse[config.AppConfig](err.Error(), code)
+		// The current config travels with the refusal so the screen can rebase.
+		res := models.ErrorResponse[config.AppConfig](err.Error(), code)
+		res.Data = updated
+		return res
 	}
 
 	logger.SetLevel(string(updated.LogLevel))

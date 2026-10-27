@@ -1,53 +1,14 @@
 package muse
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
+	"SnakeMedia/internal/accounts"
 	"SnakeMedia/internal/config"
 )
-
-func TestParseCookiesFormats(t *testing.T) {
-	cases := map[string]struct {
-		raw   string
-		names []string
-	}{
-		"cookie-editor": {`[{"name":"sid","value":"1","domain":".muse.ai","httpOnly":true,"expirationDate":1999999999},{"name":"x","value":"2","domain":".google.com"}]`, []string{"sid"}},
-		"wrapped":       {`{"cookies":[{"name":"sid","value":"1","domain":"muse.ai"}]}`, []string{"sid"}},
-		"pairs":         {`{"sid":"1","n":2}`, []string{"n", "sid"}},
-		"netscape":      {"# Netscape\n#HttpOnly_.muse.ai\tTRUE\t/\tTRUE\t1999999999\tsid\t1\n.evil.com\tTRUE\t/\tTRUE\t0\tbad\t2", []string{"sid"}},
-		"header":        {"Cookie: sid=1; theme=dark", []string{"sid", "theme"}},
-	}
-	for name, c := range cases {
-		t.Run(name, func(t *testing.T) {
-			cookies, err := ParseCookies(c.raw)
-			if err != nil {
-				t.Fatal(err)
-			}
-			got := map[string]bool{}
-			for _, ck := range cookies {
-				if !museDomain(ck.Domain) || ck.Path == "" {
-					t.Fatalf("cookie %+v kept outside muse.ai or without path", ck)
-				}
-				got[ck.Name] = true
-			}
-			if len(got) != len(c.names) {
-				t.Fatalf("got %v, want %v", got, c.names)
-			}
-			for _, n := range c.names {
-				if !got[n] {
-					t.Fatalf("missing %s in %v", n, got)
-				}
-			}
-		})
-	}
-	for _, raw := range []string{"", "[not json", `[{"name":"a","value":"1","domain":".google.com"}]`} {
-		if _, err := ParseCookies(raw); err == nil {
-			t.Errorf("ParseCookies(%q) accepted", raw)
-		}
-	}
-}
 
 func TestParseQuota(t *testing.T) {
 	now := time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
@@ -64,8 +25,54 @@ func TestParseQuota(t *testing.T) {
 	if !q.weeklyOut() || !q.topupLeft() || !q.resetsAt().Equal(now.Add(48*time.Hour)) {
 		t.Fatalf("quota = %+v", q)
 	}
-	if (&MuseQuota{PercentUsed: 40, Status: "LOW"}).weeklyOut() || !(&MuseQuota{PercentUsed: 40, Status: "EXHAUSTED"}).weeklyOut() {
-		t.Fatal("status classification wrong")
+	if (&MuseQuota{PercentUsed: 99.5}).weeklyOut() || (&MuseQuota{TopupTotal: 5}).topupLeft() {
+		t.Fatal("quota classification wrong")
+	}
+}
+
+func TestParseQuotaKeepsMuseLabels(t *testing.T) {
+	var sub subscription
+	raw := `{"tier":{"name":"Muse Free","isPaid":false},"usage":{"state":"METERED","percentUsed":5,"resetsAt":1793556612,"quotaStatus":"SUFFICIENT"},
+		"statusSubtitle":"Weekly limit resets on Nov 1","usageRowLabel":"Free plan","usageRowValueLabel":"5% used",
+		"topupBalance":1240000000,"topupTotal":1240000000,"topupRowLabel":"Additional tokens","topupRowValueLabel":"0% used (31B tokens left)"}`
+	if err := json.Unmarshal([]byte(raw), &sub); err != nil {
+		t.Fatal(err)
+	}
+	q := parseQuota(&sub, time.Now())
+	if q.Tier != "Muse Free" || q.UsageValue != "5% used" || q.TopupValue != "0% used (31B tokens left)" || q.resetsAt().Unix() != 1793556612 {
+		t.Fatalf("quota = %+v", q)
+	}
+	items := quotaUsage(q)
+	if items[0].Label != "Free plan" || items[0].Value != "5% used" || items[2].Label != "Additional tokens" || items[3].Value != "Muse Free" {
+		t.Fatalf("usage = %+v", items)
+	}
+}
+
+func TestParseCapabilities(t *testing.T) {
+	var raw rawCapabilities
+	in := `{"upload":{"maxFileSize":41943040,"maxFilesPerUpload":10,"supportedMimeTypes":[
+		{"mimeType":"image/jpeg","extensions":[".jpg",".jpeg"],"category":"image"},
+		{"mimeType":"image/png","extensions":[".PNG"],"category":"image"},
+		{"mimeType":"video/mp4","extensions":[".mp4"],"category":"video"}]},
+		"models":{"selected_model":"auto/auto","available_models":[{"id":"auto/auto","display_name":"Auto"}]}}`
+	if err := json.Unmarshal([]byte(in), &raw); err != nil {
+		t.Fatal(err)
+	}
+	c := parseCapabilities(raw, time.Now())
+	if c.MaxFileBytes != 40<<20 || c.MaxFiles != 10 || len(c.ImageTypes) != 2 || c.Model != "auto/auto" || len(c.Models) != 1 {
+		t.Fatalf("caps = %+v", c)
+	}
+	if mime, ok := c.imageMime(".png"); !ok || mime != "image/png" {
+		t.Fatal("extension case not normalised")
+	}
+	if _, ok := c.imageMime(".mp4"); ok {
+		t.Fatal("a video type was taken as an image")
+	}
+	if got := c.extensions(); len(got) != 3 || got[0] != ".jpeg" {
+		t.Fatalf("extensions = %v", got)
+	}
+	if parseCapabilities(rawCapabilities{}, time.Now()) != nil {
+		t.Fatal("capabilities without upload limits")
 	}
 }
 
@@ -97,12 +104,12 @@ func TestPausedUntil(t *testing.T) {
 	if !pausedUntil(acc, cfg, now).IsZero() {
 		t.Fatal("top-up tokens should keep the account working")
 	}
-	cfg.KeepGoing = true
-	acc.Quota = out
-	if !pausedUntil(acc, cfg, now).IsZero() {
-		t.Fatal("keepGoing should ignore the quota")
+	cfg.UseTopup = false
+	if got := pausedUntil(acc, cfg, now); !got.Equal(reset) {
+		t.Fatalf("top-up tokens used although turned off: %v", got)
 	}
-	cfg.KeepGoing = false
+	cfg.UseTopup = true
+	acc.Quota = out
 	if !pausedUntil(acc, cfg, reset.Add(time.Minute)).IsZero() {
 		t.Fatal("a past reset makes the quota stale")
 	}
@@ -117,16 +124,16 @@ func TestPlan(t *testing.T) {
 	cfg.MaxAccounts, cfg.TotalThreads = 3, 3
 	now := time.Now()
 	acc := func(id string, pct float64) MuseAccount {
-		return MuseAccount{ID: id, Enabled: true, Status: MuseAccountSignedIn, Quota: &MuseQuota{PercentUsed: pct}}
+		return MuseAccount{ID: id, Enabled: true, Status: accounts.StatusSignedIn, Quota: &MuseQuota{PercentUsed: pct}}
 	}
-	accounts := []MuseAccount{acc("a", 80), acc("b", 10), acc("c", 50), {ID: "off", Enabled: false, Status: MuseAccountSignedIn}}
+	accounts := []MuseAccount{acc("a", 80), acc("b", 10), acc("c", 50), {ID: "off", Enabled: false, Status: accounts.StatusSignedIn}}
 	jobs := []MuseJob{
 		{ID: "q1", Status: MuseJobQueued, CreatedAt: "1"},
 		{ID: "q2", Status: MuseJobQueued, CreatedAt: "2"},
 		{ID: "sent", Status: MuseJobProcessing, SessionID: "s", AccountID: "a", CreatedAt: "0"},
 		{ID: "done", Status: MuseJobSucceeded, CreatedAt: "0"},
 	}
-	got := plan(jobs, accounts, cfg, map[string]string{}, nil, now)
+	got := plan(jobs, accounts, cfg, map[string]string{}, now)
 	want := []assignment{{"sent", "a"}, {"q1", "b"}, {"q2", "c"}}
 	if len(got) != len(want) {
 		t.Fatalf("plan = %+v", got)
@@ -138,46 +145,27 @@ func TestPlan(t *testing.T) {
 	}
 
 	cfg.Mode = config.MuseModeSequential
-	got = plan(jobs[:2], accounts, cfg, map[string]string{"x": "a"}, nil, now)
+	got = plan(jobs[:2], accounts, cfg, map[string]string{"x": "a"}, now)
 	if len(got) != 2 || got[0].accountID != "b" || got[1].accountID != "c" {
 		t.Fatalf("sequential plan = %+v", got)
 	}
 
 	cfg.TotalThreads = 1
-	if got := plan(jobs[:2], accounts, cfg, map[string]string{"x": "a"}, nil, now); len(got) != 0 {
+	if got := plan(jobs[:2], accounts, cfg, map[string]string{"x": "a"}, now); len(got) != 0 {
 		t.Fatalf("total thread limit ignored: %+v", got)
 	}
 }
 
-func TestPlanSkipsHeldAndPausedProjects(t *testing.T) {
+func TestPlanSkipsHeldJobs(t *testing.T) {
 	cfg := config.DefaultMuseConfig()
 	cfg.MaxAccounts, cfg.TotalThreads = 2, 2
-	now := time.Now()
-	accounts := []MuseAccount{{ID: "a", Enabled: true, Status: MuseAccountSignedIn}}
+	accs := []MuseAccount{{ID: "a", Enabled: true, Status: accounts.StatusSignedIn}}
 	jobs := []MuseJob{
 		{ID: "held", Status: MuseJobQueued, Held: true, CreatedAt: "1"},
-		{ID: "paused", Status: MuseJobQueued, ProjectID: "proj-p", CreatedAt: "2"},
-		{ID: "ok", Status: MuseJobQueued, ProjectID: "proj-live", CreatedAt: "3"},
+		{ID: "ok", Status: MuseJobQueued, CreatedAt: "2"},
 	}
-	got := plan(jobs, accounts, cfg, map[string]string{}, map[string]bool{"proj-p": true}, now)
+	got := plan(jobs, accs, cfg, map[string]string{}, time.Now())
 	if len(got) != 1 || got[0].jobID != "ok" {
-		t.Fatalf("expected only 'ok' job to be planned, got: %+v", got)
-	}
-}
-
-func TestPlanPinnedAccount(t *testing.T) {
-	cfg := config.DefaultMuseConfig()
-	cfg.MaxAccounts, cfg.TotalThreads = 2, 2
-	now := time.Now()
-	accounts := []MuseAccount{
-		{ID: "a", Enabled: true, Status: MuseAccountSignedIn},
-		{ID: "b", Enabled: true, Status: MuseAccountSignedIn},
-	}
-	jobs := []MuseJob{
-		{ID: "pinned", Status: MuseJobQueued, Thread: "t1", PinAccount: "b", CreatedAt: "1"},
-	}
-	got := plan(jobs, accounts, cfg, map[string]string{}, nil, now)
-	if len(got) != 1 || got[0].accountID != "b" {
-		t.Fatalf("expected pinned to 'b', got: %+v", got)
+		t.Fatalf("plan = %+v", got)
 	}
 }

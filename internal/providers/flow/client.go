@@ -4,6 +4,7 @@ import (
 	"SnakeMedia/internal/providers/flow/chrome"
 	"SnakeMedia/internal/providers/flow/session"
 	"context"
+	"sync"
 	"time"
 )
 
@@ -17,7 +18,7 @@ func (s *Provider) flowClient(ctx context.Context, acc session.StoredAccount, me
 		if browser == nil {
 			return nil, chrome.ErrPageNotReady
 		}
-		registry, err := chrome.DiscoverFlowRPCs(ctx, browser.Port, creds.BuildLabel, s.cfg.Get().Accounts, methods...)
+		registry, err := chrome.DiscoverFlowRPCs(ctx, browser.Port, creds.BuildLabel, s.cfg.Get().FlowPagePolicy(), methods...)
 		if err != nil {
 			return nil, err
 		}
@@ -33,9 +34,15 @@ func (s *Provider) flowClient(ctx context.Context, acc session.StoredAccount, me
 			return nil, err
 		}
 	}
-	client, err := chrome.NewFlowClient(creds, s.cfg.Get().Accounts)
+	// The client's own requests leave on the account's proxy, never the real IP.
+	proxyURL, err := s.accounts.ProxyURL(ctx, acc)
+	if err != nil {
+		return nil, err
+	}
+	client, err := chrome.NewFlowClient(creds, s.cfg.Get().FlowPagePolicy())
 	if err == nil {
 		client.SetUploadPolicy(s.cfg.Get().Flow)
+		client.SetProxy(proxyURL)
 	}
 	return client, err
 }
@@ -54,9 +61,15 @@ func (s *Provider) projectClient(ctx context.Context, acc session.StoredAccount,
 	if browser == nil {
 		return nil, chrome.ErrPageNotReady
 	}
-	policy := s.cfg.Get().Accounts
+	policy := s.cfg.Get().FlowPagePolicy()
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(policy.BrowserStartupTimeoutSeconds)*time.Second)
 	defer cancel()
+	// Opening the project navigates the account's Flow tab: wait until no
+	// token is being minted or request sent from it, and keep others off it
+	// until its bundles are discovered.
+	page := s.pageLock(browser.Port)
+	page.Lock()
+	defer page.Unlock()
 	if err := chrome.OpenProject(ctx, browser.Port, projectID, policy); err != nil {
 		return nil, err
 	}
@@ -100,7 +113,7 @@ func (s *Provider) projectPageClient(ctx context.Context, acc session.StoredAcco
 // headless Chrome that has just started may not have loaded those bundles yet,
 // so discovery is retried until the browser startup timeout.
 func (s *Provider) homePageClient(ctx context.Context, acc session.StoredAccount) (*chrome.FlowClient, error) {
-	policy := s.cfg.Get().Accounts
+	policy := s.cfg.Get().FlowPagePolicy()
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(policy.BrowserStartupTimeoutSeconds)*time.Second)
 	defer cancel()
 	for {
@@ -121,7 +134,9 @@ func (s *Provider) catalogueClient(ctx context.Context, acc session.StoredAccoun
 	if err == nil {
 		return client, nil
 	}
-	client, err = s.flowClient(ctx, acc, chrome.MethodProjects, chrome.MethodCreateProject)
+	// A browser that has just started has not loaded the bundles yet; the
+	// home page client waits for them.
+	client, err = s.homePageClient(ctx, acc)
 	if err != nil {
 		return nil, err
 	}
@@ -130,4 +145,12 @@ func (s *Provider) catalogueClient(ctx context.Context, acc session.StoredAccoun
 		return nil, err
 	}
 	return s.editClient(ctx, acc, project)
+}
+
+// pageLock guards the Flow tab of the account browser on port: opening a
+// project (navigation) takes it exclusively, minting a token or sending from
+// the page shares it.
+func (s *Provider) pageLock(port int) *sync.RWMutex {
+	lock, _ := s.pageLocks.LoadOrStore(port, &sync.RWMutex{})
+	return lock.(*sync.RWMutex)
 }

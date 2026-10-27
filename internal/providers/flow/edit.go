@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -44,7 +45,9 @@ const (
 	videoAspectSquare = 0
 )
 
-// flowRatios are Flow's ratios (_.KL) with the video aspect SO maps them to.
+// flowRatios is Flow's ratio table (_.KL) with the video aspect SO maps each
+// to: the wire mapping from a source video's size, not a list of what Flow
+// accepts (the catalogue's edit usages say which aspects can be edited).
 var flowRatios = []struct {
 	name   string
 	value  float64
@@ -132,22 +135,21 @@ func editModels(families []videoFamily, defaultID string, tier int) []FlowEditMo
 // editCandidates pairs each account offering video edits with the most one
 // edit can cost on its tier, the amount reserved while an edit is prepared.
 func (s *Provider) editCandidates(ctx context.Context, accounts []session.StoredAccount) []videoAccountCandidate {
-	candidates := make([]videoAccountCandidate, 0, len(accounts))
-	for _, acc := range accounts {
+	candidates, _, _ := accountChoices(ctx, accounts, func(ctx context.Context, acc session.StoredAccount) accountChoice[videoAccountCandidate] {
 		families, defaultID, err := s.videoFamiliesFor(ctx, acc)
 		if err != nil {
-			continue
+			return accountChoice[videoAccountCandidate]{catalogErr: err}
 		}
 		models := editModels(families, defaultID, accountTier(acc))
 		if len(models) == 0 {
-			continue
+			return accountChoice[videoAccountCandidate]{}
 		}
 		cost := 0
 		for _, m := range models {
 			cost = max(cost, m.MaxCredits)
 		}
-		candidates = append(candidates, videoAccountCandidate{account: acc, cost: cost})
-	}
+		return accountChoice[videoAccountCandidate]{ok: true, choice: videoAccountCandidate{account: acc, cost: cost}}
+	})
 	return candidates
 }
 
@@ -157,30 +159,11 @@ func (s *Provider) readyEditAccount(ctx context.Context, candidates []videoAccou
 	if len(candidates) == 0 {
 		return nil, nil, errors.New("không có tài khoản nào dùng được model chỉnh sửa video")
 	}
-	var skipped []string
-	for len(candidates) > 0 {
-		idx, lease, err := s.acquireVideoCandidate(ctx, candidates)
-		if err != nil {
-			return nil, nil, err
-		}
-		acc := candidates[idx].account
-		releaseProfile := s.accounts.AcquireProfile(acc.ProfileDir)
-		synced, err := s.syncSession(ctx, acc)
-		if err == nil {
-			return &synced, func() {
-				releaseProfile()
-				lease.release()
-			}, nil
-		}
-		releaseProfile()
-		lease.release()
-		if !errors.Is(err, session.ErrSessionSignedOut) {
-			return nil, nil, fmt.Errorf("không đồng bộ được phiên Flow của %s: %w", acc.Email, err)
-		}
-		skipped = append(skipped, acc.Email)
-		candidates = slices.Delete(candidates, idx, idx+1)
+	_, synced, _, release, err := readyCandidate(ctx, s, candidates, candidateAccount, s.acquireVideoCandidate)
+	if err != nil {
+		return nil, nil, err
 	}
-	return nil, nil, fmt.Errorf("các tài khoản đã đăng xuất khỏi Google (%s); hãy đăng nhập lại ở mục Tài khoản", strings.Join(skipped, ", "))
+	return &synced, release, nil
 }
 
 // editAspect maps a video's size to the aspect Flow sends for it. A video of
@@ -206,15 +189,23 @@ func editAspect(width, height int) (name string, aspect int, err error) {
 }
 
 // selectEditVariant picks the family's edit usage for the aspect, preferring
-// 720p as Flow does for uploads and falling back to the tier's other qualities.
+// 720p as Flow does for uploads (_.CP) and otherwise taking the first quality an
+// edit usage lists for the tier.
 func selectEditVariant(f videoFamily, tier, aspect int) (videoUsage, int, error) {
-	for _, name := range []string{"720p", "360p"} {
-		resolution := FlowVideoResolution[name]
-		for _, u := range f.usages {
-			if u.editVideo(tier) && slices.Contains(u.aspects, aspect) && slices.Contains(u.resolutionCodes(), resolution) {
-				return u, resolution, nil
-			}
+	var fallback *videoUsage
+	for i, u := range f.usages {
+		if !u.editVideo(tier) || !slices.Contains(u.aspects, aspect) {
+			continue
 		}
+		if slices.Contains(u.resolutionCodes(), videoResolution720p) {
+			return u, videoResolution720p, nil
+		}
+		if fallback == nil {
+			fallback = &f.usages[i]
+		}
+	}
+	if fallback != nil {
+		return *fallback, fallback.resolutionCodes()[0], nil
 	}
 	return videoUsage{}, 0, fmt.Errorf("Model %s không chỉnh sửa được video có tỉ lệ này ở gói tài khoản hiện tại.", displayName(f.name))
 }
@@ -222,7 +213,7 @@ func selectEditVariant(f videoFamily, tier, aspect int) (videoUsage, int, error)
 // GetEditModels returns the families that can edit a video for the account
 // whose turn is next.
 func (s *Provider) GetEditModels(ctx context.Context) models.Response[[]FlowEditModel] {
-	acc, err := s.pickAccount(false)
+	acc, err := s.catalogAccount()
 	if err != nil {
 		return models.ErrorResponse[[]FlowEditModel]("Không thể lấy model: "+err.Error(), models.CodeUnavailable)
 	}
@@ -303,8 +294,8 @@ func (s *Provider) UploadSourceVideo(ctx context.Context, localURL string) model
 	uploaded.AccountID = acc.ID
 	uploaded.LocalURL = localURL
 	uploaded.Video.SourceID = uploaded.ID
-	uploaded.Video.MinTrimSeconds = s.cfg.Get().Flow.MinTrimSeconds
-	uploaded.Video.TrimStepSeconds = s.cfg.Get().Flow.TrimStepSeconds
+	uploaded.Video.MinTrimSeconds = minTrimSeconds()
+	uploaded.Video.TrimStepSeconds = trimStepSeconds()
 	if err := s.saveState("sources", uploaded.ID, uploaded); err != nil {
 		return models.ErrorResponse[UploadedSourceVideo](err.Error(), models.CodeInternal)
 	}
@@ -337,11 +328,11 @@ func (s *Provider) EditVideos(ctx context.Context, req EditVideoRequest) models.
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeInternal)
 	}
-	lock := s.jobLock(req.RequestID)
-	if !lock.TryLock() {
+	unlock, ok := s.tryJobLock(req.RequestID)
+	if !ok {
 		return models.ErrorResponse[[]GeneratedVideoItem]("Yêu cầu đang được xử lý.", models.CodeUnavailable)
 	}
-	defer lock.Unlock()
+	defer unlock()
 	// Recheck after locking: a completed concurrent submission must not be repeated.
 	if _, err := os.Stat(jobPath); err == nil {
 		var job editJob
@@ -436,9 +427,10 @@ func (s *Provider) sourceVideo(localURL string) (localVideo, error) {
 	if err != nil {
 		return localVideo{}, err
 	}
-	contentType, ok := media.VideoTypes[strings.ToLower(filepath.Ext(path))]
+	types := s.SourceVideoTypes()
+	contentType, ok := types[strings.ToLower(filepath.Ext(path))]
 	if !ok {
-		return localVideo{}, errors.New("Video gốc phải là mp4, m4v, webm hoặc mov.")
+		return localVideo{}, fmt.Errorf("Flow chỉ nhận video gốc dạng %s.", strings.Join(slices.Sorted(maps.Keys(types)), ", "))
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -447,8 +439,8 @@ func (s *Provider) sourceVideo(localURL string) (localVideo, error) {
 	if !info.Mode().IsRegular() || info.Size() <= 0 {
 		return localVideo{}, errors.New("Tệp video rỗng hoặc không hợp lệ.")
 	}
-	if info.Size() > s.cfg.Get().Flow.MaxSourceBytes {
-		return localVideo{}, fmt.Errorf("Video gốc vượt giới hạn %s trong cấu hình.", utils.FormatBytes(uint64(s.cfg.Get().Flow.MaxSourceBytes)))
+	if limit := maxSourceVideoBytes(); info.Size() > limit {
+		return localVideo{}, fmt.Errorf("Video gốc vượt giới hạn %s của Flow.", utils.FormatBytes(uint64(limit)))
 	}
 	return localVideo{path: path, fileName: filepath.Base(path), contentType: contentType}, nil
 }
@@ -512,13 +504,13 @@ func (s *Provider) uploadVideoFromAccount(ctx context.Context, acc session.Store
 }
 
 func (s *Provider) prepareSourceVideo(ctx context.Context, acc session.StoredAccount, source localVideo, requestedProject string) (sourceRecord, error) {
-	ctx, cancelUpload := context.WithTimeout(ctx, time.Duration(s.cfg.Get().Accounts.VideoGenerationTimeoutSeconds)*time.Second)
+	ctx, cancelUpload := context.WithTimeout(ctx, time.Duration(s.cfg.Get().Flow.VideoGenerationTimeoutSeconds)*time.Second)
 	defer cancelUpload()
 	if s.accounts == nil {
 		return sourceRecord{}, errors.New("dịch vụ tài khoản chưa được khởi tạo")
 	}
 
-	probeCtx, cancel := context.WithTimeout(ctx, time.Duration(s.cfg.Get().Accounts.RequestTimeoutSeconds)*time.Second)
+	probeCtx, cancel := context.WithTimeout(ctx, time.Duration(s.cfg.Get().FlowPagePolicy().RequestTimeoutSeconds)*time.Second)
 	metadata, err := media.ProbeVideo(probeCtx, source.path, s.cfg.Get().Flow)
 	cancel()
 	if err != nil {
@@ -527,7 +519,6 @@ func (s *Provider) prepareSourceVideo(ctx context.Context, acc session.StoredAcc
 	if _, _, err := editAspect(metadata.Width, metadata.Height); err != nil {
 		return sourceRecord{}, err
 	}
-	limits := s.cfg.Get().Accounts
 	client, err := s.flowClient(ctx, acc, chrome.MethodProjects, chrome.MethodCreateProject)
 	if err != nil {
 		return sourceRecord{}, err
@@ -556,7 +547,7 @@ func (s *Provider) prepareSourceVideo(ctx context.Context, acc session.StoredAcc
 	if len(editable) == 0 {
 		return sourceRecord{}, errors.New("Tài khoản không có model Edit video.")
 	}
-	uploaded, err := client.UploadVideo(ctx, projectID, source.path, source.fileName, source.contentType, nil, time.Duration(limits.VideoGenerationTimeoutSeconds)*time.Second)
+	uploaded, err := client.UploadVideo(ctx, projectID, source.path, source.fileName, source.contentType, nil, time.Duration(s.cfg.Get().Flow.VideoGenerationTimeoutSeconds)*time.Second)
 	if err != nil {
 		s.forgetProject(acc.ID)
 		return sourceRecord{}, fmt.Errorf("không tải video gốc lên Flow được: %w", err)
@@ -597,7 +588,7 @@ func (s *Provider) editVideosFromAccount(ctx context.Context, acc session.Stored
 	mediaID := req.source.MediaID
 	// Revalidate a cached source before any billable mutation, including sources
 	// restored after a restart or uploaded before readiness tracking existed.
-	readyCtx, cancelReady := context.WithTimeout(ctx, time.Duration(s.cfg.Get().Accounts.VideoGenerationTimeoutSeconds)*time.Second)
+	readyCtx, cancelReady := context.WithTimeout(ctx, time.Duration(s.cfg.Get().Flow.VideoGenerationTimeoutSeconds)*time.Second)
 	prepared, err := s.waitForUploadedSource(readyCtx, client, mediaID)
 	cancelReady()
 	if err != nil {
@@ -637,13 +628,9 @@ func (s *Provider) editVideosFromAccount(ctx context.Context, acc session.Stored
 		return nil, errors.New("trình duyệt Chrome chưa được khởi tạo")
 	}
 
-	policy := s.cfg.Get().Accounts
-	tok, tErr := chrome.MintRuntimeRecaptchaToken(ctx, browser.Port, policy, chrome.ActionVideoGeneration)
+	tok, tErr := s.mintGenerationToken(ctx, browser, s.cfg.Get().FlowPagePolicy(), chrome.ActionVideoGeneration)
 	if tErr != nil {
-		return nil, fmt.Errorf("lỗi cấp token reCAPTCHA Enterprise từ trình duyệt: %w", tErr)
-	}
-	if tok == "" {
-		return nil, errors.New("token reCAPTCHA Enterprise trả về rỗng")
+		return nil, tErr
 	}
 	recaptchaToken = tok
 

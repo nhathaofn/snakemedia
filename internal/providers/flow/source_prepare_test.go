@@ -24,7 +24,7 @@ func TestUploadedSourceWaitsForSuccessfulProcessingAndServingURL(t *testing.T) {
 				t.Fatal(err)
 			}
 			cfg := accounts.cfgManager.Get()
-			cfg.Accounts.VideoPollIntervalMS = 1000
+			cfg.Flow.VideoPollIntervalMS = 1000
 			if _, err := accounts.cfgManager.Update(cfg); err != nil {
 				t.Fatal(err)
 			}

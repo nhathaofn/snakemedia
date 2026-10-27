@@ -8,6 +8,7 @@ const (
 	CodeOK              Code = 200
 	CodeInvalidArgument Code = 400
 	CodeNotFound        Code = 404
+	CodeConflict        Code = 409
 	CodeInternal        Code = 500
 	CodeUnavailable     Code = 503
 )
@@ -20,6 +21,7 @@ var AllCodes = []struct {
 	{CodeOK, "OK"},
 	{CodeInvalidArgument, "InvalidArgument"},
 	{CodeNotFound, "NotFound"},
+	{CodeConflict, "Conflict"},
 	{CodeInternal, "Internal"},
 	{CodeUnavailable, "Unavailable"},
 }

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import { Layers } from 'lucide-react';
+import { AccountWarning } from '../../../components/accounts';
+import { AccountProvider } from '../../../types';
 import { useRotationCount } from './hooks';
 
 /**
@@ -23,31 +24,17 @@ export function FlowModePanel({
   );
 }
 
-/** Number of connected accounts with valid cookies that take turns generating. */
+/** Number of signed-in accounts that take turns generating, or where to add one. */
 function RotationStatusBadge() {
   const count = useRotationCount();
-
+  if (count === 0) return <AccountWarning provider={AccountProvider.Flow} compact />;
   return (
     <div
-      className={`rotation-status-badge ${count > 0 ? 'has-accounts' : 'no-accounts'}`}
+      className="rotation-status-badge has-accounts"
       title="Tự động luân phiên tài khoản để chia đều luồng tạo"
     >
-      <span className={`status-dot ${count > 0 ? 'active' : 'inactive'}`} />
-      <span>
-        {count > 0
-          ? `Xoay vòng: ${count} tài khoản sẵn sàng`
-          : 'Chưa có tài khoản có cookie hợp lệ'}
-      </span>
-    </div>
-  );
-}
-
-/** Content of a mode that is not built yet. */
-export function ModePlaceholder({ text }: { text: string }) {
-  return (
-    <div className="flow-mode-placeholder">
-      <Layers size={28} />
-      <p>{text}</p>
+      <span className="status-dot active" />
+      <span>Xoay vòng: {count} tài khoản sẵn sàng</span>
     </div>
   );
 }

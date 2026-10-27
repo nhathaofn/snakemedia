@@ -29,7 +29,7 @@ func (f *FlowClient) DownloadMedia(ctx context.Context, rawURL string, accept []
 	}
 	req.Header.Set("User-Agent", f.creds.UserAgent)
 	req.Header.Set("Referer", f.base+"/")
-	client := &http.Client{Jar: f.client.Jar, CheckRedirect: func(next *http.Request, via []*http.Request) error {
+	client := &http.Client{Jar: f.client.Jar, Transport: f.client.Transport, CheckRedirect: func(next *http.Request, via []*http.Request) error {
 		if len(via) >= 10 || !validMediaURL(next.URL.String()) {
 			return errors.New("Video chuyển hướng đến địa chỉ không hợp lệ.")
 		}

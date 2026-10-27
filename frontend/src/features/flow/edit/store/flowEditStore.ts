@@ -18,7 +18,12 @@ export interface FlowEditState extends StudioSlice<FlowEditModel, GeneratedVideo
   source: ImportVideoResult | null;
   editAttempt: { key: string; id: string } | null;
   requestIDFor: (request: EditVideoRequest) => string;
-  acceptAttempt: (id: string) => void;
+  /**
+   * Go answered the attempt (accepted or definitely refused), so the next
+   * attempt with the same content gets a new request ID. Not called when the
+   * outcome is unknown: retrying then reuses the ID and Flow is reconciled.
+   */
+  settleAttempt: (id: string) => void;
   setSource: (source: ImportVideoResult) => number;
   sourceRevision: number;
   /** Whether the source video is currently being loaded/decoded or uploaded to Flow. */
@@ -139,7 +144,7 @@ export const useFlowEditStore = create<FlowEditState>()((set, get) => ({
     set({ editAttempt: { key, id } });
     return id;
   },
-  acceptAttempt: (id) =>
+  settleAttempt: (id) =>
     set((state) => (state.editAttempt?.id === id ? { editAttempt: null } : {})),
   source: null,
   isSourceLoading: false,

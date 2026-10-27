@@ -15,14 +15,14 @@ import (
 // A successful Scotty upload only starts Flow's transcoding/safety pipeline.
 // Editing must wait for status 3 AND a serving URL, not just an upload media ID.
 func (s *Provider) waitForUploadedSource(ctx context.Context, client *chrome.FlowClient, id string) (media.VideoMetadata, error) {
-	policy := s.cfg.Get().Accounts
+	policy := s.cfg.Get().FlowPagePolicy()
 	rpc := client.Credentials().RPCs.ID(chrome.MethodMedia)
 	fReq, err := BuildBatchEnvelope(rpc, []any{id})
 	if err != nil {
 		return media.VideoMetadata{}, err
 	}
 	failures := 0
-	delay := time.Duration(policy.VideoPollIntervalMS) * time.Millisecond
+	delay := time.Duration(s.cfg.Get().Flow.VideoPollIntervalMS) * time.Millisecond
 	for {
 		body, callErr := client.Do(ctx, rpc, fReq, time.Duration(policy.RequestTimeoutSeconds)*time.Second)
 		if callErr == nil {
@@ -61,7 +61,7 @@ func (s *Provider) waitForUploadedSource(ctx context.Context, client *chrome.Flo
 			}
 		} else {
 			failures = 0
-			delay = time.Duration(policy.VideoPollIntervalMS) * time.Millisecond
+			delay = time.Duration(s.cfg.Get().Flow.VideoPollIntervalMS) * time.Millisecond
 		}
 		select {
 		case <-ctx.Done():

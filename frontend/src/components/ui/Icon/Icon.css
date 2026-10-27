@@ -18,3 +18,13 @@
   width: var(--icon-size-lg);
   height: var(--icon-size-lg);
 }
+
+.icon-xl {
+  width: var(--icon-size-xl);
+  height: var(--icon-size-xl);
+}
+
+.icon-display {
+  width: var(--icon-size-display);
+  height: var(--icon-size-display);
+}

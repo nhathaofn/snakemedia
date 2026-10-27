@@ -1,5 +1,4 @@
 export { FlowStudioLayout } from './FlowStudioLayout';
-export { FlowModePanel, ModePlaceholder } from './FlowModePanel';
 export { QuantityField, SelectField } from './fields';
 export type { SelectOption } from './fields';
 export { ConversationGallery, PromptBar } from './workspace';
@@ -16,6 +15,8 @@ export {
   useSaveMedia,
   useStudioConfig,
 } from './hooks';
+export { turnLifecycle, useStudioSubmit } from './useStudioSubmit';
+export type { StudioDraft } from './useStudioSubmit';
 export { conversationItemKey, createStudioSlice, selectedModelOf } from './studioStore';
 export { turnsFromJobs, useRestoreJobs, useResumeJob, useStopGeneration } from './recovery';
 export type { RecoverableItem } from './recovery';
@@ -31,3 +32,6 @@ export type {
 } from './studioStore';
 export { ReferencePicker, createReferenceSlice } from './ReferencePicker';
 export type { ReferenceImage, ReferenceSlice } from './ReferencePicker';
+// Last: FlowModePanel links to the accounts page through routes/registry, which
+// loads every section's pages; the modules above must be ready before that.
+export { FlowModePanel } from './FlowModePanel';

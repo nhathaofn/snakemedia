@@ -1,0 +1,90 @@
+import { create } from 'zustand';
+import { api, unwrap } from '../../../../services';
+import { FlowImageTaskStatus } from '../../../../types';
+import type { FlowImageTask } from '../../../../types';
+
+/** Replaces the task with the same ID, or appends a new one (queue order is oldest first). */
+export function upsertTask(tasks: readonly FlowImageTask[], task: FlowImageTask): FlowImageTask[] {
+  const index = tasks.findIndex((item) => item.id === task.id);
+  if (index < 0) return [...tasks, task];
+  const next = tasks.slice();
+  next[index] = task;
+  return next;
+}
+
+/**
+ * Lays the events received while a list call was in flight over its snapshot
+ * (null: removed), so an older snapshot never undoes a newer event.
+ */
+export function mergeTasks(
+  snapshot: readonly FlowImageTask[],
+  touched: ReadonlyMap<string, FlowImageTask | null>,
+): FlowImageTask[] {
+  let tasks = snapshot.slice();
+  touched.forEach((task, id) => {
+    tasks = task ? upsertTask(tasks, task) : tasks.filter((item) => item.id !== id);
+  });
+  return tasks;
+}
+
+/** Counts shown in the panel summary. */
+export function countTasks(tasks: readonly FlowImageTask[]) {
+  const counts = { running: 0, queued: 0, held: 0, succeeded: 0, failed: 0 };
+  for (const task of tasks) {
+    if (task.status === FlowImageTaskStatus.Running) counts.running++;
+    else if (task.status === FlowImageTaskStatus.Queued) {
+      if (task.held) counts.held++;
+      else counts.queued++;
+    } else if (task.status === FlowImageTaskStatus.Succeeded) counts.succeeded++;
+    else counts.failed++;
+  }
+  return counts;
+}
+
+interface QueueState {
+  tasks: FlowImageTask[];
+  warning: string;
+  loaded: boolean;
+  loadError: string | null;
+  /** Loads the queue; calls made while one is running share it. */
+  load: () => Promise<void>;
+  setTask: (task: FlowImageTask | null) => void;
+  dismissWarning: () => void;
+}
+
+const touched = new Map<string, FlowImageTask | null>();
+let reload: Promise<void> | null = null;
+
+/** The image queue (Ảnh → Hàng loạt) as the backend runs it, kept current by events. */
+export const useImageQueueStore = create<QueueState>((set) => ({
+  tasks: [],
+  warning: '',
+  loaded: false,
+  loadError: null,
+  load: () => {
+    reload ??= (async () => {
+      touched.clear();
+      try {
+        const state = unwrap(await api.getFlowImageTasks());
+        set({
+          tasks: mergeTasks(state.tasks ?? [], touched),
+          warning: state.warning ?? '',
+          loaded: true,
+          loadError: null,
+        });
+      } catch (cause) {
+        set({ loaded: true, loadError: cause instanceof Error ? cause.message : String(cause) });
+      } finally {
+        touched.clear();
+        reload = null;
+      }
+    })();
+    return reload;
+  },
+  setTask: (task) => {
+    if (!task?.id) return;
+    if (reload) touched.set(task.id, task);
+    set((state) => ({ tasks: upsertTask(state.tasks, task) }));
+  },
+  dismissWarning: () => set({ warning: '' }),
+}));

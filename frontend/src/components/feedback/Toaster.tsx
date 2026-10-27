@@ -21,7 +21,7 @@ export const Toaster: React.FC = () => {
           <button
             className="toast-close"
             onClick={() => removeToast(toast.id)}
-            aria-label="Dismiss notification"
+            aria-label="Đóng thông báo"
           >
             <Icon icon={X} size="sm" />
           </button>

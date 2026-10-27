@@ -8,6 +8,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 
+	"SnakeMedia/internal/accounts"
 	"SnakeMedia/internal/buildinfo"
 	"SnakeMedia/internal/config"
 	"SnakeMedia/internal/engine"
@@ -16,7 +17,6 @@ import (
 	"SnakeMedia/internal/models"
 	"SnakeMedia/internal/providers/flow"
 	"SnakeMedia/internal/providers/flow/chrome"
-	"SnakeMedia/internal/providers/flow/session"
 	"SnakeMedia/internal/providers/muse"
 )
 
@@ -78,15 +78,16 @@ func run() error {
 			config.AllLogLevels,
 			events.AllEvents,
 			models.AllCodes,
-			session.AllAccountStatuses,
+			app.providerEnum,
+			accounts.AllStatuses,
+			accounts.AllSources,
 			engine.AllPortTypes,
 			engine.AllParamKinds,
 			chrome.AllTiers,
 			flow.AllImageQualities,
 			flow.AllImageProjectModes,
+			flow.AllImageTaskStatuses,
 			config.AllMuseModes,
-			muse.AllMuseAccountStatuses,
-			muse.AllMuseAccountSources,
 			muse.AllMuseJobKinds,
 			muse.AllMuseJobStatuses,
 		},

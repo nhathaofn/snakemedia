@@ -1,19 +1,22 @@
-// Package muse is the muse.ai provider: Muse accounts (one Chrome profile
-// each), a durable job queue spread over those accounts, and image/video
-// generation through Muse's own chat client in the account's tab.
+// Package muse is the muse.ai provider: a durable job queue spread over the
+// Muse accounts of the shared accounts service, and image/video generation
+// through Muse's own chat client in each account's tab.
 package muse
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
+	"SnakeMedia/internal/accounts"
 	"SnakeMedia/internal/config"
 	"SnakeMedia/internal/events"
+	"SnakeMedia/internal/jobs"
 	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/media"
 )
@@ -22,62 +25,70 @@ import (
 // paused accounts resume and quota resets are noticed.
 const pumpInterval = 30 * time.Second
 
-// Provider owns Muse accounts, their browsers and the job queue.
+// Provider owns the Muse job queue; accounts and their browsers belong to
+// the accounts service.
 type Provider struct {
-	cfg         *config.Manager
-	media       *media.Store
-	accounts    *accountStore
-	browsers    *browserPool
-	jobs        *jobStore
-	profileRoot string
-	proxies     *proxyStore
-	bridges     *bridgeManager
-	deadProxies map[string]time.Time
-	studio      *studioStore
-	productions *productionStore
+	cfg      *config.Manager
+	media    *media.Store
+	root     string // Muse's data folder
+	accounts *accounts.Service
+	jobs     *jobStore
+	// library lists every file finished jobs made, kept apart from the queue.
+	library *jobs.Journal[MuseLibraryItem]
+	// defaultOutputDir is where finished files are copied when the user has
+	// not chosen a folder.
+	defaultOutputDir string
 
 	// Seams for tests.
-	pageFor  func(context.Context, storedAccount) (Page, error)
-	now      func() time.Time
-	sleep    func(context.Context, time.Duration) error
-	gap      func(config.MuseConfig) time.Duration
-	muxAudio func(ctx context.Context, ffmpegPath, videoPath, sourcePath, outPath string) error
+	pageFor func(context.Context, accounts.Record) (Page, error)
+	now     func() time.Time
+	sleep   func(context.Context, time.Duration) error
+	gap     func(config.MuseConfig) time.Duration
 
-	mu       sync.Mutex
-	emit     func(events.Event, any)
-	ctx      context.Context
-	stop     context.CancelFunc
-	running  map[string]string // job ID -> account ID
-	cancels  map[string]context.CancelFunc
-	watching map[string]bool // accounts with an open sign-in watcher
-	wake     chan struct{}
-	wg       sync.WaitGroup
+	mu      sync.Mutex
+	emit    func(events.Event, any)
+	ctx     context.Context
+	stop    context.CancelFunc
+	running map[string]string // job ID -> account ID
+	cancels map[string]context.CancelFunc
+	// sendSlots (one per account) lets one send at a time through, gap
+	// included; navs (one per account) guards its tab against navigation.
+	// journalWarning says the job journal could not be read on start and was
+	// moved aside, so the user checks jobs that may have been sent.
+	journalWarning string
+	sendSlots      map[string]chan struct{}
+	navs           map[string]*sync.RWMutex
+	wake           chan struct{}
+	wg             sync.WaitGroup
 }
 
-// New prepares the provider; Start loads the journal and begins work.
-func New(dataDir string, cfg *config.Manager, store *media.Store) *Provider {
+// New prepares the provider over the Muse accounts of accts; Start loads the
+// journal and begins work. Finished files are copied into outputDir unless the
+// user chose another folder.
+func New(dataDir, outputDir string, cfg *config.Manager, store *media.Store, accts *accounts.Service) *Provider {
 	root := filepath.Join(dataDir, "muse")
 	p := &Provider{
-		cfg: cfg, media: store,
-		accounts:    newAccountStore(filepath.Join(root, "accounts.json")),
-		profileRoot: filepath.Join(root, "profiles"),
-		now:         time.Now,
-		sleep:       sleepContext,
-		gap:         sendGap,
-		emit:        func(events.Event, any) {},
-		running:     make(map[string]string),
-		cancels:     make(map[string]context.CancelFunc),
-		watching:    make(map[string]bool),
-		wake:        make(chan struct{}, 1),
+		cfg: cfg, media: store, root: root, accounts: accts, defaultOutputDir: outputDir,
+		now:       time.Now,
+		sleep:     sleepContext,
+		gap:       sendGap,
+		emit:      func(events.Event, any) {},
+		running:   make(map[string]string),
+		cancels:   make(map[string]context.CancelFunc),
+		sendSlots: make(map[string]chan struct{}),
+		navs:      make(map[string]*sync.RWMutex),
+		wake:      make(chan struct{}, 1),
 	}
-	p.browsers = newBrowserPool(cfg, p.profileRoot)
+	// The folders Muse saves results to are the app's own, wherever settings
+	// point them.
+	store.AllowRoot(outputDir)
+	store.AllowRootsFrom(func() []string { return []string{p.cfg.Get().Muse.OutputDir} })
 	p.jobs = newJobStore(filepath.Join(root, "jobs.json"), func() int { return p.cfg.Get().Muse.MaxJobs })
-	p.proxies = newProxyStore(filepath.Join(root, "proxies.json"))
-	p.bridges = newBridgeManager()
-	p.deadProxies = make(map[string]time.Time)
-	p.studio = newStudioStore(filepath.Join(root, "studio.json"))
-	p.productions = newProductionStore(filepath.Join(root, "productions.json"))
+	p.library = newLibrary(filepath.Join(root, "library.json"))
 	p.pageFor = p.openPage
+	// A signed-in, re-enabled or rested account may take queued jobs now.
+	accts.OnChange(p.trigger)
+	accts.OnRemove(p.accountRemoved)
 	return p
 }
 
@@ -103,7 +114,13 @@ func (p *Provider) Start(ctx context.Context, emit func(events.Event, any)) {
 	p.mu.Unlock()
 	if err := p.jobs.load(); err != nil {
 		logger.Get().Warn("muse job journal reset", "error", err)
+		if errors.Is(err, errJournalCorrupt) {
+			p.mu.Lock()
+			p.journalWarning = strings.TrimSuffix(err.Error(), ": "+errJournalCorrupt.Error())
+			p.mu.Unlock()
+		}
 	}
+	p.loadLibrary()
 	for _, job := range p.jobs.list() {
 		if job.Status != MuseJobProcessing {
 			continue
@@ -116,7 +133,16 @@ func (p *Provider) Start(ctx context.Context, emit func(events.Event, any)) {
 			continue
 		}
 		if job.SessionID != "" {
-			continue // sent jobs are checked again on their own account
+			if _, err := p.accounts.Record(job.AccountID); err == nil {
+				continue // sent jobs are checked again on their own account
+			}
+			// Only the account that sent a job can read its chat; without it the
+			// job is failed rather than sent again from another account.
+			p.jobs.update(job.ID, func(j *MuseJob) {
+				j.Status, j.Step, j.FinishedAt = MuseJobFailed, "", p.now().UTC().Format(time.RFC3339)
+				j.Error = errAccountGone
+			})
+			continue
 		}
 		p.jobs.update(job.ID, func(j *MuseJob) {
 			resetForQueue(j)
@@ -125,12 +151,24 @@ func (p *Provider) Start(ctx context.Context, emit func(events.Event, any)) {
 			}
 		})
 	}
+	p.sweepReferences()
 	p.wg.Add(1)
 	go p.loop()
 }
 
-// Close stops the queue and the account browsers. Running jobs stay as they
-// are in the journal and continue on the next start.
+// lifetime is the context of background work: the app's until Start, then
+// the queue's.
+func (p *Provider) lifetime() context.Context {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.ctx == nil {
+		return context.Background()
+	}
+	return p.ctx
+}
+
+// Close stops the queue. Running jobs stay as they are in the journal and
+// continue on the next start.
 func (p *Provider) Close() {
 	p.mu.Lock()
 	stop := p.stop
@@ -139,7 +177,6 @@ func (p *Provider) Close() {
 		stop()
 	}
 	p.wg.Wait()
-	p.browsers.closeAll()
 }
 
 func (p *Provider) loop() {
@@ -148,7 +185,6 @@ func (p *Provider) loop() {
 	defer ticker.Stop()
 	for {
 		p.pump()
-		p.pumpProductions(p.ctx)
 		select {
 		case <-p.ctx.Done():
 			return
@@ -167,32 +203,122 @@ func (p *Provider) trigger() {
 }
 
 func (p *Provider) pump() {
-	stored, err := p.accounts.list()
+	records, err := p.accounts.Records(accounts.ProviderMuse)
 	if err != nil {
 		return
 	}
-	accounts := make([]MuseAccount, len(stored))
-	for i, a := range stored {
-		accounts[i] = a.MuseAccount
+	views := make([]MuseAccount, len(records))
+	for i, rec := range records {
+		views[i] = museView(rec)
+		if err := p.accounts.RouteError(rec); err != nil {
+			views[i].NoRoute = err.Error()
+		}
 	}
+	now := p.now()
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.ctx.Err() != nil {
+	if p.ctx == nil || p.ctx.Err() != nil {
+		p.mu.Unlock()
 		return
 	}
-	for _, a := range plan(p.jobs.list(), accounts, p.cfg.Get().Muse, p.running, p.pausedProjects(), p.now()) {
+	// Listed under the lock: a run ends by saving its job and only then leaving
+	// running, so no ended job is seen here as still to run.
+	jobs := p.jobs.list()
+	started := make(map[string]bool)
+	for _, a := range plan(due(jobs, now), views, p.cfg.Get().Muse, p.running, now) {
 		ctx, cancel := context.WithCancel(p.ctx)
 		p.running[a.jobID] = a.accountID
 		p.cancels[a.jobID] = cancel
+		started[a.jobID] = true
 		p.wg.Add(1)
 		go func() {
 			defer p.wg.Done()
 			p.runOne(ctx, a.jobID, a.accountID)
 		}()
 	}
+	for id := range p.running {
+		started[id] = true
+	}
+	p.mu.Unlock()
+	p.noteWaiting(jobs, views, started)
+}
+
+// noteWaiting tells the user why a sent job is not being checked: only the
+// account that sent it can read its chat, and that account cannot work now.
+func (p *Provider) noteWaiting(jobs []MuseJob, accs []MuseAccount, running map[string]bool) {
+	for _, job := range jobs {
+		if job.Status != MuseJobProcessing || job.SessionID == "" || running[job.ID] {
+			continue
+		}
+		step := waitingStep(job, accs)
+		if step == "" || step == job.Step {
+			continue
+		}
+		p.updateJob(job.ID, func(j *MuseJob) {
+			if j.Status == MuseJobProcessing {
+				j.Step = step
+			}
+		})
+	}
+}
+
+// waitingStep words what a sent job waits for when its account cannot run it.
+func waitingStep(job MuseJob, accs []MuseAccount) string {
+	i := slices.IndexFunc(accs, func(a MuseAccount) bool { return a.ID == job.AccountID })
+	if i < 0 {
+		return ""
+	}
+	switch acc := accs[i]; {
+	case !acc.Enabled:
+		return fmt.Sprintf("Chờ bật lại tài khoản %s để kiểm tra kết quả", acc.Name)
+	case acc.Status != accounts.StatusSignedIn:
+		return fmt.Sprintf("Chờ tài khoản %s đăng nhập lại để kiểm tra kết quả", acc.Name)
+	case acc.NoRoute != "":
+		return "Chờ proxy để kiểm tra kết quả: " + acc.NoRoute
+	}
+	return ""
+}
+
+// holdUntil keeps a job off the queue until t (zero clears it). The hold is
+// saved with the job, so a restart does not retry it early.
+func (p *Provider) holdUntil(jobID string, t time.Time) {
+	at := ""
+	if !t.IsZero() {
+		at = t.UTC().Format(time.RFC3339Nano)
+	}
+	p.updateJob(jobID, func(j *MuseJob) { j.NextCheckAt = at })
+}
+
+// sendSlot waits for the account's single send slot; release frees it.
+func (p *Provider) sendSlot(ctx context.Context, accountID string) (release func(), err error) {
+	p.mu.Lock()
+	slot := p.sendSlots[accountID]
+	if slot == nil {
+		slot = make(chan struct{}, 1)
+		p.sendSlots[accountID] = slot
+	}
+	p.mu.Unlock()
+	select {
+	case slot <- struct{}{}:
+		return func() { <-slot }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// navLock is the account tab's navigation guard.
+func (p *Provider) navLock(accountID string) *sync.RWMutex {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	nav := p.navs[accountID]
+	if nav == nil {
+		nav = &sync.RWMutex{}
+		p.navs[accountID] = nav
+	}
+	return nav
 }
 
 func (p *Provider) finishRun(jobID string) {
+	job, ok := p.jobs.get(jobID)
 	p.mu.Lock()
 	if cancel := p.cancels[jobID]; cancel != nil {
 		cancel()
@@ -200,18 +326,14 @@ func (p *Provider) finishRun(jobID string) {
 	delete(p.cancels, jobID)
 	delete(p.running, jobID)
 	p.mu.Unlock()
-	p.trigger()
-}
-
-func (p *Provider) busyAccount(accountID string) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for _, id := range p.running {
-		if id == accountID {
-			return true
-		}
+	if ok && job.finished() && job.NextCheckAt != "" {
+		p.updateJob(jobID, func(j *MuseJob) {
+			if j.finished() {
+				j.NextCheckAt = ""
+			}
+		})
 	}
-	return false
+	p.trigger()
 }
 
 // updateJob persists a change and tells the frontend.
@@ -225,192 +347,53 @@ func (p *Provider) updateJob(id string, change func(*MuseJob)) (MuseJob, error) 
 	return job, nil
 }
 
-// updateAccount persists a change and tells the frontend.
-func (p *Provider) updateAccount(id string, change func(*storedAccount)) (MuseAccount, error) {
-	acc, err := p.accounts.update(id, change)
-	if err != nil {
-		if err != errAccountNotFound {
-			logger.Get().Warn("cannot save muse account", "account", id, "error", err)
+// updateAccount changes an account's shared fields and Muse data together,
+// keeping its displayed usage in step with the quota.
+func (p *Provider) updateAccount(id string, change func(r *accounts.Record, d *museData)) {
+	_, err := p.accounts.Update(id, func(r *accounts.Record) {
+		var data museData
+		_ = accounts.DecodeData(*r, &data)
+		change(r, &data)
+		if err := r.SetData(data); err == nil {
+			r.Usage = quotaUsage(data.Quota)
 		}
-		return MuseAccount{}, err
-	}
-	p.emitAccounts()
-	return acc.MuseAccount, nil
-}
-
-func (p *Provider) emitAccounts() {
-	if list, err := p.publicAccounts(); err == nil {
-		p.emit(events.EventMuseAccountsUpdated, list)
+	})
+	if err != nil && !errors.Is(err, context.Canceled) {
+		logger.Get().Warn("cannot save muse account", "account", id, "error", err)
 	}
 }
 
-func (p *Provider) publicAccounts() ([]MuseAccount, error) {
-	stored, err := p.accounts.list()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]MuseAccount, len(stored))
-	for i, a := range stored {
-		out[i] = a.MuseAccount
-	}
-	return out, nil
-}
+const errAccountGone = "Tài khoản đã bị xoá nên không kiểm tra được kết quả. Bấm Chạy lại để gửi bằng tài khoản khác."
 
-// cookieMarker records which cookie import a profile was seeded with, so
-// switching machines or recreating a profile seeds it again.
-const cookieMarker = ".snakemedia-muse-cookies"
-
-// Flags every account browser gets. WebRTC would otherwise reach STUN servers
-// directly over UDP and reveal the real IP even behind a proxy.
-var privacyArgs = []string{
-	"--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
-	"--webrtc-ip-handling-policy=disable_non_proxied_udp",
-}
-
-// directRoute names a browser that runs without a proxy.
-const directRoute = "direct"
-
-// proxyRoute is how one account's Chrome reaches the network: key identifies
-// the proxy (so a changed proxy restarts the browser), args are Chrome flags.
-type proxyRoute struct {
-	key  string
-	args []string
-}
-
-// deadProxySet copies the proxies marked dead, dropping expired marks. The
-// copy is taken under p.mu: job goroutines mark proxies dead concurrently.
-func (p *Provider) deadProxySet(now time.Time) map[string]time.Time {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	dead := make(map[string]time.Time, len(p.deadProxies))
-	for k, exp := range p.deadProxies {
-		if now.After(exp) {
-			delete(p.deadProxies, k)
-			continue
-		}
-		dead[k] = exp
-	}
-	return dead
-}
-
-// markProxyDead keeps a failing proxy out of automatic picks for a while.
-func (p *Provider) markProxyDead(raw string, now time.Time) {
-	if raw == "" || raw == "none" {
+// accountRemoved fails the jobs a removed account was running: their chats
+// can no longer be read, so they are not sent again from another account.
+func (p *Provider) accountRemoved(rec accounts.Record) {
+	if rec.Provider != accounts.ProviderMuse {
 		return
 	}
-	p.mu.Lock()
-	p.deadProxies[raw] = now.Add(10 * time.Minute)
-	p.mu.Unlock()
-}
-
-// accountProxyLine is the proxy line an account uses now, or "".
-func accountProxyLine(acc storedAccount) string {
-	if acc.Proxy == "none" {
-		return ""
-	}
-	if acc.Proxy != "" {
-		return acc.Proxy
-	}
-	return acc.ProxyAuto
-}
-
-// setupProxy picks the account's proxy and prepares its local bridge. Any
-// failure is returned: an account is never silently sent out directly.
-func (p *Provider) setupProxy(ctx context.Context, acc *storedAccount) (proxyRoute, error) {
-	now := p.now()
-	text, err := p.proxies.GetText()
-	if err != nil {
-		p.updateAccount(acc.ID, func(a *storedAccount) {
-			a.ProxyStatus, a.Message = "dead", err.Error()
-		})
-		return proxyRoute{}, err
-	}
-	accounts, _ := p.accounts.list()
-	parsed, autoLine, err := pickProxy(*acc, accounts, text, p.deadProxySet(now), now)
-	if err != nil {
-		p.updateAccount(acc.ID, func(a *storedAccount) {
-			a.ProxyStatus = "dead"
-			a.Message = err.Error()
-		})
-		return proxyRoute{}, err
-	}
-	if parsed == nil {
-		p.updateAccount(acc.ID, func(a *storedAccount) {
-			a.ProxyStatus = ""
-		})
-		return proxyRoute{key: directRoute, args: privacyArgs}, nil
-	}
-
-	if autoLine != "" && autoLine != acc.ProxyAuto {
-		p.updateAccount(acc.ID, func(a *storedAccount) {
-			a.ProxyAuto = autoLine
-		})
-		acc.ProxyAuto = autoLine
-	}
-
-	if parsed.Type == ProxyTypeRotating {
-		res := fetchRotating(ctx, parsed, false)
-		if !res.OK {
-			p.markProxyDead(parsed.Raw, now)
-			p.updateAccount(acc.ID, func(a *storedAccount) {
-				a.ProxyStatus = string(res.Status)
-				a.Message = "Proxy xoay lỗi: " + res.Message
+	for _, job := range p.jobs.list() {
+		if job.Status == MuseJobProcessing && job.AccountID == rec.ID {
+			p.updateJob(job.ID, func(j *MuseJob) {
+				j.Status, j.Step, j.FinishedAt = MuseJobFailed, "", p.now().UTC().Format(time.RFC3339)
+				j.Error = errAccountGone
 			})
-			return proxyRoute{}, fmt.Errorf("Proxy xoay lỗi: %s", res.Message)
 		}
-		parsed.Host = res.IP
-		parsed.Port = res.Port
-		parsed.Scheme = "http"
-		p.updateAccount(acc.ID, func(a *storedAccount) {
-			a.ProxyStatus = "live"
-			a.ProxyIP = res.IP
-		})
 	}
-
-	bridgePort, err := p.bridges.GetBridge(parsed)
-	if err != nil {
-		return proxyRoute{}, err
-	}
-	if parsed.Type == ProxyTypeStatic {
-		p.updateAccount(acc.ID, func(a *storedAccount) {
-			a.ProxyStatus = "live"
-			a.ProxyIP = parsed.Host
-		})
-	}
-	args := append([]string{fmt.Sprintf("--proxy-server=http://127.0.0.1:%d", bridgePort)}, privacyArgs...)
-	return proxyRoute{key: parsed.Raw, args: args}, nil
 }
 
-// openPage starts (or reuses) the account's browser, seeds imported cookies
-// once per import, and makes sure a muse.ai tab is open.
-func (p *Provider) openPage(ctx context.Context, acc storedAccount) (Page, error) {
-	route, err := p.setupProxy(ctx, &acc)
+// openPage starts (or reuses) the account's browser with muse.ai open.
+func (p *Provider) openPage(ctx context.Context, rec accounts.Record) (Page, error) {
+	b, err := p.accounts.Browser(ctx, rec.ID)
 	if err != nil {
-		return nil, err
-	}
-	b, err := p.browsers.get(ctx, acc.ProfileDir, false, route.key, route.args...)
-	if err != nil {
-		p.markProxyDead(accountProxyLine(acc), p.now())
-		return nil, err
-	}
-	if len(acc.Cookies) > 0 {
-		marker := filepath.Join(b.ProfileDir, cookieMarker)
-		if seeded, _ := os.ReadFile(marker); string(seeded) != acc.CookieVersion {
-			if err := injectCookies(ctx, b.Port, acc.Cookies); err != nil {
-				return nil, err
-			}
-			_ = os.WriteFile(marker, []byte(acc.CookieVersion), 0o600)
-		}
-	}
-	if err := openMuseTab(ctx, b.Port); err != nil {
-		p.markProxyDead(accountProxyLine(acc), p.now())
 		return nil, err
 	}
 	cfg := p.cfg.Get()
 	return &chromePage{
 		port:        b.Port,
+		policy:      cfg.Accounts,
 		callTimeout: time.Duration(cfg.Accounts.RequestTimeoutSeconds*4) * time.Second,
 		sendTimeout: time.Duration(cfg.Muse.SendTimeoutSeconds) * time.Second,
+		nav:         p.navLock(rec.ID),
 	}, nil
 }
 
@@ -429,15 +412,4 @@ func sortedJobs(jobs []MuseJob) []MuseJob {
 		return 0
 	})
 	return jobs
-}
-
-func (p *Provider) pausedProjects() map[string]bool {
-	data := p.studio.get()
-	res := make(map[string]bool)
-	for _, pr := range data.Projects {
-		if pr.Paused {
-			res[pr.ID] = true
-		}
-	}
-	return res
 }

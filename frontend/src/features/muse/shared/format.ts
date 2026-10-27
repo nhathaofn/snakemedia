@@ -1,13 +1,5 @@
-import { MuseAccountStatus, MuseJobStatus } from '../../../types';
-import type { MuseAccount, MuseJob, MuseQuota } from '../../../types';
-
-/** One job per non-empty line, as the backend expects in `prompts`. */
-export function splitPrompts(text: string): string[] {
-  return text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line !== '');
-}
+import { MuseJobStatus } from '../../../types';
+import type { MuseJob } from '../../../types';
 
 export const jobStatusLabels: Record<MuseJobStatus, string> = {
   [MuseJobStatus.Queued]: 'Chờ chạy',
@@ -15,14 +7,6 @@ export const jobStatusLabels: Record<MuseJobStatus, string> = {
   [MuseJobStatus.Succeeded]: 'Xong',
   [MuseJobStatus.Failed]: 'Lỗi',
   [MuseJobStatus.Cancelled]: 'Đã huỷ',
-};
-
-export const accountStatusLabels: Record<MuseAccountStatus, string> = {
-  [MuseAccountStatus.Unverified]: 'Chưa kiểm tra',
-  [MuseAccountStatus.SigningIn]: 'Đang chờ đăng nhập',
-  [MuseAccountStatus.SignedIn]: 'Đã đăng nhập',
-  [MuseAccountStatus.SignedOut]: 'Chưa đăng nhập',
-  [MuseAccountStatus.Error]: 'Lỗi',
 };
 
 /** Replaces the job with the same ID, or puts a new job first (newest first). */
@@ -34,29 +18,28 @@ export function upsertJob(jobs: readonly MuseJob[], job: MuseJob): MuseJob[] {
   return next;
 }
 
-/** True while the account rests after Muse said it hit a limit. */
-export function accountPaused(account: MuseAccount, now: number): boolean {
-  return !!account.pausedUntil && new Date(account.pausedUntil).getTime() > now;
+/**
+ * Applies the changes events made while a list call was in flight to that
+ * call's snapshot: a job an event carried replaces (or adds to) the snapshot's
+ * copy, and a job an event removed (null) stays removed. An older snapshot
+ * therefore never undoes a newer event.
+ */
+export function mergeSnapshot(
+  snapshot: readonly MuseJob[],
+  touched: ReadonlyMap<string, MuseJob | null>,
+): MuseJob[] {
+  let jobs = snapshot.slice();
+  touched.forEach((job, id) => {
+    jobs = job ? upsertJob(jobs, job) : jobs.filter((item) => item.id !== id);
+  });
+  return jobs;
 }
 
-/** True when the account can take new jobs at `now`, judged from what is stored. */
-export function accountReady(account: MuseAccount, now: number): boolean {
-  return (
-    account.enabled && account.status === MuseAccountStatus.SignedIn && !accountPaused(account, now)
-  );
+/**
+ * IDs of the selected jobs that are on screen, in screen order. Bulk actions use
+ * only these, so a job hidden by the filter (or that moved out of it) is never
+ * run or deleted by a selection the user can no longer see.
+ */
+export function selectedShown(shown: readonly MuseJob[], selected: ReadonlySet<string>): string[] {
+  return shown.filter((job) => selected.has(job.id)).map((job) => job.id);
 }
-
-/** Short quota summary, e.g. "Đã dùng 40% · đặt lại 28/10 09:00". */
-export function quotaSummary(quota: MuseQuota | undefined): string {
-  if (!quota) return 'Chưa đọc được hạn mức';
-  const parts = [`Đã dùng ${Math.round(quota.percentUsed)}%`];
-  if (quota.resetsAt) {
-    parts.push(
-      `đặt lại ${new Date(quota.resetsAt).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`,
-    );
-  }
-  if (quota.topupTotal > 0) parts.push(`top-up ${quota.topupBalance}/${quota.topupTotal}`);
-  return parts.join(' · ');
-}
-
-export const isVideoUrl = (url: string) => /\.(mp4|webm|mov|m4v)$/i.test(url);

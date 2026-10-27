@@ -9,11 +9,3 @@ export function formatBytes(bytes: number, decimals: number = 2): string {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
 }
-
-/**
- * Truncates text with an ellipsis if it exceeds maxLength.
- */
-export function truncate(text: string, maxLength: number): string {
-  if (!text || text.length <= maxLength) return text;
-  return `${text.slice(0, maxLength)}...`;
-}

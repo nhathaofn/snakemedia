@@ -20,6 +20,22 @@ func Invalid(message string) error {
 	return &Error{Code: models.CodeInvalidArgument, Message: message}
 }
 
+// PendingError ends a node whose provider accepted the work but has not
+// finished it yet. It is not a success: nodes after it never run on missing
+// files. JobIDs name the jobs to resume (never send again), so the work is
+// paid for once.
+type PendingError struct {
+	JobIDs  []string
+	Message string
+}
+
+func (e *PendingError) Error() string { return e.Message }
+
+// Pending reports work still running on the provider's side.
+func Pending(message string, jobIDs []string) error {
+	return &PendingError{JobIDs: jobIDs, Message: message}
+}
+
 // FromResponse turns a service response into a node result.
 func FromResponse[T any](res models.Response[T]) (T, error) {
 	if !res.Success {
@@ -34,9 +50,17 @@ func Respond[T any](out T, err error) models.Response[T] {
 	if err == nil {
 		return models.SuccessResponse(out)
 	}
+	return models.ErrorResponse[T](err.Error(), codeOf(err))
+}
+
+func codeOf(err error) models.Code {
 	var coded *Error
 	if errors.As(err, &coded) {
-		return models.ErrorResponse[T](coded.Message, coded.Code)
+		return coded.Code
 	}
-	return models.ErrorResponse[T](err.Error(), models.CodeInternal)
+	var pending *PendingError
+	if errors.As(err, &pending) {
+		return models.CodeUnavailable
+	}
+	return models.CodeInternal
 }

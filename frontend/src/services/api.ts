@@ -1,8 +1,8 @@
 import * as Backend from '../../wailsjs/go/main/App';
-import type { muse } from '../../wailsjs/go/models';
 import { ResponseCode } from '../types';
 import type {
-  AccountProfile,
+  Account,
+  AccountProvider,
   ApiResponse,
   AppConfig,
   AppInfo,
@@ -10,32 +10,28 @@ import type {
   FlowEditModel,
   FlowImageProject,
   FlowImageProjectMode,
+  FlowImageQueueState,
+  FlowImageTask,
+  FlowImageTaskReference,
+  FlowImageTaskRequest,
   FlowModel,
   FlowProjectImage,
-  FlowProjectImageReference,
   FlowVideoModel,
   GenerateImageRequest,
   GenerateVideoRequest,
   GeneratedImageItem,
   GeneratedVideoItem,
   ImportVideoResult,
-  LoginProcessInfo,
-  LoginStatusInfo,
   MediaDirectoryResult,
-  MuseAccount,
   MuseJob,
+  MuseJobKind,
   MuseJobRequest,
+  MuseLibraryItem,
   MuseOptions,
   MuseReference,
-  NodeSpec,
-  Production,
   ProxyCheckResult,
   SaveMediaResult,
-  StudioAsset,
   StudioConfig,
-  StudioData,
-  StudioProject,
-  SystemInfo,
   UploadedSourceVideo,
 } from '../types';
 import { errorMessage } from '../utils';
@@ -99,25 +95,44 @@ export function unwrap<T>(res: ApiResponse<T>): T {
   return res.data;
 }
 
+/**
+ * `unwrap` for list calls: Go encodes an empty (nil) slice as null, which
+ * would otherwise reach callers typed as an array.
+ */
+export function unwrapList<T>(res: ApiResponse<T[] | null>): T[] {
+  return unwrap(res) ?? [];
+}
+
 /** Typed bridge to the Go backend. Add one entry per exported App method. */
 export const api = {
   getAppInfo: () => invoke<AppInfo>('GetAppInfo', Backend.GetAppInfo),
-  getSystemInfo: () => invoke<SystemInfo>('GetSystemInfo', Backend.GetSystemInfo),
   getConfig: () => invoke<AppConfig>('GetConfig', Backend.GetConfig),
   updateConfig: (cfg: AppConfig) =>
     invoke<AppConfig>('UpdateConfig', () => Backend.UpdateConfig(cfg)),
-  launchLoginBrowser: (sessionID: string) =>
-    invoke<LoginProcessInfo>('LaunchLoginBrowser', () => Backend.LaunchLoginBrowser(sessionID)),
-  checkLoginStatus: (sessionID: string) =>
-    invoke<LoginStatusInfo>('CheckLoginStatus', () => Backend.CheckLoginStatus(sessionID)),
-  cancelLogin: (sessionID: string) =>
-    invoke<boolean>('CancelLogin', () => Backend.CancelLogin(sessionID)),
-  getAccounts: () => invoke<AccountProfile[]>('GetAccounts', Backend.GetAccounts),
-  removeAccount: (id: string) => invoke<boolean>('RemoveAccount', () => Backend.RemoveAccount(id)),
-  refreshAccount: (id: string) =>
-    invoke<AccountProfile>('RefreshAccount', () => Backend.RefreshAccount(id)),
+  getAccounts: () => invoke<Account[]>('GetAccounts', Backend.GetAccounts),
+  addAccount: (provider: AccountProvider, name: string) =>
+    invoke<Account>('AddAccount', () => Backend.AddAccount(provider, name)),
+  importAccountCookies: (provider: AccountProvider, name: string, cookies: string) =>
+    invoke<Account>('ImportAccountCookies', () =>
+      Backend.ImportAccountCookies(provider, name, cookies),
+    ),
+  replaceAccountCookies: (id: string, cookies: string) =>
+    invoke<Account>('ReplaceAccountCookies', () => Backend.ReplaceAccountCookies(id, cookies)),
+  checkAccount: (id: string) => invoke<Account>('CheckAccount', () => Backend.CheckAccount(id)),
   openAccountBrowser: (id: string) =>
-    invoke<LoginProcessInfo>('OpenAccountBrowser', () => Backend.OpenAccountBrowser(id)),
+    invoke<Account>('OpenAccountBrowser', () => Backend.OpenAccountBrowser(id)),
+  renameAccount: (id: string, name: string) =>
+    invoke<Account>('RenameAccount', () => Backend.RenameAccount(id, name)),
+  setAccountEnabled: (id: string, enabled: boolean) =>
+    invoke<Account>('SetAccountEnabled', () => Backend.SetAccountEnabled(id, enabled)),
+  setAccountProxy: (id: string, proxyLine: string) =>
+    invoke<Account>('SetAccountProxy', () => Backend.SetAccountProxy(id, proxyLine)),
+  rotateAccountIP: (id: string) =>
+    invoke<ProxyCheckResult>('RotateAccountIP', () => Backend.RotateAccountIP(id)),
+  removeAccount: (id: string) => invoke<boolean>('RemoveAccount', () => Backend.RemoveAccount(id)),
+  getProxies: () => invoke<string>('GetProxies', Backend.GetProxies),
+  saveProxies: (text: string) => invoke<boolean>('SaveProxies', () => Backend.SaveProxies(text)),
+  checkProxies: () => invoke<ProxyCheckResult[]>('CheckProxies', Backend.CheckProxies),
   getImageModels: () => invoke<FlowModel[]>('GetImageModels', Backend.GetImageModels),
   getActiveRotationCount: () =>
     invoke<number>('GetActiveRotationCount', Backend.GetActiveRotationCount),
@@ -159,45 +174,47 @@ export const api = {
     invoke<FlowProjectImage[]>('ListFlowProjectImages', () =>
       Backend.ListFlowProjectImages(accountID, projectID, mode),
     ),
-  getFlowProjectImageReference: (
-    accountID: string,
-    projectID: string,
-    mode: FlowImageProjectMode,
-    mediaID: string,
-  ) =>
-    invoke<FlowProjectImageReference>('GetFlowProjectImageReference', () =>
-      Backend.GetFlowProjectImageReference(accountID, projectID, mode, mediaID),
-    ),
   getDefaultImageOutputDirectory: () =>
     invoke<string>('GetDefaultImageOutputDirectory', Backend.GetDefaultImageOutputDirectory),
-  listNodes: () => invoke<NodeSpec[]>('ListNodes', Backend.ListNodes),
   saveMedia: (localUrl: string) =>
     invoke<SaveMediaResult>('SaveMedia', () => Backend.SaveMedia(localUrl)),
   chooseImageOutputDirectory: (defaultDir: string) =>
     invoke<MediaDirectoryResult>('ChooseImageOutputDirectory', () =>
       Backend.ChooseImageOutputDirectory(defaultDir),
     ),
-  saveImageToTaskFolder: (localUrl: string, outputDir: string, taskId: string) =>
-    invoke<SaveMediaResult>('SaveImageToTaskFolder', () =>
-      Backend.SaveImageToTaskFolder(localUrl, outputDir, taskId),
-    ),
 
+  getFlowImageTasks: () =>
+    invoke<FlowImageQueueState>('GetFlowImageTasks', Backend.GetFlowImageTasks),
+  submitFlowImageTasks: (req: FlowImageTaskRequest) =>
+    invoke<FlowImageTask[]>('SubmitFlowImageTasks', () => Backend.SubmitFlowImageTasks(req)),
+  runFlowImageTasks: (ids: string[]) =>
+    invoke<number>('RunFlowImageTasks', () => Backend.RunFlowImageTasks(ids)),
+  holdFlowImageTasks: (ids: string[]) =>
+    invoke<number>('HoldFlowImageTasks', () => Backend.HoldFlowImageTasks(ids)),
+  cancelFlowImageTask: (id: string) =>
+    invoke<FlowImageTask>('CancelFlowImageTask', () => Backend.CancelFlowImageTask(id)),
+  retryFlowImageTasks: (ids: string[]) =>
+    invoke<number>('RetryFlowImageTasks', () => Backend.RetryFlowImageTasks(ids)),
+  removeFlowImageTasks: (ids: string[]) =>
+    invoke<number>('RemoveFlowImageTasks', () => Backend.RemoveFlowImageTasks(ids)),
+  clearFinishedFlowImageTasks: () =>
+    invoke<number>('ClearFinishedFlowImageTasks', Backend.ClearFinishedFlowImageTasks),
+  addFlowImageTaskReferences: (ids: string[], refs: FlowImageTaskReference[]) =>
+    invoke<number>('AddFlowImageTaskReferences', () =>
+      Backend.AddFlowImageTaskReferences(ids, refs),
+    ),
+  pickFlowImageReferences: () =>
+    invoke<FlowImageTaskReference[]>('PickFlowImageReferences', Backend.PickFlowImageReferences),
+  importFlowProjectImageReference: (
+    accountID: string,
+    projectID: string,
+    mode: FlowImageProjectMode,
+    mediaID: string,
+  ) =>
+    invoke<FlowImageTaskReference>('ImportFlowProjectImageReference', () =>
+      Backend.ImportFlowProjectImageReference(accountID, projectID, mode, mediaID),
+    ),
   getMuseOptions: () => invoke<MuseOptions>('GetMuseOptions', Backend.GetMuseOptions),
-  getMuseAccounts: () => invoke<MuseAccount[]>('GetMuseAccounts', Backend.GetMuseAccounts),
-  addMuseAccount: (name: string) =>
-    invoke<MuseAccount>('AddMuseAccount', () => Backend.AddMuseAccount(name)),
-  importMuseCookies: (name: string, cookies: string) =>
-    invoke<MuseAccount>('ImportMuseCookies', () => Backend.ImportMuseCookies(name, cookies)),
-  replaceMuseCookies: (id: string, cookies: string) =>
-    invoke<MuseAccount>('ReplaceMuseCookies', () => Backend.ReplaceMuseCookies(id, cookies)),
-  checkMuseAccount: (id: string) =>
-    invoke<MuseAccount>('CheckMuseAccount', () => Backend.CheckMuseAccount(id)),
-  openMuseAccountBrowser: (id: string) =>
-    invoke<MuseAccount>('OpenMuseAccountBrowser', () => Backend.OpenMuseAccountBrowser(id)),
-  setMuseAccountEnabled: (id: string, enabled: boolean) =>
-    invoke<MuseAccount>('SetMuseAccountEnabled', () => Backend.SetMuseAccountEnabled(id, enabled)),
-  removeMuseAccount: (id: string) =>
-    invoke<boolean>('RemoveMuseAccount', () => Backend.RemoveMuseAccount(id)),
   pickMuseReferences: () =>
     invoke<MuseReference[]>('PickMuseReferences', Backend.PickMuseReferences),
   submitMuseJobs: (req: MuseJobRequest) =>
@@ -207,9 +224,12 @@ export const api = {
   retryMuseJob: (id: string) => invoke<MuseJob>('RetryMuseJob', () => Backend.RetryMuseJob(id)),
   removeMuseJob: (id: string) => invoke<boolean>('RemoveMuseJob', () => Backend.RemoveMuseJob(id)),
   runMuseJobs: (ids: string[]) => invoke<number>('RunMuseJobs', () => Backend.RunMuseJobs(ids)),
-  holdMuseQueued: () => invoke<number>('HoldMuseQueued', Backend.HoldMuseQueued),
-  retryMuseFailed: () => invoke<number>('RetryMuseFailed', Backend.RetryMuseFailed),
-  clearMuseFinished: () => invoke<number>('ClearMuseFinished', Backend.ClearMuseFinished),
+  holdMuseQueued: (kind: MuseJobKind) =>
+    invoke<number>('HoldMuseQueued', () => Backend.HoldMuseQueued(kind)),
+  retryMuseFailed: (kind: MuseJobKind) =>
+    invoke<number>('RetryMuseFailed', () => Backend.RetryMuseFailed(kind)),
+  clearMuseFinished: (kind: MuseJobKind) =>
+    invoke<number>('ClearMuseFinished', () => Backend.ClearMuseFinished(kind)),
   removeMuseJobs: (ids: string[]) =>
     invoke<number>('RemoveMuseJobs', () => Backend.RemoveMuseJobs(ids)),
   editAndRetryMuseJob: (id: string, prompt: string) =>
@@ -217,49 +237,7 @@ export const api = {
   openMuseOutputFolder: () => invoke<boolean>('OpenMuseOutputFolder', Backend.OpenMuseOutputFolder),
   revealMuseFile: (path: string) =>
     invoke<boolean>('RevealMuseFile', () => Backend.RevealMuseFile(path)),
-  getMuseProxies: () => invoke<string>('GetMuseProxies', Backend.GetMuseProxies),
-  saveMuseProxies: (text: string) =>
-    invoke<boolean>('SaveMuseProxies', () => Backend.SaveMuseProxies(text)),
-  checkMuseProxies: () => invoke<ProxyCheckResult[]>('CheckMuseProxies', Backend.CheckMuseProxies),
-  setMuseAccountProxy: (id: string, proxyLine: string) =>
-    invoke<MuseAccount>('SetMuseAccountProxy', () => Backend.SetMuseAccountProxy(id, proxyLine)),
-  rotateMuseAccountIP: (id: string) =>
-    invoke<ProxyCheckResult>('RotateMuseAccountIP', () => Backend.RotateMuseAccountIP(id)),
-  getMuseStudio: () => invoke<StudioData>('GetMuseStudio', Backend.GetMuseStudio),
-  saveMuseStudio: (data: StudioData) =>
-    invoke<boolean>('SaveMuseStudio', () =>
-      Backend.SaveMuseStudio(data as unknown as muse.StudioData),
-    ),
-  createMuseStudioProject: (name: string) =>
-    invoke<StudioProject>('CreateMuseStudioProject', () => Backend.CreateMuseStudioProject(name)),
-  setMuseProjectPaused: (id: string, paused: boolean) =>
-    invoke<boolean>('SetMuseProjectPaused', () => Backend.SetMuseProjectPaused(id, paused)),
-  setMuseActiveProject: (id: string) =>
-    invoke<boolean>('SetMuseActiveProject', () => Backend.SetMuseActiveProject(id)),
-  addMuseStudioAsset: (asset: StudioAsset) =>
-    invoke<StudioAsset>('AddMuseStudioAsset', () =>
-      Backend.AddMuseStudioAsset(asset as unknown as muse.StudioAsset),
-    ),
-  removeMuseStudioAsset: (id: string) =>
-    invoke<boolean>('RemoveMuseStudioAsset', () => Backend.RemoveMuseStudioAsset(id)),
-  updateMuseStudioAsset: (asset: StudioAsset) =>
-    invoke<StudioAsset>('UpdateMuseStudioAsset', () =>
-      Backend.UpdateMuseStudioAsset(asset as unknown as muse.StudioAsset),
-    ),
-  mergeMuseVideos: (videoPaths: string[], customName: string) =>
-    invoke<string>('MergeMuseVideos', () => Backend.MergeMuseVideos(videoPaths, customName)),
-  submitMuseProduction: (prod: Production) =>
-    invoke<Production>('SubmitMuseProduction', () =>
-      Backend.SubmitMuseProduction(prod as unknown as muse.Production),
-    ),
-  listMuseProductions: () =>
-    invoke<Production[]>('ListMuseProductions', Backend.ListMuseProductions),
-  approveMuseProductionBoard: (id: string) =>
-    invoke<boolean>('ApproveMuseProductionBoard', () => Backend.ApproveMuseProductionBoard(id)),
-  retryMuseProduction: (id: string) =>
-    invoke<boolean>('RetryMuseProduction', () => Backend.RetryMuseProduction(id)),
-  redrawMuseProductionBoard: (id: string) =>
-    invoke<boolean>('RedrawMuseProductionBoard', () => Backend.RedrawMuseProductionBoard(id)),
-  removeMuseProduction: (id: string) =>
-    invoke<boolean>('RemoveMuseProduction', () => Backend.RemoveMuseProduction(id)),
+  listMuseLibrary: () => invoke<MuseLibraryItem[]>('ListMuseLibrary', Backend.ListMuseLibrary),
+  removeMuseLibraryItems: (ids: string[]) =>
+    invoke<number>('RemoveMuseLibraryItems', () => Backend.RemoveMuseLibraryItems(ids)),
 };

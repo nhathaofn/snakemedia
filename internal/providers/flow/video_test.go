@@ -279,7 +279,7 @@ func TestGenerateVideosValidatesAndSelectsVariant(t *testing.T) {
 		"no model":      func(r *GenerateVideoRequest) { r.ModelID = "" },
 		"square":        func(r *GenerateVideoRequest) { r.AspectRatio = "1:1" },
 		"no duration":   func(r *GenerateVideoRequest) { r.Duration = 0 },
-		"too many":      func(r *GenerateVideoRequest) { r.Count = MaxVideosPerRequest + 1 },
+		"too many":      func(r *GenerateVideoRequest) { r.Count = maxVideosPerRequest() + 1 },
 		"unknown model": func(r *GenerateVideoRequest) { r.ModelID = "nope" },
 		"tier lacks 4s": func(r *GenerateVideoRequest) { r.Duration = 4 },
 		"no quality":    func(r *GenerateVideoRequest) { r.Resolution = "" },
@@ -428,5 +428,22 @@ func TestRedactSignedURLsKeepsPathButDropsSignature(t *testing.T) {
 	got := redactSignedURLs(`["https://storage.googleapis.com/v/abc.mp4?GoogleAccessId=x&Signature=secret",2]`)
 	if strings.Contains(got, "secret") || !strings.Contains(got, "https://storage.googleapis.com/v/abc.mp4?<redacted>") {
 		t.Fatalf("signature not redacted: %s", got)
+	}
+}
+
+func TestVideoModelsNameCatalogueValuesOnly(t *testing.T) {
+	families := []videoFamily{{id: "veo", name: "Veo", usages: []videoUsage{{
+		key: "veo_t2v", caps: [][]int{{1}}, tiers: map[int]bool{1: true}, costs: map[int]int{},
+		duration: 8, aspects: []int{1, 7, 2}, resolutions: []int{4, 9, 1},
+	}}}}
+	list := videoModels(families, "veo", 1)
+	if len(list) != 1 {
+		t.Fatalf("expected one model, got %+v", list)
+	}
+	if got := strings.Join(list[0].AspectRatios, ","); got != "16:9,9:16" {
+		t.Errorf("ratios %q: landscape first, codes without a wire name left out", got)
+	}
+	if got := strings.Join(list[0].Resolutions, ","); got != "720p,360p" {
+		t.Errorf("resolutions %q: catalogue values with a wire name, best first", got)
 	}
 }

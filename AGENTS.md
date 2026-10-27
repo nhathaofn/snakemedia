@@ -31,29 +31,33 @@ Production desktop application scaffold built with Go and Wails v2, using Vite +
 | `main.go` | Entry point: parses manifest, builds window options from config, lifecycle hooks, single-instance lock, enum bindings | — |
 | `app.go` | Wails-bound controller; every exported method is exposed to the frontend | — |
 | `internal/buildinfo/` | App identity and build metadata parsed from `wails.json` | `buildinfo.go` |
-| `internal/paths/` | Per-user data, config, log, media and default image output locations | `paths.go` |
-| `internal/config/` | User settings (`Theme`, `LogLevel`, `WindowScale`): validation, atomic persistence, corrupt-file quarantine | `config.go` |
+| `internal/paths/` | Per-user data, config, log, media, accounts and default image output locations | `paths.go` |
+| `internal/config/` | User settings (`Theme`, `LogLevel`, `WindowScale`, shared account/browser policy, Flow and Muse policy): validation, atomic persistence, corrupt-file quarantine | `config.go`, `accounts.go` |
 | `internal/window/` | Startup window geometry: `WindowScale` × primary screen, clamped to min size and screen | `sizing.go` |
 | `internal/logger/` | `log/slog` logger: file + stdout, size rotation at startup, runtime level changes | `logger.go` |
 | `internal/events/` | Typed IPC event names (`events.Event`) and dispatcher | `events.go` |
 | `internal/models/` | `models.Response[T]` envelope and `models.Code` result codes | `response.go` |
 | `internal/services/` | App services (`SystemService`, `SettingsService`) | — |
-| `internal/engine/` | Node specs (typed ports, settings), registry, typed node adapter | `node.go` |
-| `internal/media/` | Downloaded and imported media store, `/flow-media/` middleware, `media.save` node | `store.go` |
-| `internal/providers/` | `Provider` interface; one package per external service | `provider.go` |
-| `internal/providers/flow/` | Google Flow provider: rotation, projects, model catalogue, image/video generation, video edit, job journals, nodes | `provider.go`, `generation_jobs.go`, `generation_prep.go`, `edit.go` |
-| `internal/providers/flow/session/` | Google account sessions: Chrome profiles, DPAPI store, session sync | `account.go` |
-| `internal/providers/flow/chrome/` | Chrome/CDP, Flow HTTP client, Scotty video upload, reCAPTCHA (do not edit recaptcha.go) | `batch.go`, `upload.go` |
-| `internal/providers/muse/` | Muse provider: accounts (DPAPI store, cookie import), job queue and scheduler, chat-client runner, page script (`page.js`), proxy manager & local bridge, studio & @tag manifest, multi-scene production & FFmpeg pipeline | `provider.go`, `runner.go`, `scheduler.go`, `page.go`, `proxy.go`, `bridge.go`, `studio.go`, `production.go`, `ffmpeg.go` |
-| `internal/secure/` | DPAPI protection for local stores (Flow and Muse accounts) | `protect_windows.go` |
+| `internal/engine/` | Node specs (typed ports, settings), registry, typed node adapter, `MediaRef` (the value of image/video/media ports) and `Compatible`, option sources (`OptionsFrom`), `PendingError`, graph executor (`RunGraph`) and run keys that make re-runs resume instead of resend | `node.go`, `graph.go`, `media.go`, `options.go`, `runkey.go` |
+| `internal/media/` | Downloaded and imported media store, `/flow-media/` middleware, streaming `SaveTo`, allowed output roots (`roots.go`), `media.save` node | `store.go`, `roots.go` |
+| `internal/browser/` | Chrome for every provider: launcher (job object), one-browser-per-profile `Pool`, CDP calls (`Call`, `Evaluate`, `Conn`), tabs, cookie import | `pool.go`, `cdp.go`, `tab.go` |
+| `internal/proxy/` | Shared proxy list (encrypted), parsing, health checks, rotating providers, local bridge, per-account `Route` | `manager.go`, `proxy.go`, `bridge.go` |
+| `internal/accounts/` | Every provider's accounts: encrypted store, sign-in window or cookies, checks, proxy assignment, removal; a provider plugs in a `Site` and keeps its data in `Record.Data` | `service.go`, `api.go`, `site.go` |
+| `internal/jobs/` | Generic durable journal for queues: index by ID, atomic writes, transient (unsaved) progress, trim of finished records only, corrupt-file quarantine | `journal.go` |
+| `internal/providers/` | `Provider` interface and the plugin set (`Plugin{Site, New}`, `Prepare`/`Build`/`Register`/`Start`/`Close`); one package per external service | `provider.go` |
+| `internal/providers/flow/` | Google Flow provider: rotation, projects, model catalogue, image/video generation (shared billable entry in `billable.go`), video edit, job journals (cached), the durable image batch queue (Ảnh → Hàng loạt), platform limits not exposed by Flow as logged fallbacks (`limits.go`), nodes | `provider.go`, `billable.go`, `generation_jobs.go`, `image_queue.go`, `limits.go`, `edit.go`, `nodes.go` |
+| `internal/providers/flow/session/` | Flow's `accounts.Site` (identity, session values, balance) and the account view the Flow provider rotates over | `site.go`, `service.go` |
+| `internal/providers/flow/chrome/` | Flow protocol over the account's page: session inspection, RPC discovery, HTTP client, Scotty video upload, reCAPTCHA (do not edit recaptcha.go) | `session.go`, `batch.go`, `upload.go` |
+| `internal/providers/muse/` | Muse provider: `accounts.Site` reading quota and limits from muse.ai (`site.go`), image/video job queue (on `internal/jobs`) and scheduler, chat-client runner, page script (`page.js`), library of made files kept apart from the queue (`library.go`), engine nodes | `provider.go`, `runner.go`, `scheduler.go`, `page.go`, `protocol.go`, `library.go`, `nodes.go` |
+| `internal/secure/` | DPAPI protection for local stores (accounts, proxy list) | `protect_windows.go` |
 | `pkg/utils/` | Reusable utilities (atomic writes, file checks, byte formatting) | `fileutils.go` |
 | `tools/gofmtcheck/` | Cross-platform gofmt gate used by CI and verify | — |
-| `frontend/src/components/` | UI primitives (`ui/`), desktop shell (`layout/`: TitleBar, Header, Sidebar), feedback (`feedback/`) | — |
-| `frontend/src/features/` | One folder per header section (`home/`, `flow/`, `settings/`): `section.tsx` manifest + one sub-folder per feature (Flow: `image/`, `video/`, `edit/`, shared UI, generation and job recovery hooks in `shared/`) | `<section>/section.tsx`, `flow/shared/recovery.ts` |
+| `frontend/src/components/` | UI primitives (`ui/`, incl. `Modal`, `RevealList`), desktop shell (`layout/`: TitleBar, Header, Sidebar), feedback (`feedback/`), settings rows (`settings/`: section, number/text/toggle rows, "Nâng cao"), shared batch form and the one prompt split rule (`batch/`), `accounts/AccountWarning` | `batch/prompts.ts` |
+| `frontend/src/features/` | One folder per header section (`home/`: accounts of every provider, proxy list; `flow/`; `muse/`; `settings/`): `section.tsx` manifest + one sub-folder per feature (Flow: `image/` with `all/` rendering the Go image queue, `video/`, `edit/`, `settings/`, shared UI, `useStudioSubmit`, generation and job recovery hooks in `shared/`; Muse: queue workspace in `shared/`, `library/`, `settings/`) | `<section>/section.tsx`, `flow/shared/recovery.ts` |
 | `frontend/src/routes/` | Section registry (`registry.ts`) → router, header tabs, per-section sidebar; `useActiveSection` | `registry.ts` |
-| `frontend/src/stores/` | Global state with Zustand (`useAppStore`) | `appStore.ts` |
+| `frontend/src/stores/` | Global state with Zustand (`useAppStore`, `useAccountsStore`) | `appStore.ts`, `accountsStore.ts` |
 | `frontend/src/services/` | Typed bridge over generated bindings (`api`, `invoke`, `unwrap`), runtime detection | `api.ts` |
-| `frontend/src/hooks/` | `useAppBootstrap`, `useThemeSync`, `useWailsEvent`, `useDebounce` | — |
+| `frontend/src/hooks/` | `useAppBootstrap`, `useThemeSync`, `useWailsEvent`, `useAccountsLive`, `useConfigSection` / `useConfigUpdate` (revisioned saves, retry on conflict), `useCompactLayout`, `useNow` | — |
 | `frontend/src/constants/` | UI constants (toast duration, theme labels) | `ui.ts` |
 | `frontend/src/styles/` | Design tokens (`tokens.css`) and global styling (`globals.css`) | — |
 | `frontend/src/types/` | `backend.ts` re-exports generated DTOs/enums; `app.ts` holds frontend-only types | — |
@@ -72,10 +76,16 @@ Production desktop application scaffold built with Go and Wails v2, using Vite +
 - `.gitattributes` keeps LF in the working tree on every OS; gofmt and Prettier fail on CRLF.
 - Billable Flow requests carry a request ID that is also the conversation turn ID. Reuse an ID only when the previous attempt's outcome is unknown (bridge failure or pending job); a definite answer from Flow means the next attempt gets a new ID.
 - Flow RPC IDs are discovered by method name from the running build (`chrome/resolver.go`); project-only methods need `projectPageClient`. A hardcoded ID is allowed only as a logged fallback.
+- Accounts, their Chrome profiles, cookies and proxies belong to `internal/accounts` for every provider. A provider adds an `accounts.Site` and keeps its own runtime data in `Record.Data`; never a second account store, browser pool, CDP client or proxy path (ADR 0010).
+- Every account browser runs on the account's proxy route, and a provider's own HTTP clients use the same route (`ProxyURL`); a failing proxy stops the account, never falls back to the real IP. Only "Không dùng proxy" (`proxy.None`) is direct: an empty proxy list fails for every other account, `ProxyURL` returns an error when no route is recorded (never nil for "unknown"), and a signed-in account is never moved to another proxy line on its own.
+- Settings screens are built from `components/settings`: a few main rows per group, rarely changed values under "Nâng cao". Shared browser policy is edited in Cài đặt → Chung, provider policy in that provider's own settings screen.
 - Chrome launched by the app is tied to the app process (Windows job object), so a crash or dev reload does not leave a signed-in browser behind.
 - Video metadata for MP4/MOV/M4V is read from the file header (`internal/media/mp4probe.go`); ffprobe is only needed for WebM or unusual files.
 - `wails dev` builds run without the single-instance lock (`instance_lock_dev.go`), so a rebuild never hands off to the stale window.
-- A Muse job with a `SessionID` is only re-checked in that chat, never re-sent; a send whose answer was lost fails instead of retrying (ADR 0008).
+- A Muse job with a `SessionID` is only re-checked in that chat, never re-sent; a send whose answer was lost fails instead of retrying (ADR 0008). An unknown outcome (missing session ID, unknown status, missing file, transient RPC/listing error) is always re-checked, never treated as "not sent" (ADR 0012).
+- Durable queues and journals use `internal/jobs` (Flow image queue, Muse queue and library); a queue task writes its request ID to disk before the request can leave the app.
+- Every batch form splits prompts with `components/batch/prompts.ts` (blank-line blocks when the text has blank lines, else one prompt per line).
+- Platform limits Flow does not expose live in `internal/providers/flow/limits.go` as named fallbacks logged on first use; never in config or TypeScript.
 - Fast checks defined in `.agents/verify.json` must pass before finishing any development task.
 
 ## Boundaries
@@ -91,6 +101,10 @@ Production desktop application scaffold built with Go and Wails v2, using Vite +
 - 0006 Providers, Engine Nodes and a Shared Media Store → docs/decisions/0006-provider-engine-modules.md
 - 0007 Flow Video Editing: Scotty Upload and jIps6 → docs/decisions/0007-flow-video-edit.md
 - 0008 Muse Provider: Chat-Client Jobs, a Durable Queue and Many Accounts → docs/decisions/0008-muse-provider.md
+- 0009 Muse Queue Controls, Proxy Bridge, Studio Assets & Multi-Scene Production → docs/decisions/0009-muse-queue-proxy-studio-production.md
+- 0010 One Account Service for Every Provider: Shared Browser, CDP and Proxy → docs/decisions/0010-shared-accounts-browser-proxy.md
+- 0011 Muse: Base Image/Video Generation, Limits Read from Muse → docs/decisions/0011-muse-base-media-from-platform-config.md
+- 0012 Production Hardening: Pay Once, Fail Closed, Durable Queues, Composable Nodes → docs/decisions/0012-production-hardening-pay-once-fail-closed.md
 
 ## Deeper docs
 - Decisions: `docs/decisions/README.md`

@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
-import { RefreshCw, Sparkles, Square, Video, X } from 'lucide-react';
+import { RefreshCw, Sparkles, Square, Video } from 'lucide-react';
+import { Icon, Modal } from '../../../components/ui';
 import { cssAspectRatio } from './format';
 import { conversationItemKey } from './studioStore';
 import type { ConversationAttachment, ConversationTurn, StudioResult } from './studioStore';
+
+/** How close to the end (px) still counts as "at the bottom" of the conversation. */
+const BOTTOM_SLACK_PX = 48;
 
 /** Shared prompt/result conversation used by the Image, Video and Edit studios. */
 export function ConversationGallery<TItem extends StudioResult>({
@@ -29,25 +32,28 @@ export function ConversationGallery<TItem extends StudioResult>({
   const latest = turns.at(-1);
   const scrollKey = latest ? `${latest.id}:${latest.resultKeys.length}:${latest.pendingCount}` : '';
 
+  // Follow new results only while the user is already at the bottom, so
+  // reading older results is never interrupted.
+  const atBottom = useRef(true);
   useEffect(() => {
     const element = scrollRef.current;
-    if (element) element.scrollTo({ top: element.scrollHeight, behavior: 'smooth' });
+    if (element && atBottom.current) {
+      element.scrollTo({ top: element.scrollHeight, behavior: 'smooth' });
+    }
   }, [scrollKey]);
 
-  useEffect(() => {
-    if (!preview) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setPreview(null);
-    };
-    window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [preview]);
-
   return (
-    <div className="flow-workspace-gallery flow-conversation-gallery" ref={scrollRef}>
+    <div
+      className="flow-workspace-gallery flow-conversation-gallery"
+      ref={scrollRef}
+      onScroll={(event) => {
+        const el = event.currentTarget;
+        atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_SLACK_PX;
+      }}
+    >
       {turns.length === 0 ? (
         <div className="flow-gallery-empty">
-          <Sparkles size={40} className="flow-empty-icon" />
+          <Icon icon={Sparkles} size="display" className="flow-empty-icon" />
           <h3>{emptyTitle}</h3>
           <p>{emptyText}</p>
         </div>
@@ -79,7 +85,11 @@ export function ConversationGallery<TItem extends StudioResult>({
                               ) : (
                                 <>
                                   <video src={attachment.url} muted preload="metadata" />
-                                  <Video size={16} className="flow-chat-attachment-video-icon" />
+                                  <Icon
+                                    icon={Video}
+                                    size="md"
+                                    className="flow-chat-attachment-video-icon"
+                                  />
                                 </>
                               )}
                             </span>
@@ -94,7 +104,7 @@ export function ConversationGallery<TItem extends StudioResult>({
                 {(results.length > 0 || turn.pendingCount > 0 || turn.error) && (
                   <div className="flow-chat-row flow-chat-ai-row">
                     <span className="flow-chat-ai-icon" aria-label="Google Flow">
-                      <Sparkles size={16} />
+                      <Icon icon={Sparkles} size="md" />
                     </span>
                     <div className="flow-chat-ai-message">
                       <span className="flow-chat-role">Flow</span>
@@ -114,7 +124,7 @@ export function ConversationGallery<TItem extends StudioResult>({
                                 : undefined
                             }
                           >
-                            <RefreshCw size={20} className="skeleton-spinner" />
+                            <Icon icon={RefreshCw} size="xl" className="skeleton-spinner" />
                             <span>
                               {turn.pendingLabel} {index + 1}/{turn.pendingCount}…
                             </span>
@@ -127,7 +137,7 @@ export function ConversationGallery<TItem extends StudioResult>({
                             title="Dừng chờ. Job Flow đã nhận vẫn chạy và có thể kiểm tra tiếp."
                             onClick={() => onStopTurn(turn.id)}
                           >
-                            <Square size={12} />
+                            <Icon icon={Square} size="sm" />
                             Dừng
                           </button>
                         )}
@@ -145,34 +155,16 @@ export function ConversationGallery<TItem extends StudioResult>({
           })}
         </div>
       )}
-      {preview &&
-        createPortal(
-          <div className="flow-chat-preview-overlay" onClick={() => setPreview(null)}>
-            <div
-              className="flow-chat-preview-dialog"
-              role="dialog"
-              aria-modal="true"
-              aria-label={preview.name}
-              onClick={(event) => event.stopPropagation()}
-            >
-              <button
-                type="button"
-                className="flow-chat-preview-close"
-                aria-label="Đóng xem trước"
-                onClick={() => setPreview(null)}
-              >
-                <X size={16} />
-              </button>
-              {preview.kind === 'image' ? (
-                <img src={preview.url} alt={preview.name} />
-              ) : (
-                <video src={preview.url} controls preload="metadata" />
-              )}
-              <span className="flow-chat-preview-name">{preview.name}</span>
-            </div>
-          </div>,
-          document.body,
-        )}
+      {preview && (
+        <Modal variant="lightbox" label={preview.name} onClose={() => setPreview(null)}>
+          {preview.kind === 'image' ? (
+            <img src={preview.url} alt={preview.name} />
+          ) : (
+            <video src={preview.url} controls preload="metadata" />
+          )}
+          <span className="modal-caption">{preview.name}</span>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -237,7 +229,7 @@ export function PromptBar({
           }
           onClick={onGenerate}
         >
-          <Sparkles size={18} />
+          <Icon icon={Sparkles} size="lg" />
           <span>{generating ? 'Tạo tiếp' : 'Tạo'}</span>
         </button>
       </div>

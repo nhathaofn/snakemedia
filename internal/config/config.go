@@ -62,14 +62,17 @@ const (
 	MinWindowScale  = 0.3
 	MaxWindowScale  = 1.0
 
-	// DefaultCdpPort is the default port used to attach to Chrome for CDP automation.
-	DefaultCdpPort = 0 // Let Chrome/OS assign an isolated port for each profile.
-	MinPort        = 1024
-	MaxPort        = 65535
+	// MinPort..MaxPort bounds a Chrome debugging port read back from a profile.
+	MinPort = 1024
+	MaxPort = 65535
 )
 
 // ErrInvalidConfig marks configuration that fails validation or cannot be decoded.
 var ErrInvalidConfig = errors.New("config: invalid configuration")
+
+// ErrConflict refuses an update made from an older copy of the configuration:
+// saving it would undo changes another screen saved in between.
+var ErrConflict = errors.New("Cài đặt vừa được lưu ở màn hình khác; hãy thử lưu lại.")
 
 // AppConfig defines user-editable runtime settings.
 type AppConfig struct {
@@ -77,13 +80,14 @@ type AppConfig struct {
 	LogLevel LogLevel `json:"logLevel"`
 	// WindowScale is the fraction (MinWindowScale..MaxWindowScale) of the primary
 	// screen's width and height used for the window at startup.
-	WindowScale float64 `json:"windowScale"`
-	// CdpPort is an optional preferred debug port; zero uses Chrome's OS-assigned
-	// port. Other managed profiles always receive their own independent port.
-	CdpPort  int           `json:"cdpPort"`
-	Accounts AccountConfig `json:"accounts"`
-	Flow     FlowConfig    `json:"flow"`
-	Muse     MuseConfig    `json:"muse"`
+	WindowScale float64       `json:"windowScale"`
+	Accounts    AccountConfig `json:"accounts"`
+	Flow        FlowConfig    `json:"flow"`
+	Muse        MuseConfig    `json:"muse"`
+	// Revision counts saves in this run. An update must carry the revision it
+	// was made from (0 from a client that predates it is accepted), so a stale
+	// screen cannot overwrite a newer save. It is not kept across restarts.
+	Revision int `json:"revision"`
 }
 
 // DefaultConfig provides the fallback settings used on first run or when the file is unusable.
@@ -92,7 +96,6 @@ func DefaultConfig() AppConfig {
 		Theme:       ThemeDark,
 		LogLevel:    LogLevelInfo,
 		WindowScale: 0.7,
-		CdpPort:     DefaultCdpPort,
 		Accounts:    DefaultAccountConfig(),
 		Flow:        DefaultFlowConfig(),
 		Muse:        DefaultMuseConfig(),
@@ -111,9 +114,6 @@ func (c AppConfig) Validate() error {
 	// Written as a positive range check so NaN is rejected too.
 	if !(c.WindowScale >= MinWindowScale && c.WindowScale <= MaxWindowScale) {
 		errs = append(errs, fmt.Errorf("windowScale %v must be between %v and %v", c.WindowScale, MinWindowScale, MaxWindowScale))
-	}
-	if c.CdpPort != 0 && (c.CdpPort < MinPort || c.CdpPort > MaxPort) {
-		errs = append(errs, fmt.Errorf("cdpPort %d must be between %d and %d", c.CdpPort, MinPort, MaxPort))
 	}
 	if err := c.Accounts.Validate(); err != nil {
 		errs = append(errs, err)
@@ -142,7 +142,9 @@ type Manager struct {
 // file it uses defaults, moves the bad file aside, and returns the error for logging.
 func NewManager(path string) (*Manager, error) {
 	m := &Manager{config: DefaultConfig(), path: path}
-	return m, m.load()
+	err := m.load()
+	m.config.Revision = 1
+	return m, err
 }
 
 // Path returns the file the manager persists to.
@@ -158,10 +160,8 @@ func (m *Manager) Get() AppConfig {
 }
 
 // Update validates cfg, persists it atomically, and only then makes it current.
+// cfg must be based on the current revision (see AppConfig.Revision).
 func (m *Manager) Update(cfg AppConfig) (AppConfig, error) {
-	if cfg.CdpPort == 0 {
-		cfg.CdpPort = DefaultCdpPort
-	}
 	if err := cfg.Validate(); err != nil {
 		return m.Get(), err
 	}
@@ -169,6 +169,10 @@ func (m *Manager) Update(cfg AppConfig) (AppConfig, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if cfg.Revision != 0 && cfg.Revision != m.config.Revision {
+		return m.config, ErrConflict
+	}
+	cfg.Revision = m.config.Revision + 1
 	if err := m.write(cfg); err != nil {
 		return m.config, err
 	}
@@ -192,6 +196,8 @@ func (m *Manager) load() error {
 	cfg := DefaultConfig()
 	decodeErr := json.Unmarshal(data, &cfg)
 	if decodeErr == nil {
+		migrate(data, &cfg)
+		cfg.Revision = 0
 		decodeErr = cfg.Validate()
 	} else {
 		decodeErr = fmt.Errorf("%w: %w", ErrInvalidConfig, decodeErr)
@@ -202,6 +208,41 @@ func (m *Manager) load() error {
 
 	m.config = cfg
 	return nil
+}
+
+// migrate carries values saved under an older key over to where they live now.
+func migrate(data []byte, cfg *AppConfig) {
+	var old struct {
+		Accounts struct {
+			MaxDownloadBytes    *int64 `json:"maxDownloadBytes"`
+			MaxDiscoveryBytes   *int64 `json:"maxDiscoveryBytes"`
+			MaxDiscoveryScripts *int   `json:"maxDiscoveryScripts"`
+			RPCCacheSeconds     *int   `json:"rpcCacheSeconds"`
+		} `json:"accounts"`
+		Flow struct {
+			MaxDownloadBytes    *int64 `json:"maxDownloadBytes"`
+			MaxDiscoveryBytes   *int64 `json:"maxDiscoveryBytes"`
+			MaxDiscoveryScripts *int   `json:"maxDiscoveryScripts"`
+			RPCCacheSeconds     *int   `json:"rpcCacheSeconds"`
+		} `json:"flow"`
+	}
+	if json.Unmarshal(data, &old) != nil {
+		return
+	}
+	// The download cap used to be Flow's own; Muse downloads results too.
+	if old.Accounts.MaxDownloadBytes == nil && old.Flow.MaxDownloadBytes != nil {
+		cfg.Accounts.MaxDownloadBytes = *old.Flow.MaxDownloadBytes
+	}
+	// Flow's RPC discovery policy used to sit with the shared account policy.
+	if old.Flow.MaxDiscoveryBytes == nil && old.Accounts.MaxDiscoveryBytes != nil {
+		cfg.Flow.MaxDiscoveryBytes = *old.Accounts.MaxDiscoveryBytes
+	}
+	if old.Flow.MaxDiscoveryScripts == nil && old.Accounts.MaxDiscoveryScripts != nil {
+		cfg.Flow.MaxDiscoveryScripts = *old.Accounts.MaxDiscoveryScripts
+	}
+	if old.Flow.RPCCacheSeconds == nil && old.Accounts.RPCCacheSeconds != nil {
+		cfg.Flow.RPCCacheSeconds = *old.Accounts.RPCCacheSeconds
+	}
 }
 
 // quarantine moves an unusable config file aside so the user's data is kept for inspection.

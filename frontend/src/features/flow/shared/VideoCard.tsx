@@ -1,7 +1,7 @@
 import { AlertCircle, Download, X } from 'lucide-react';
 import './VideoCard.css';
 import type { GeneratedVideoItem } from '../../../types';
-import { Spinner } from '../../../components/ui';
+import { Icon, Spinner } from '../../../components/ui';
 import { cssAspectRatio } from './format';
 
 /** One generated video: player (or the reason it failed), details and save. */
@@ -30,7 +30,7 @@ export function VideoCard({
             className={`flow-media-error${video.pending ? ' flow-media-pending' : ''}`}
             role={video.pending ? 'status' : 'alert'}
           >
-            {video.pending ? <Spinner size={20} /> : <AlertCircle size={20} />}
+            {video.pending ? <Spinner size={20} /> : <Icon icon={AlertCircle} size="xl" />}
             <span>{video.pending ? video.error || 'Đang chờ Flow xử lý.' : video.error}</span>
           </div>
         )}
@@ -62,7 +62,7 @@ export function VideoCard({
             aria-label="Ẩn kết quả lỗi khỏi lịch sử"
             onClick={onDismiss}
           >
-            <X size={14} />
+            <Icon icon={X} size="sm" />
           </button>
         )}
         <button
@@ -72,7 +72,7 @@ export function VideoCard({
           disabled={!video.localUrl}
           onClick={() => video.localUrl && onSave(video.localUrl)}
         >
-          <Download size={14} />
+          <Icon icon={Download} size="sm" />
         </button>
       </div>
     </div>

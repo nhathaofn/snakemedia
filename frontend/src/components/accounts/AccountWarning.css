@@ -1,0 +1,18 @@
+.account-warning {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-6);
+  padding: var(--space-5) var(--space-6);
+  border: var(--border-width) solid var(--feedback-warning-border);
+  border-radius: var(--radius-md);
+  background: var(--feedback-warning-bg);
+  color: var(--text-primary);
+  font-size: var(--font-size-small);
+}
+
+.account-warning-compact {
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
+}

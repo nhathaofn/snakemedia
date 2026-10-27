@@ -1,8 +1,10 @@
 package flow
 
 import (
+	"SnakeMedia/internal/browser"
 	"context"
 	"errors"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -92,8 +94,12 @@ func (f *fakeAccounts) AcquireProfile(profileDir string) func() {
 	}
 }
 
-func (f *fakeAccounts) EnsureAccountHeadlessBrowser(context.Context, session.StoredAccount) (*chrome.Browser, error) {
+func (f *fakeAccounts) EnsureAccountHeadlessBrowser(context.Context, session.StoredAccount) (*browser.Browser, error) {
 	return nil, errors.New("no Chrome in unit tests")
+}
+
+func (f *fakeAccounts) ProxyURL(context.Context, session.StoredAccount) (*url.URL, error) {
+	return nil, nil
 }
 
 func (f *fakeAccounts) SyncSession(_ context.Context, acc session.StoredAccount) (session.StoredAccount, error) {

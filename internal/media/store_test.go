@@ -1,8 +1,6 @@
 package media
 
 import (
-	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -81,6 +79,7 @@ func TestSaveImageToTaskFolderKeepsBatchImagesTogether(t *testing.T) {
 		t.Fatal(err)
 	}
 	outputDir := t.TempDir()
+	store.AllowRoot(outputDir)
 	taskID := uuid.NewString()
 
 	first := store.SaveImageToTaskFolder(firstImage, outputDir, taskID)
@@ -115,12 +114,15 @@ func TestSaveImageToTaskFolderRejectsInvalidInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	allowed := t.TempDir()
+	store.AllowRoot(allowed)
 	for _, tc := range []struct {
 		name, localURL, outputDir, taskID string
 	}{
-		{"invalid task id", image, t.TempDir(), "../outside"},
-		{"missing folder", image, filepath.Join(t.TempDir(), "missing"), uuid.NewString()},
-		{"video result", video, t.TempDir(), uuid.NewString()},
+		{"invalid task id", image, allowed, "../outside"},
+		{"missing folder", image, filepath.Join(allowed, "missing"), uuid.NewString()},
+		{"video result", video, allowed, uuid.NewString()},
+		{"folder never chosen", image, t.TempDir(), uuid.NewString()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if response := store.SaveImageToTaskFolder(tc.localURL, tc.outputDir, tc.taskID); response.Success {
@@ -162,22 +164,8 @@ func TestMiddlewareServesVideosBeforeAssets(t *testing.T) {
 	}
 }
 
-func TestSaveNodeCopiesIntoConfiguredFolder(t *testing.T) {
-	store := NewStore(t.TempDir())
-	local, err := store.Put("img", "image/png", ".png", []byte("PNG"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := t.TempDir()
-	input, _ := json.Marshal(SaveRequest{LocalURL: local, Dir: dir})
-	out, err := store.SaveNode().Run(context.Background(), input)
-	if err != nil || out.(SaveResult).Path != filepath.Join(dir, "img.png") {
-		t.Fatalf("unexpected result %+v %v", out, err)
-	}
-	if _, err := store.SaveNode().Run(context.Background(), json.RawMessage(`{"localUrl":"`+local+`"}`)); err == nil {
-		t.Fatal("a save without a folder must fail")
-	}
-}
+// videoExtensions stands for a provider's upload whitelist.
+var videoExtensions = []string{".mov", ".mp4"}
 
 func TestImportVideoCopiesIntoStore(t *testing.T) {
 	store := NewStore(t.TempDir())
@@ -185,7 +173,7 @@ func TestImportVideoCopiesIntoStore(t *testing.T) {
 	if err := os.WriteFile(src, []byte("MOVDATA"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	res := store.ImportVideo(func() (string, error) { return src, nil })
+	res := store.ImportVideo(videoExtensions, func() (string, error) { return src, nil })
 	if !res.Success || res.Data.FileName != "My Clip.MOV" || res.Data.Size != 7 || res.Data.ContentType != "video/quicktime" {
 		t.Fatalf("unexpected result %+v", res)
 	}
@@ -196,12 +184,83 @@ func TestImportVideoCopiesIntoStore(t *testing.T) {
 	if data, err := os.ReadFile(path); err != nil || string(data) != "MOVDATA" {
 		t.Fatalf("copied bytes differ: %q %v", data, err)
 	}
-	if res := store.ImportVideo(func() (string, error) { return "", nil }); !res.Success || !res.Data.Canceled {
+	if res := store.ImportVideo(videoExtensions, func() (string, error) { return "", nil }); !res.Success || !res.Data.Canceled {
 		t.Fatalf("closing the dialog must not be an error: %+v", res)
 	}
 	bad := filepath.Join(t.TempDir(), "notes.txt")
 	_ = os.WriteFile(bad, []byte("x"), 0o600)
-	if res := store.ImportVideo(func() (string, error) { return bad, nil }); res.Success || res.Code != models.CodeInvalidArgument {
+	if res := store.ImportVideo(videoExtensions, func() (string, error) { return bad, nil }); res.Success || res.Code != models.CodeInvalidArgument {
 		t.Fatalf("a non-video file must be refused: %+v", res)
+	}
+}
+
+// Only folders the user chose (or the app's own) take files or reveal them;
+// a link inside a root cannot lead out of it.
+func TestRootsLimitFoldersAndFiles(t *testing.T) {
+	store := NewStore(t.TempDir())
+	root, outside := t.TempDir(), t.TempDir()
+	store.AllowRoot(root)
+	if _, err := store.CheckDir(filepath.Join(root, "batch", "a")); err != nil {
+		t.Fatalf("a folder below a root was refused: %v", err)
+	}
+	if _, err := store.CheckDir(filepath.Join(root, "..")); err == nil {
+		t.Fatal("the parent of a root was accepted")
+	}
+	if _, err := store.CheckDir(outside); err == nil {
+		t.Fatal("a folder nobody chose was accepted")
+	}
+	local, err := store.Put("img", "image/png", ".png", []byte("PNG"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := store.Path(local)
+	if _, err := store.CheckFile(stored); err != nil {
+		t.Fatalf("a stored media file was refused: %v", err)
+	}
+	if _, err := store.CheckFile(filepath.Join(outside, "x.png")); err == nil {
+		t.Fatal("a file outside every root was accepted")
+	}
+	settings := outside
+	store.AllowRootsFrom(func() []string { return []string{settings} })
+	if _, err := store.CheckDir(outside); err != nil {
+		t.Fatalf("a folder from settings was refused: %v", err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(t.TempDir(), link); err == nil {
+		if _, err := store.CheckDir(link); err == nil {
+			t.Fatal("a link inside a root led outside it")
+		}
+	}
+}
+
+// SaveTo streams a stored file into an allowed folder it creates, numbers a
+// taken name instead of replacing it, and refuses folders outside the roots
+// and names that are paths.
+func TestSaveToNumbersNamesAndKeepsRoots(t *testing.T) {
+	store := NewStore(t.TempDir())
+	local, err := store.Put("clip", "video/mp4", ".mp4", []byte("MP4"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	store.AllowRoot(root)
+	dir := filepath.Join(root, "2026-10-27")
+
+	first, err := store.SaveTo(local, dir, "mèo-1")
+	if err != nil || filepath.Base(first) != "mèo-1.mp4" {
+		t.Fatalf("first save = %q %v", first, err)
+	}
+	second, err := store.SaveTo(local, dir, "mèo-1")
+	if err != nil || filepath.Base(second) != "mèo-1-2.mp4" {
+		t.Fatalf("second save = %q %v", second, err)
+	}
+	if data, err := os.ReadFile(second); err != nil || string(data) != "MP4" {
+		t.Fatalf("copied bytes = %q %v", data, err)
+	}
+	if _, err := store.SaveTo(local, t.TempDir(), "x"); err == nil {
+		t.Fatal("saved outside the allowed folders")
+	}
+	if _, err := store.SaveTo(local, dir, "../x"); err == nil {
+		t.Fatal("a name with a path was accepted")
 	}
 }

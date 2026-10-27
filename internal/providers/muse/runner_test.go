@@ -1,12 +1,15 @@
 package muse
 
 import (
+	"SnakeMedia/internal/accounts"
+	"SnakeMedia/internal/config"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunJobSendsPollsAndDownloads(t *testing.T) {
@@ -22,7 +25,7 @@ func TestRunJobSendsPollsAndDownloads(t *testing.T) {
 	if got.Status != MuseJobSucceeded || got.SessionID != "s1" || got.Attempts != 1 || len(got.Files) != 1 {
 		t.Fatalf("job = %+v", got)
 	}
-	if len(page.sends) != 1 || !strings.HasPrefix(page.sends[0], "Tạo video · tỷ lệ 9:16 dọc\n") || !strings.HasSuffix(page.sends[0], "một con mèo") {
+	if len(page.sends) != 1 || page.sends[0] != "Tạo video\nmột con mèo" {
 		t.Fatalf("sent %q", page.sends)
 	}
 	path, err := p.media.Path(got.Files[0])
@@ -32,7 +35,7 @@ func TestRunJobSendsPollsAndDownloads(t *testing.T) {
 	if data, _ := os.ReadFile(path); string(data) != "video-bytes" {
 		t.Fatalf("downloaded %q", data)
 	}
-	if a, _ := p.accounts.get(acc.ID); a.LastSentAt == "" {
+	if a, _ := p.accounts.Record(acc.ID); museView(a).LastSentAt == "" {
 		t.Fatal("last send time not recorded")
 	}
 }
@@ -117,9 +120,9 @@ func TestUsageReplyRequeuesAndRestsAccount(t *testing.T) {
 	if got.Status != MuseJobQueued || got.Attempts != 0 || got.SessionID != "" {
 		t.Fatalf("job = %+v", got)
 	}
-	a, _ := p.accounts.get(acc.ID)
-	if a.PausedUntil == "" || usable(a.MuseAccount, p.cfg.Get().Muse, p.now()) {
-		t.Fatalf("account not rested: %+v", a.MuseAccount)
+	a, _ := p.accounts.Record(acc.ID)
+	if a.PausedUntil == "" || usable(museView(a), p.cfg.Get().Muse, p.now()) {
+		t.Fatalf("account not rested: %+v", a.Account)
 	}
 }
 
@@ -155,43 +158,103 @@ func TestSignedOutAccountReturnsJobWithoutSpendingAttempt(t *testing.T) {
 	if got := mustJob(t, p, job.ID); got.Status != MuseJobQueued || got.Attempts != 0 || len(page.sends) != 0 {
 		t.Fatalf("job = %+v sends=%d", got, len(page.sends))
 	}
-	if a, _ := p.accounts.get(acc.ID); a.Status != MuseAccountSignedOut {
+	if a, _ := p.accounts.Record(acc.ID); a.Status != accounts.StatusSignedOut {
 		t.Fatalf("account status = %s", a.Status)
 	}
 }
 
-func TestImageJobKeepsRequestedCount(t *testing.T) {
+func TestImageJobCollectsEveryImage(t *testing.T) {
 	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "idle"},
 		events: []AssistantEvent{{Images: []ResultMedia{
-			{Path: "/1.png", Mime: "image/png", ByteLen: 1}, {Path: "/2.png", Mime: "image/png", ByteLen: 1}, {Path: "/3.png", Mime: "image/png", ByteLen: 1},
-		}}},
-		files: map[string][]byte{"/1.png": {1}, "/2.png": {2}, "/3.png": {3}}}
+			{Path: "/1.png", Mime: "image/png", ByteLen: 1}, {Path: "/2.png", Mime: "image/png", ByteLen: 1},
+		}, Videos: []ResultMedia{{Path: "/x.mp4", Mime: "video/mp4", ByteLen: 1}}}},
+		files: map[string][]byte{"/1.png": {1}, "/2.png": {2}, "/x.mp4": {3}}}
 	p := testProvider(t, page)
 	acc := addSignedIn(t, p, "A")
-	res := p.SubmitJobs(MuseJobRequest{Kind: MuseJobImage, Prompts: []string{"x"}, Ratio: "1:1", Count: 2})
-	if !res.Success {
-		t.Fatal(res.Error)
-	}
+	job := submit(t, p, MuseJobImage, "x")[0]
 
-	p.runOne(context.Background(), res.Data[0].ID, acc.ID)
+	p.runOne(context.Background(), job.ID, acc.ID)
 
-	if got := mustJob(t, p, res.Data[0].ID); got.Status != MuseJobSucceeded || len(got.Files) != 2 {
+	if got := mustJob(t, p, job.ID); got.Status != MuseJobSucceeded || len(got.Files) != 2 {
 		t.Fatalf("job = %+v", got)
 	}
-	if !strings.HasPrefix(page.sends[0], "Tạo ảnh · 2 ảnh · tỷ lệ 1:1 vuông\n") {
+	if page.sends[0] != "Tạo ảnh\nx" {
 		t.Fatalf("sent %q", page.sends[0])
+	}
+}
+
+func TestDownloadRejectsWrongSize(t *testing.T) {
+	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "idle"},
+		events: []AssistantEvent{{Videos: []ResultMedia{{Path: "/v.mp4", Mime: "video/mp4", ByteLen: 10}}}},
+		files:  map[string][]byte{"/v.mp4": []byte("short")}}
+	p := testProvider(t, page)
+	acc := addSignedIn(t, p, "A")
+	job := submit(t, p, MuseJobVideo, "x")[0]
+
+	p.runOne(context.Background(), job.ID, acc.ID)
+
+	if got := mustJob(t, p, job.ID); got.Status == MuseJobSucceeded {
+		t.Fatalf("a truncated file was accepted: %+v", got)
+	}
+}
+
+// Reference images are checked against the limits Muse's composer has for
+// the account, read from the page when the account has none stored.
+func TestAttachmentsFollowMuseLimits(t *testing.T) {
+	page := &fakePage{loggedIn: true, caps: testCaps(), sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "idle"}}
+	page.events, page.files = videoResult("/v.mp4", []byte("v"))
+	p := testProvider(t, page)
+	acc := addSignedIn(t, p, "A")
+	png, err := p.media.Put("ref", "image/png", ".png", []byte("png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := submit(t, p, MuseJobVideo, "x")[0]
+	p.jobs.update(job.ID, func(j *MuseJob) { j.References = []string{png} })
+
+	p.runOne(context.Background(), job.ID, acc.ID)
+
+	if got := mustJob(t, p, job.ID); got.Status != MuseJobSucceeded {
+		t.Fatalf("job = %+v", got)
+	}
+	if atts := page.attachments[0]; len(atts) != 1 || atts[0].MimeType != "image/png" || atts[0].Filename != "anh_1.png" {
+		t.Fatalf("attachments = %+v", atts)
+	}
+	if a, _ := p.accounts.Record(acc.ID); func() bool {
+		var data museData
+		_ = accounts.DecodeData(a, &data)
+		return data.Capabilities == nil
+	}() {
+		t.Fatal("capabilities read from the page were not kept")
+	}
+
+	big, _ := p.media.Put("big", "image/png", ".png", make([]byte, 2<<20))
+	webp, _ := p.media.Put("w", "image/webp", ".webp", []byte("w"))
+	for _, refs := range [][]string{{big}, {webp}, {png, png, png}} {
+		job := submit(t, p, MuseJobVideo, "x")[0]
+		p.jobs.update(job.ID, func(j *MuseJob) { j.References = refs })
+		p.runOne(context.Background(), job.ID, acc.ID)
+		if got := mustJob(t, p, job.ID); got.Status != MuseJobFailed {
+			t.Fatalf("refs %v: job = %+v", refs, got)
+		}
 	}
 }
 
 func TestStartSettlesInterruptedJobs(t *testing.T) {
 	p := testProvider(t, &fakePage{})
-	jobs := submit(t, p, MuseJobVideo, "sending", "sent", "picked")
+	acc := addSignedIn(t, p, "A")
+	jobs := submit(t, p, MuseJobVideo, "sending", "sent", "picked", "orphan")
 	p.jobs.update(jobs[0].ID, func(j *MuseJob) { j.Status, j.Sending, j.Attempts = MuseJobProcessing, true, 1 })
-	p.jobs.update(jobs[1].ID, func(j *MuseJob) { j.Status, j.SessionID, j.Attempts = MuseJobProcessing, "s", 1 })
+	p.jobs.update(jobs[1].ID, func(j *MuseJob) {
+		j.Status, j.SessionID, j.AccountID, j.Attempts = MuseJobProcessing, "s", acc.ID, 1
+	})
 	p.jobs.update(jobs[2].ID, func(j *MuseJob) { j.Status, j.Attempts = MuseJobProcessing, 1 })
+	p.jobs.update(jobs[3].ID, func(j *MuseJob) {
+		j.Status, j.SessionID, j.AccountID, j.Attempts = MuseJobProcessing, "s2", "gone", 1
+	})
 
 	// A fresh provider over the same directory reads the journal like a restart.
-	restarted := New(filepath.Dir(filepath.Dir(p.accounts.path)), p.cfg, p.media)
+	restarted := New(filepath.Dir(p.root), p.defaultOutputDir, p.cfg, p.media, p.accounts)
 	restarted.pageFor = p.pageFor
 	ctx, cancel := context.WithCancel(context.Background())
 	restarted.Start(ctx, nil)
@@ -207,16 +270,21 @@ func TestStartSettlesInterruptedJobs(t *testing.T) {
 	if got := mustJob(t, restarted, jobs[2].ID); got.Status != MuseJobQueued || got.Attempts != 0 {
 		t.Fatalf("picked job = %+v", got)
 	}
+	// Only the sending account can read a chat: a sent job whose account is
+	// gone fails instead of being sent again.
+	if got := mustJob(t, restarted, jobs[3].ID); got.Status != MuseJobFailed || got.Error != errAccountGone {
+		t.Fatalf("orphaned job = %+v", got)
+	}
 }
 
 func TestSubmitValidates(t *testing.T) {
 	p := testProvider(t, &fakePage{})
 	cases := []MuseJobRequest{
-		{Kind: "gif", Prompts: []string{"x"}, Ratio: "9:16"},
-		{Kind: MuseJobVideo, Prompts: []string{"x"}, Ratio: "2:1"},
-		{Kind: MuseJobVideo, Prompts: []string{"  ", ""}, Ratio: "9:16"},
-		{Kind: MuseJobImage, Prompts: []string{"x"}, Ratio: "9:16", Count: 9},
-		{Kind: MuseJobVideo, Prompts: []string{"x"}, Ratio: "9:16", References: []string{"C:/secret.png"}},
+		{Kind: "gif", Prompts: []string{"x"}},
+		{Kind: "v2v", Prompts: []string{"x"}},
+		{Kind: MuseJobVideo, Prompts: []string{"  ", ""}},
+		// References need Muse's limits, which no account has read yet.
+		{Kind: MuseJobVideo, Prompts: []string{"x"}, References: []string{"/flow-media/a.png"}},
 	}
 	for i, req := range cases {
 		if res := p.SubmitJobs(req); res.Success {
@@ -227,161 +295,33 @@ func TestSubmitValidates(t *testing.T) {
 	if len(jobs) != 2 || jobs[0].CreatedAt >= jobs[1].CreatedAt {
 		t.Fatalf("batch = %+v", jobs)
 	}
-}
-
-func TestRunJobSendsIntoThread(t *testing.T) {
-	events, files := videoResult("/out/thread.mp4", []byte("thread-video"))
-	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "idle"}, events: events, files: files}
-	p := testProvider(t, page)
-	acc := addSignedIn(t, p, "A")
-	job := submit(t, p, MuseJobVideo, "cảnh storyboard")[0]
-	p.jobs.update(job.ID, func(j *MuseJob) {
-		j.Thread = "storyboard-sess-1"
-		j.PinAccount = acc.ID
-	})
-
-	p.runOne(context.Background(), job.ID, acc.ID)
-
-	got := mustJob(t, p, job.ID)
-	if got.Status != MuseJobSucceeded {
-		t.Fatalf("job status = %s, err = %s", got.Status, got.Error)
+	res := p.SubmitJobs(MuseJobRequest{Kind: MuseJobImage, Prompts: []string{"a", "b"}, Repeat: 3})
+	if !res.Success || len(res.Data) != 6 || res.Data[2].Prompt != "a" || res.Data[3].Prompt != "b" {
+		t.Fatalf("repeat batch = %+v", res)
 	}
-	if len(page.threads) != 1 || page.threads[0] != "storyboard-sess-1" {
-		t.Fatalf("expected thread storyboard-sess-1, got %v", page.threads)
+	for i := 1; i < len(res.Data); i++ {
+		if res.Data[i-1].CreatedAt >= res.Data[i].CreatedAt {
+			t.Fatalf("repeat batch out of order: %+v", res.Data)
+		}
 	}
 }
 
-func TestThreadRefusedSwitchesToNewChat(t *testing.T) {
-	events, files := videoResult("/out/new.mp4", []byte("new-chat-video"))
-	page := &fakePage{
-		loggedIn:    true,
-		threadFails: true,
-		sendRes:     SendResult{OK: true, SessionID: "s2"},
-		statuses:    []string{"running", "idle"},
-		events:      events,
-		files:       files,
+// An account without a proxy route takes no new job and checks no sent one.
+func TestNoRouteAccountTakesNoWork(t *testing.T) {
+	cfg := config.DefaultMuseConfig()
+	now := time.Now()
+	acc := MuseAccount{ID: "a", Enabled: true, Status: accounts.StatusSignedIn, NoRoute: "no proxy"}
+	if usable(acc, cfg, now) {
+		t.Fatal("account without a route is usable")
 	}
-	p := testProvider(t, page)
-	acc := addSignedIn(t, p, "A")
-	job := submit(t, p, MuseJobVideo, "cảnh thử lại")[0]
-	p.jobs.update(job.ID, func(j *MuseJob) {
-		j.Thread = "thread-die"
-	})
-
-	p.runOne(context.Background(), job.ID, acc.ID)
-
-	got := mustJob(t, p, job.ID)
-	if got.Status != MuseJobSucceeded {
-		t.Fatalf("job status = %s, err = %s", got.Status, got.Error)
+	jobs := []MuseJob{
+		{ID: "new", Status: MuseJobQueued},
+		{ID: "sent", Status: MuseJobProcessing, AccountID: "a", SessionID: "s"},
 	}
-	if len(page.threads) != 2 {
-		t.Fatalf("expected 2 sends, got %d", len(page.threads))
+	if got := plan(jobs, []MuseAccount{acc}, cfg, map[string]string{}, now); len(got) != 0 {
+		t.Fatalf("planned %+v", got)
 	}
-	if page.threads[0] != "thread-die" || page.threads[1] != "" {
-		t.Fatalf("unexpected threads: %v", page.threads)
-	}
-	if !strings.Contains(got.ThreadError, "làm ở chat mới") {
-		t.Fatalf("threadError = %q", got.ThreadError)
-	}
-}
-
-func TestRunJobV2VTwoTurns(t *testing.T) {
-	events, files := videoResult("/out/v2v.mp4", []byte("video-v2v-rendered"))
-	page := &fakePage{
-		loggedIn:   true,
-		sendRes:    SendResult{OK: true, SessionID: "v2v-sid"},
-		statuses:   []string{"running", "idle", "running", "idle"},
-		events:     events,
-		files:      files,
-		replyAfter: 2, // the remake's video appears after the second turn
-	}
-	p := testProvider(t, page)
-	acc := addSignedIn(t, p, "A")
-
-	srcURL, err := p.media.Put("test-src", "video/mp4", ".mp4", []byte("source-video-data"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	refURL, err := p.media.Put("test-ref", "image/png", ".png", []byte("ref-image-data"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	p.muxAudio = func(ctx context.Context, ffmpegPath, videoPath, sourcePath, outPath string) error {
-		return os.WriteFile(outPath, []byte("muxed-video-with-source-audio"), 0o644)
-	}
-
-	res := p.SubmitJobs(MuseJobRequest{
-		Kind:        MuseJobV2V,
-		Prompts:     []string{"zoom t-shirt"},
-		Ratio:       "9:16",
-		SourceVideo: srcURL,
-		KeepAudio:   true,
-		References:  []string{refURL},
-	})
-	if !res.Success || len(res.Data) != 1 {
-		t.Fatalf("submit failed: %v", res.Error)
-	}
-	jobID := res.Data[0].ID
-
-	p.runOne(context.Background(), jobID, acc.ID)
-
-	got := mustJob(t, p, jobID)
-	if got.Status != MuseJobSucceeded {
-		t.Fatalf("job status = %s, err = %s", got.Status, got.Error)
-	}
-	if got.V2VTurn != 2 {
-		t.Fatalf("v2vTurn = %d, expected 2", got.V2VTurn)
-	}
-	if len(page.sends) != 2 {
-		t.Fatalf("expected 2 sends for V2V, got %d", len(page.sends))
-	}
-	if page.sends[0] != v2vAnalysisPrompt {
-		t.Fatalf("turn 1 prompt = %q", page.sends[0])
-	}
-	if len(page.attachments[0]) != 1 || page.attachments[0][0].Category != "video" {
-		t.Fatalf("turn 1 attachments = %+v", page.attachments[0])
-	}
-	if !strings.Contains(page.sends[1], v2vRemakePrefix) {
-		t.Fatalf("turn 2 prompt = %q", page.sends[1])
-	}
-	if page.threads[1] != "v2v-sid" {
-		t.Fatalf("turn 2 thread = %q, expected v2v-sid", page.threads[1])
-	}
-	if len(got.Files) != 1 {
-		t.Fatalf("files = %v", got.Files)
-	}
-	finalPath, err := p.media.Path(got.Files[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, _ := os.ReadFile(finalPath)
-	if string(data) != "muxed-video-with-source-audio" {
-		t.Fatalf("expected muxed audio, got %q", string(data))
-	}
-}
-
-func TestRestartDuringV2VSecondTurnSendingFails(t *testing.T) {
-	p := testProvider(t, &fakePage{})
-	jobs := submit(t, p, MuseJobVideo, "v2v-job")
-	p.jobs.update(jobs[0].ID, func(j *MuseJob) {
-		j.Kind = MuseJobV2V
-		j.Status = MuseJobProcessing
-		j.SessionID = "v2v-turn1-session"
-		j.Sending = true
-		j.V2VTurn = 1
-		j.Attempts = 1
-	})
-
-	restarted := New(filepath.Dir(filepath.Dir(p.accounts.path)), p.cfg, p.media)
-	restarted.pageFor = p.pageFor
-	ctx, cancel := context.WithCancel(context.Background())
-	restarted.Start(ctx, nil)
-	cancel()
-	restarted.Close()
-
-	got := mustJob(t, restarted, jobs[0].ID)
-	if got.Status != MuseJobFailed || got.Error != errSendUnknown.Error() {
-		t.Fatalf("expected job with Sending=true to fail even with SessionID, got: %+v", got)
+	if step := waitingStep(jobs[1], []MuseAccount{acc}); !strings.Contains(step, "proxy") {
+		t.Fatalf("waiting step %q", step)
 	}
 }

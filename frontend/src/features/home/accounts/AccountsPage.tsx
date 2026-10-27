@@ -1,310 +1,274 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ExternalLink, Plus, RefreshCw, Trash2, User } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Cookie, ListChecks, LogIn } from 'lucide-react';
 import './AccountsPage.css';
-import { Button, Card, Icon } from '../../../components/ui';
-import { ACCOUNT_AUTO_REFRESH_AFTER_MS } from '../../../constants';
+import { Button, Icon, SegmentedControl } from '../../../components/ui';
+import { ACCOUNT_CHECK_CONCURRENCY } from '../../../constants';
+import { useAccountsLive, useNow } from '../../../hooks';
 import { api, unwrap } from '../../../services';
-import { useAppStore } from '../../../stores';
-import { AccountStatus, AccountTier } from '../../../types';
-import type { AccountProfile } from '../../../types';
-import { LoginModal } from './LoginModal';
-import type { LoginSession } from './LoginModal';
+import { useAccountsStore, useAppStore } from '../../../stores';
+import { AccountProvider } from '../../../types';
+import type { Account } from '../../../types';
+import { accountProviderLabels, accountReady } from '../../../utils';
+import { AccountCard } from './AccountCard';
+import type { AccountAction } from './AccountCard';
+import { AccountPanel } from './AccountPanel';
+import type { PanelMode } from './AccountPanel';
+import { proxyLines } from './AccountPanel';
+import { runLimited } from './runLimited';
+import { ROUTES } from '../../../routes/registry';
 
-const statusLabels: Record<AccountStatus, string> = {
-  [AccountStatus.Unverified]: 'Phiên đã lưu, cần xác minh lại',
-  [AccountStatus.SignedIn]: 'Đã lưu đăng nhập Google Flow',
-  [AccountStatus.Connected]: 'Đã kết nối Flow',
-  [AccountStatus.Expired]: 'Cần kiểm tra đăng nhập lại',
-  [AccountStatus.Error]: 'Không xác minh được phiên',
+const providers = Object.values(AccountProvider);
+
+const providerHints: Record<AccountProvider, string> = {
+  [AccountProvider.Flow]:
+    'Tài khoản Google cho Flow. Ảnh và video luân phiên trên các tài khoản đang bật, đã đăng nhập và còn credits.',
+  [AccountProvider.Muse]:
+    'Tài khoản muse.ai. Hàng đợi Muse chia tác vụ cho các tài khoản đang bật theo Cài đặt Muse.',
 };
 
+/** Work running on an account (its action) or on the page's account panel. */
+type BusyWork = AccountAction | 'panel';
+
+const accountBusy = (work?: BusyWork): AccountAction | null =>
+  work && work !== 'panel' ? work : null;
+
+const isProvider = (value: string | null): value is AccountProvider =>
+  providers.includes(value as AccountProvider);
+
+/**
+ * Every provider's accounts in one place: one Chrome profile each, signed in
+ * through a window or imported cookies, each on its proxy from the shared list.
+ * `?provider=muse` opens a provider's tab.
+ */
 export const AccountsPage: React.FC = () => {
-  const [profiles, setProfiles] = useState<AccountProfile[]>([]);
-  const [session, setSession] = useState<LoginSession | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const busy = useRef(false);
-  const alive = useRef(true);
+  useAccountsLive();
+  const now = useNow();
+  const [params, setParams] = useSearchParams();
+  const requested = params.get('provider');
+  const provider = isProvider(requested) ? requested : AccountProvider.Flow;
+  const accounts = useAccountsStore((s) => s.accounts);
+  const loaded = useAccountsStore((s) => s.loaded);
+  const loadError = useAccountsStore((s) => s.loadError);
+  const setAccount = useAccountsStore((s) => s.setAccount);
   const addToast = useAppStore((s) => s.addToast);
+  const [panel, setPanel] = useState<PanelMode | null>(null);
+  // What is running, per account id (or 'panel' / 'all' for page work): one
+  // slow account never locks the others. The ref answers "already running?"
+  // from handlers without waiting for a render.
+  const [busy, setBusy] = useState<ReadonlyMap<string, BusyWork>>(new Map());
+  const busyRef = useRef(new Map<string, BusyWork>());
+  const mark = (key: string, value: BusyWork | null) => {
+    const next = new Map(busyRef.current);
+    if (value === null) next.delete(key);
+    else next.set(key, value);
+    busyRef.current = next;
+    setBusy(next);
+  };
 
-  const report = useCallback(
-    (cause: unknown) => {
-      addToast({ type: 'error', message: cause instanceof Error ? cause.message : String(cause) });
-    },
-    [addToast],
-  );
-
-  const onSuccess = useCallback((profile: AccountProfile) => {
-    setProfiles((list) => {
-      const exists = list.some((item) => item.id === profile.id);
-      if (exists) {
-        return list.map((item) => (item.id === profile.id ? profile : item));
-      }
-      return [...list, profile];
-    });
-  }, []);
-
+  const list = accounts.filter((a) => a.provider === provider);
+  const navigate = useNavigate();
+  // Accounts left on the automatic proxy cannot run without a list: the app
+  // never falls back to the real IP. Re-read when the panel closes (a proxy
+  // may have been set) — the list itself is edited on the Proxy page.
+  const [noProxies, setNoProxies] = useState(false);
   useEffect(() => {
     let active = true;
-    alive.current = true;
-    void api.getAccounts().then(async (response) => {
-      if (!active) return;
-      try {
-        const list = unwrap(response);
-        setProfiles(list);
-        setLoading(false);
-
-        // Auto-refresh accounts in background on page load if they were verified before
-        for (const account of list) {
-          if (!active) break;
-          const isFresh =
-            account.lastVerifiedAt &&
-            Date.now() - new Date(account.lastVerifiedAt).getTime() < ACCOUNT_AUTO_REFRESH_AFTER_MS;
-          if (account.status === AccountStatus.Connected && isFresh) {
-            continue;
-          }
-          if (account.lastVerifiedAt || account.status === AccountStatus.Connected) {
-            if (busy.current) break;
-            busy.current = true;
-            setBusyId(account.id);
-            try {
-              const res = await api.refreshAccount(account.id);
-              if (active) {
-                if (res.success && res.data) {
-                  onSuccess(res.data);
-                } else {
-                  const refreshed = await api.getAccounts();
-                  if (active && refreshed.success && refreshed.data) {
-                    setProfiles(refreshed.data);
-                  }
-                }
-              }
-            } catch {
-              // Ignore background auto-refresh network errors so UI isn't interrupted
-            } finally {
-              busy.current = false;
-              if (alive.current) setBusyId(null);
-            }
-          }
-        }
-      } catch (cause) {
-        if (active) {
-          setLoadError(cause instanceof Error ? cause.message : String(cause));
-          setLoading(false);
-        }
-      }
+    void api.getProxies().then((res) => {
+      if (active) setNoProxies(res.success && proxyLines(res.data ?? '').length === 0);
     });
     return () => {
       active = false;
-      alive.current = false;
     };
-  }, [onSuccess]);
+  }, [panel]);
 
-  const run = useCallback(
-    async (id: string, action: () => Promise<void>) => {
-      if (busy.current) return;
-      busy.current = true;
-      setBusyId(id);
-      try {
-        await action();
-      } catch (cause) {
-        report(cause);
-      } finally {
-        busy.current = false;
-        if (alive.current) setBusyId(null);
-      }
-    },
-    [report],
-  );
+  const report = (cause: unknown) =>
+    addToast({ type: 'error', message: cause instanceof Error ? cause.message : String(cause) });
 
-  const refreshProfile = useCallback(
-    async (id: string) => {
-      const response = await api.refreshAccount(id);
-      if (!alive.current) return;
-      if (response.success) onSuccess(unwrap(response));
-      else {
-        const accounts = unwrap(await api.getAccounts());
-        if (alive.current) setProfiles(accounts);
-        unwrap(response);
-      }
-    },
-    [onSuccess],
-  );
-
-  const handleLoginSuccess = useCallback(
-    (profile: AccountProfile) => {
-      onSuccess(profile);
-      // Show the saved identity immediately. Enrichment is a single separate
-      // operation; failure keeps the card and the backend's diagnostic message.
-      void run(profile.id, () => refreshProfile(profile.id));
-    },
-    [onSuccess, run, refreshProfile],
-  );
-
-  const launchLogin = () => {
-    if (busy.current || session) return;
-    const id = crypto.randomUUID();
-    // Launch is an explicit user action, not a mount effect replayed by StrictMode.
-    setSession({ id, request: api.launchLoginBrowser(id) });
+  const run = async (key: string, label: BusyWork, action: () => Promise<void>) => {
+    if (busyRef.current.has(key)) return;
+    mark(key, label);
+    try {
+      await action();
+    } catch (cause) {
+      report(cause);
+    } finally {
+      mark(key, null);
+    }
   };
 
-  // Unmounting LoginModal cancels its login session, so closing only has to
-  // drop the session; cancelling here as well sent CancelLogin twice.
-  const closeLogin = () => setSession(null);
+  /** Applies a response that carries the account even when it failed. */
+  const keep = <T extends { data?: Account }>(res: T) => {
+    if (res.data) setAccount(res.data);
+    return res;
+  };
 
+  const selectProvider = (next: AccountProvider) => {
+    setPanel(null);
+    setParams({ provider: next }, { replace: true });
+  };
+
+  // Checks run a few at a time (each may start a browser); accounts already
+  // busy with something else are left out.
+  const checkAll = () =>
+    run('all', 'check', async () => {
+      const targets = list.filter((a) => !busyRef.current.has(a.id));
+      const results = await runLimited(targets, ACCOUNT_CHECK_CONCURRENCY, async (account) => {
+        mark(account.id, 'check');
+        try {
+          return keep(await api.checkAccount(account.id)).success;
+        } finally {
+          mark(account.id, null);
+        }
+      });
+      const failed = results.filter((ok) => ok !== true).length;
+      addToast({
+        type: failed ? 'error' : 'success',
+        message: `Đã kiểm tra ${targets.length} tài khoản${failed ? `, ${failed} lỗi` : ''}.`,
+      });
+    });
+
+  const onAction = (action: AccountAction, account: Account) => {
+    const key = account.id;
+    switch (action) {
+      case 'check':
+        return run(key, action, async () => void unwrap(keep(await api.checkAccount(account.id))));
+      case 'open':
+        return run(key, action, async () =>
+          setAccount(unwrap(await api.openAccountBrowser(account.id))),
+        );
+      case 'toggle':
+        return run(key, action, async () =>
+          setAccount(unwrap(await api.setAccountEnabled(account.id, !account.enabled))),
+        );
+      case 'rotate':
+        return run(key, action, async () => {
+          const res = unwrap(await api.rotateAccountIP(account.id));
+          addToast({ type: 'success', message: `IP mới của ${account.name}: ${res.ip}` });
+        });
+      case 'proxy':
+        return setPanel({ kind: 'proxy', account });
+      case 'cookies':
+        return setPanel({ kind: 'replace', account });
+      case 'rename':
+        return setPanel({ kind: 'rename', account });
+      case 'remove':
+        if (
+          !window.confirm(
+            `Xoá "${account.name}" và toàn bộ dữ liệu Chrome của tài khoản này (cookie, cache, đăng nhập)? Tài khoản trên ${accountProviderLabels[account.provider]} không bị xoá.`,
+          )
+        )
+          return;
+        return run(key, action, async () => {
+          unwrap(await api.removeAccount(account.id));
+          useAccountsStore.setState((s) => ({
+            accounts: s.accounts.filter((a) => a.id !== account.id),
+          }));
+        });
+    }
+  };
+
+  const submitPanel = (save: () => Promise<Account>) =>
+    run('panel', 'panel', async () => {
+      const account = await save();
+      setAccount(account);
+      if (panel?.kind === 'browser') {
+        addToast({ type: 'info', message: 'Đã mở Chrome. Hãy đăng nhập trong cửa sổ đó.' });
+      }
+      setPanel(null);
+    });
+
+  const ready = list.filter((a) => accountReady(a, now)).length;
   return (
     <div className="page-shell accounts-page">
       <div className="accounts-header">
-        <h1 className="accounts-title">Tài khoản</h1>
-        <Button
-          variant="primary"
-          disabled={loading || !!loadError || busyId !== null || session !== null}
-          onClick={launchLogin}
-        >
-          <Icon icon={Plus} />
-          <span>Thêm tài khoản</span>
-        </Button>
+        <div className="accounts-heading">
+          <h1 className="accounts-title">Tài khoản</h1>
+          <SegmentedControl
+            aria-label="Nhà cung cấp"
+            options={providers.map((p) => ({
+              value: p,
+              label: `${accountProviderLabels[p]} (${accounts.filter((a) => a.provider === p).length})`,
+            }))}
+            value={provider}
+            onChange={selectProvider}
+          />
+        </div>
+        <div className="accounts-actions">
+          <Button
+            variant="primary"
+            disabled={busy.has('panel')}
+            onClick={() => setPanel({ kind: 'browser' })}
+          >
+            <Icon icon={LogIn} />
+            <span>Đăng nhập bằng Chrome</span>
+          </Button>
+          <Button disabled={busy.has('panel')} onClick={() => setPanel({ kind: 'cookies' })}>
+            <Icon icon={Cookie} />
+            <span>Dán cookie</span>
+          </Button>
+          {list.length > 0 && (
+            <Button isLoading={busy.has('all')} disabled={busy.has('all')} onClick={checkAll}>
+              <Icon icon={ListChecks} />
+              <span>Kiểm tra tất cả</span>
+            </Button>
+          )}
+        </div>
       </div>
+
+      <p className="accounts-hint">
+        {providerHints[provider]} {list.length > 0 && `Sẵn sàng: ${ready}/${list.length}.`}
+      </p>
+
+      {noProxies && (
+        <div className="accounts-proxy-hint">
+          <span>
+            Danh sách proxy đang trống. Tài khoản để proxy &quot;Tự động&quot; sẽ không chạy cho tới
+            khi có proxy; app không bao giờ dùng IP thật thay thế. Thêm proxy, hoặc chọn &quot;Không
+            dùng proxy&quot; cho từng tài khoản.
+          </span>
+          <Button size="sm" onClick={() => navigate(ROUTES.home.proxy)}>
+            Mở danh sách proxy
+          </Button>
+        </div>
+      )}
+
+      {panel && (
+        <AccountPanel
+          key={panel.kind + ('account' in panel ? panel.account.id : '')}
+          mode={panel}
+          provider={provider}
+          busy={busy.has('panel')}
+          submit={submitPanel}
+          onCancel={() => setPanel(null)}
+        />
+      )}
+
       {loadError && (
         <div role="alert" className="accounts-error">
           {loadError}
         </div>
       )}
-      <div className="accounts-content">
-        {loading ? (
-          <div className="accounts-empty-frame">Đang tải tài khoản…</div>
-        ) : profiles.length > 0 ? (
-          <div className="accounts-grid">
-            {profiles.map((profile) => (
-              <Card key={profile.id} className="account-profile-card">
-                <div className="account-profile-header">
-                  <div className="account-profile-avatar">
-                    <Icon icon={User} />
-                  </div>
-                  <div className="account-profile-meta">
-                    <div className="account-profile-email" title={profile.email}>
-                      {profile.email}
-                    </div>
-                    <div className={`account-profile-status account-status-${profile.status}`}>
-                      <span className="account-status-dot" />
-                      <span>{statusLabels[profile.status] ?? 'Trạng thái chưa xác định'}</span>
-                    </div>
-                  </div>
-                  <div className="account-credits-badge">
-                    {profile.balance
-                      ? `${profile.balance.credits} Credits (${profile.balance.tier === AccountTier.Unknown ? `Mã gói ${profile.balance.tierCode}` : profile.balance.tier})`
-                      : 'Chưa xác minh số dư'}
-                  </div>
-                </div>
-                <div className="account-profile-details">
-                  {profile.balanceError && (
-                    <div className="accounts-error" role="status">
-                      Thông tin Flow chưa cập nhật đầy đủ: {profile.balanceError}
-                    </div>
-                  )}
-                  <div className="account-detail-row">
-                    <span className="account-detail-label">Gaia ID</span>
-                    <span className="account-detail-value">
-                      {profile.gaiaId || 'Chưa xác minh'}
-                    </span>
-                  </div>
-                  <div className="account-detail-row">
-                    <span className="account-detail-label">Cookies của phiên</span>
-                    <span className="account-detail-value">{profile.cookieCount}</span>
-                  </div>
-                  <div className="account-detail-row">
-                    <span className="account-detail-label">Hạn mức</span>
-                    <span className="account-detail-value">
-                      {profile.balance?.dailyLimit ?? 'Chưa xác minh'}
-                    </span>
-                  </div>
-                  <div className="account-detail-row">
-                    <span className="account-detail-label">Mã khả dụng Flow</span>
-                    <span className="account-detail-value">
-                      {profile.balance?.availabilityCode ?? 'Chưa có mã từ máy chủ'}
-                    </span>
-                  </div>
-                  <div className="account-detail-row">
-                    <span className="account-detail-label">Đặt lại số dư</span>
-                    <span className="account-detail-value">
-                      {profile.balance?.resetAt
-                        ? new Date(profile.balance.resetAt).toLocaleString()
-                        : 'Chưa có dữ liệu'}
-                    </span>
-                  </div>
-                  <div className="account-detail-row">
-                    <span className="account-detail-label">Xác minh gần nhất</span>
-                    <span className="account-detail-value">
-                      {profile.lastVerifiedAt
-                        ? new Date(profile.lastVerifiedAt).toLocaleString()
-                        : 'Chưa xác minh'}
-                    </span>
-                  </div>
-                  <div className="account-detail-row">
-                    <span className="account-detail-label">Profile</span>
-                    <span className="account-detail-value" title={profile.profileDir}>
-                      {profile.profileDir}
-                    </span>
-                  </div>
-                </div>
-                <div className="account-profile-actions">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={busyId !== null || session !== null}
-                    onClick={() => void run(profile.id, () => refreshProfile(profile.id))}
-                  >
-                    <Icon
-                      icon={RefreshCw}
-                      size="sm"
-                      className={busyId === profile.id ? 'spin' : ''}
-                    />
-                    <span>{busyId === profile.id ? 'Đang xử lý…' : 'Cập nhật số dư'}</span>
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={busyId !== null || session !== null}
-                    onClick={() =>
-                      void run(profile.id, async () => {
-                        unwrap(await api.openAccountBrowser(profile.id));
-                      })
-                    }
-                  >
-                    <Icon icon={ExternalLink} size="sm" />
-                    <span>Mở Chrome</span>
-                  </Button>
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    disabled={busyId !== null || session !== null}
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          'Xóa tài khoản và toàn bộ thư mục profile Chrome của tài khoản này? Cookies, cache và dữ liệu đăng nhập trong profile sẽ bị xóa vĩnh viễn.',
-                        )
-                      )
-                        void run(profile.id, async () => {
-                          unwrap(await api.removeAccount(profile.id));
-                          if (alive.current)
-                            setProfiles((list) => list.filter((item) => item.id !== profile.id));
-                        });
-                    }}
-                  >
-                    <Icon icon={Trash2} size="sm" />
-                    <span>Xóa</span>
-                  </Button>
-                </div>
-              </Card>
-            ))}
-          </div>
-        ) : (
-          !loadError && <div className="accounts-empty-frame">Chưa có profile nào đăng nhập</div>
-        )}
-      </div>
-      {session && (
-        <LoginModal session={session} onClose={closeLogin} onSuccess={handleLoginSuccess} />
+
+      {!loaded ? (
+        <div className="accounts-empty">Đang tải tài khoản…</div>
+      ) : list.length === 0 ? (
+        <div className="accounts-empty">
+          Chưa có tài khoản {accountProviderLabels[provider]}. Đăng nhập bằng Chrome hoặc dán cookie
+          để bắt đầu.
+        </div>
+      ) : (
+        <div className="accounts-grid">
+          {list.map((account) => (
+            <AccountCard
+              key={account.id}
+              account={account}
+              now={now}
+              busy={accountBusy(busy.get(account.id))}
+              onAction={onAction}
+            />
+          ))}
+        </div>
       )}
     </div>
   );

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -224,20 +225,20 @@ func (s *Provider) GetProjectImageReference(ctx context.Context, accountID, proj
 		return models.ErrorResponse[FlowProjectImageReference]("Không đọc được ảnh từ Flow: "+err.Error(), models.CodeUnavailable)
 	}
 	imageURLs := flowProjectImageURLs(payload)
-	limits := s.cfg.Get().Accounts
+	limits := s.cfg.Get().FlowPagePolicy()
 	var lastErr error
 	var unsupportedFormat bool
 	for _, imageURL := range imageURLs {
 		if ctx.Err() != nil {
 			return models.ErrorResponse[FlowProjectImageReference](ctx.Err().Error(), models.CodeUnavailable)
 		}
-		data, mimeType, err := client.FetchMedia(ctx, imageURL, []string{"image/"}, MaxReferenceImageBytes, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
+		data, mimeType, err := client.FetchMedia(ctx, imageURL, []string{"image/"}, int64(maxReferenceImageBytes()), time.Duration(limits.RequestTimeoutSeconds)*time.Second)
 		if err != nil {
 			lastErr = err
 			continue
 		}
 		mimeType = strings.TrimSpace(strings.Split(mimeType, ";")[0])
-		if !containsString(ReferenceMimeTypes, mimeType) || detectedImageType(data) == "" {
+		if !slices.Contains(referenceMimeTypes(), mimeType) || detectedImageType(data) == "" {
 			unsupportedFormat = true
 			continue
 		}
@@ -591,27 +592,18 @@ func imageProjectModeLabel(mode ImageProjectMode) string {
 }
 
 func (s *Provider) imageLibraryClient(ctx context.Context, account session.StoredAccount) (*chrome.FlowClient, func(), error) {
-	lease, err := s.acquireSpecificAccount(ctx, account)
+	fresh, release, err := s.readySpecific(ctx, account)
 	if err != nil {
-		return nil, nil, err
-	}
-	releaseProfile := s.accounts.AcquireProfile(account.ProfileDir)
-	fresh, err := s.syncSession(ctx, account)
-	if err != nil {
-		releaseProfile()
-		lease.release()
 		return nil, nil, err
 	}
 	client, err := s.projectPageClient(ctx, fresh, chrome.MethodProjects, chrome.MethodCreateProject, chrome.MethodProjectContents, chrome.MethodMedia)
 	if err != nil {
-		releaseProfile()
-		lease.release()
+		release()
 		return nil, nil, err
 	}
 	return client, func() {
 		s.keepCredentials(fresh, client)
-		releaseProfile()
-		lease.release()
+		release()
 	}, nil
 }
 
@@ -626,7 +618,7 @@ func (s *Provider) projectContentsPayload(ctx context.Context, client *chrome.Fl
 	if err != nil {
 		return "", err
 	}
-	limits := s.cfg.Get().Accounts
+	limits := s.cfg.Get().FlowPagePolicy()
 	body, err := client.Do(ctx, rpcID, fReq, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
 	if err != nil {
 		return "", err
@@ -690,87 +682,52 @@ func generatedImageMediaCount(payload string) (int, error) {
 }
 
 func projectMediaHasMarker(value any, markers ...string) bool {
-	switch item := value.(type) {
-	case string:
-		trimmed := strings.TrimSpace(item)
-		if strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "{") {
-			var nested any
-			if json.Unmarshal([]byte(trimmed), &nested) == nil {
-				return projectMediaHasMarker(nested, markers...)
-			}
+	return anyJSPB(value, func(v any) bool {
+		item, ok := v.(map[string]any)
+		if !ok {
+			return false
 		}
-	case []any:
-		for _, child := range item {
-			if projectMediaHasMarker(child, markers...) {
+		for key := range item {
+			if slices.Contains(markers, normalizedKey(key)) {
 				return true
 			}
 		}
-	case map[string]any:
-		for key, child := range item {
-			normalizedKey := strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(key))
-			for _, marker := range markers {
-				if normalizedKey == marker {
-					return true
-				}
-			}
-			if projectMediaHasMarker(child, markers...) {
-				return true
-			}
-		}
-	}
-	return false
+		return false
+	})
 }
 
+// projectMediaHasOperation reports a media entry naming both a media ID and
+// the operation (workflow) that made it: as list slots [id, _, op] or
+// [_, _, _, _, id, op], or as object fields.
 func projectMediaHasOperation(value any) bool {
-	switch item := value.(type) {
-	case string:
-		trimmed := strings.TrimSpace(item)
-		if strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "{") {
-			var nested any
-			if json.Unmarshal([]byte(trimmed), &nested) == nil {
-				return projectMediaHasOperation(nested)
-			}
-		}
-	case []any:
-		if len(item) > 2 {
-			mediaID, _ := item[0].(string)
-			if operation, ok := item[2].(string); ok && validProjectMediaID(mediaID) && strings.TrimSpace(operation) != "" {
-				return true
-			}
-		}
-		if len(item) > 5 {
-			mediaID, _ := item[4].(string)
-			if operation, ok := item[5].(string); ok && validProjectMediaID(mediaID) && strings.TrimSpace(operation) != "" {
-				return true
-			}
-		}
-		for _, child := range item {
-			if projectMediaHasOperation(child) {
-				return true
-			}
-		}
-	case map[string]any:
-		hasOperation := false
-		hasMediaID := false
-		for key, child := range item {
-			normalizedKey := strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(key))
-			if normalizedKey == "operation" || normalizedKey == "operationid" || normalizedKey == "workflowid" {
-				if operation, ok := child.(string); ok && strings.TrimSpace(operation) != "" {
-					hasOperation = true
+	return anyJSPB(value, func(v any) bool {
+		switch item := v.(type) {
+		case []any:
+			return listMediaOperation(item, 0, 2) || listMediaOperation(item, 4, 5)
+		case map[string]any:
+			hasOperation, hasMediaID := false, false
+			for key, child := range item {
+				text, _ := child.(string)
+				switch normalizedKey(key) {
+				case "operation", "operationid", "workflowid":
+					hasOperation = hasOperation || strings.TrimSpace(text) != ""
+				case "mediaid", "primarymediaid", "name":
+					hasMediaID = hasMediaID || validProjectMediaID(text)
 				}
 			}
-			if normalizedKey == "mediaid" || normalizedKey == "primarymediaid" || normalizedKey == "name" {
-				if mediaID, ok := child.(string); ok && validProjectMediaID(mediaID) {
-					hasMediaID = true
-				}
-			}
-			if projectMediaHasOperation(child) {
-				return true
-			}
+			return hasOperation && hasMediaID
 		}
-		return hasOperation && hasMediaID
+		return false
+	})
+}
+
+func listMediaOperation(item []any, idAt, opAt int) bool {
+	if len(item) <= opAt {
+		return false
 	}
-	return false
+	mediaID, _ := item[idAt].(string)
+	operation, ok := item[opAt].(string)
+	return ok && validProjectMediaID(mediaID) && strings.TrimSpace(operation) != ""
 }
 
 func validProjectMediaID(value string) bool {
@@ -784,7 +741,7 @@ func (s *Provider) getProjectMedia(ctx context.Context, client *chrome.FlowClien
 	if err != nil {
 		return "", err
 	}
-	limits := s.cfg.Get().Accounts
+	limits := s.cfg.Get().FlowPagePolicy()
 	body, err := client.Do(ctx, rpcID, fReq, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
 	if err != nil {
 		return "", err
@@ -808,34 +765,21 @@ func flowProjectMediaName(mediaID, payload string) string {
 
 func flowProjectDisplayName(value any, mediaID string) string {
 	keys := []string{"displayName", "display_name", "fileName", "file_name", "filename", "title", "name"}
-	switch item := value.(type) {
-	case map[string]any:
+	found := ""
+	walkJSPB(value, func(v any) bool {
+		item, ok := v.(map[string]any)
+		if !ok {
+			return true
+		}
 		for _, key := range keys {
 			if name, ok := item[key].(string); ok && validFlowDisplayName(name, mediaID) {
-				return strings.TrimSpace(name)
+				found = strings.TrimSpace(name)
+				return false
 			}
 		}
-		for _, child := range item {
-			if name := flowProjectDisplayName(child, mediaID); name != "" {
-				return name
-			}
-		}
-	case []any:
-		for _, child := range item {
-			if name := flowProjectDisplayName(child, mediaID); name != "" {
-				return name
-			}
-		}
-	case string:
-		trimmed := strings.TrimSpace(item)
-		if strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "{") {
-			var nested any
-			if json.Unmarshal([]byte(trimmed), &nested) == nil {
-				return flowProjectDisplayName(nested, mediaID)
-			}
-		}
-	}
-	return ""
+		return true
+	})
+	return found
 }
 
 func validFlowDisplayName(name, mediaID string) bool {
@@ -848,36 +792,10 @@ func flowProjectContainsVideo(payload string) bool {
 	if json.Unmarshal([]byte(payload), &root) != nil {
 		return false
 	}
-	var visit func(any) bool
-	visit = func(value any) bool {
-		switch item := value.(type) {
-		case []any:
-			for _, child := range item {
-				if visit(child) {
-					return true
-				}
-			}
-		case map[string]any:
-			for _, child := range item {
-				if visit(child) {
-					return true
-				}
-			}
-		case string:
-			trimmed := strings.TrimSpace(item)
-			if strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "{") {
-				var nested any
-				if json.Unmarshal([]byte(trimmed), &nested) == nil && visit(nested) {
-					return true
-				}
-			}
-			if isFlowProjectVideoURL(trimmed) {
-				return true
-			}
-		}
-		return false
-	}
-	return visit(root)
+	return anyJSPB(root, func(v any) bool {
+		s, ok := v.(string)
+		return ok && isFlowProjectVideoURL(s)
+	})
 }
 
 func isFlowProjectVideoURL(raw string) bool {
@@ -896,33 +814,12 @@ func flowProjectImageURLs(payload string) []string {
 	}
 	seen := make(map[string]bool)
 	var urls []string
-	var visit func(any)
-	visit = func(value any) {
-		switch item := value.(type) {
-		case []any:
-			for _, child := range item {
-				visit(child)
-			}
-		case map[string]any:
-			for _, child := range item {
-				visit(child)
-			}
-		case string:
-			trimmed := strings.TrimSpace(item)
-			if strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "{") {
-				var nested any
-				if json.Unmarshal([]byte(trimmed), &nested) == nil {
-					visit(nested)
-					return
-				}
-			}
-			if !seen[trimmed] && isFlowProjectImageURL(trimmed) {
-				seen[trimmed] = true
-				urls = append(urls, trimmed)
-			}
+	for _, s := range jspbStrings(root) {
+		if !seen[s] && isFlowProjectImageURL(s) {
+			seen[s] = true
+			urls = append(urls, s)
 		}
 	}
-	visit(root)
 	return urls
 }
 
@@ -936,13 +833,4 @@ func isFlowProjectImageURL(raw string) bool {
 		return false
 	}
 	return strings.Contains(u.Path, "/image/")
-}
-
-func containsString(values []string, value string) bool {
-	for _, candidate := range values {
-		if candidate == value {
-			return true
-		}
-	}
-	return false
 }

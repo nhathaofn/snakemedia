@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"SnakeMedia/internal/accounts"
 	"SnakeMedia/internal/config"
 	"SnakeMedia/internal/media"
+	"github.com/google/uuid"
 )
 
 // fakePage scripts a Muse tab. Fields are read under mu.
@@ -20,11 +22,8 @@ type fakePage struct {
 	sendErr     error
 	sendRes     SendResult
 	sends       []string
-	threads     []string
 	attachments [][]Attachment
-	threadFails bool
 	history     []AssistantEvent
-	replyAfter  int
 	// onSend runs inside Send (without the lock) before it answers.
 	onSend    func()
 	statuses  []string // returned in order; the last one repeats
@@ -32,16 +31,45 @@ type fakePage struct {
 	events    []AssistantEvent
 	files     map[string][]byte
 	quota     *MuseQuota
+	caps      *MuseCapabilities
 	cancelled []string
+	cancelErr error
+	// http, noChat, homeFixes and homes script Login and Home.
+	http      int
+	noChat    bool
+	homeFixes bool
+	homes     int
+	capsReads int
 }
 
+// Login answers like page.js: a signed-out page gets HTTP 401 unless http
+// says otherwise; noChat is a signed-in tab away from the chat.
 func (f *fakePage) Login(context.Context) (LoginState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return LoginState{LoggedIn: f.loggedIn, HTTP: 200}, nil
+	http := f.http
+	if http == 0 {
+		http = 200
+		if !f.loggedIn {
+			http = 401
+		}
+	}
+	chat := !f.noChat
+	return LoginState{LoggedIn: f.loggedIn && chat && http == 200, Chat: chat, HTTP: http}, nil
 }
 
-func (f *fakePage) Send(_ context.Context, text string, atts []Attachment, thread string) (SendResult, error) {
+// Home counts navigations; it brings the chat back when homeFixes is set.
+func (f *fakePage) Home(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.homes++
+	if f.homeFixes {
+		f.noChat = false
+	}
+	return nil
+}
+
+func (f *fakePage) Send(_ context.Context, text string, atts []Attachment) (SendResult, error) {
 	f.mu.Lock()
 	hook := f.onSend
 	f.mu.Unlock()
@@ -51,11 +79,7 @@ func (f *fakePage) Send(_ context.Context, text string, atts []Attachment, threa
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sends = append(f.sends, text)
-	f.threads = append(f.threads, thread)
 	f.attachments = append(f.attachments, atts)
-	if f.threadFails && thread != "" {
-		return SendResult{Reason: "thread closed"}, nil
-	}
 	return f.sendRes, f.sendErr
 }
 
@@ -75,15 +99,14 @@ func (f *fakePage) Status(context.Context, string) (string, error) {
 	return s, nil
 }
 
-// Result returns the chat history: history before the reply arrives, then
-// history followed by events once replyAfter sends (default 1) were made.
+// Result returns the chat: history before any send, then events.
 func (f *fakePage) Result(context.Context, string) ([]AssistantEvent, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(f.sends) < max(f.replyAfter, 1) {
+	if len(f.sends) == 0 {
 		return f.history, nil
 	}
-	return append(append([]AssistantEvent(nil), f.history...), f.events...), nil
+	return f.events, nil
 }
 
 func (f *fakePage) Download(_ context.Context, path string, sink io.Writer) (int64, error) {
@@ -101,13 +124,29 @@ func (f *fakePage) Cancel(_ context.Context, sid string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.cancelled = append(f.cancelled, sid)
-	return nil
+	return f.cancelErr
 }
 
 func (f *fakePage) Quota(context.Context) (*MuseQuota, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.quota, nil
+}
+
+func (f *fakePage) Capabilities(context.Context) (*MuseCapabilities, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.capsReads++
+	return f.caps, nil
+}
+
+// testCaps are limits like the ones Muse's composer has.
+func testCaps() *MuseCapabilities {
+	return &MuseCapabilities{
+		MaxFileBytes: 1 << 20, MaxFiles: 2, CheckedAt: "2026-10-26T00:00:00Z",
+		ImageTypes: []MuseFileType{{Mime: "image/png", Extensions: []string{".png"}}, {Mime: "image/jpeg", Extensions: []string{".jpg", ".jpeg"}}},
+		Models:     []MuseModel{{ID: "auto/auto", Name: "Auto"}},
+	}
 }
 
 // testProvider returns a provider over a temp dir whose pages are page. Its
@@ -122,8 +161,9 @@ func testProvider(t *testing.T, page Page) *Provider {
 	c := cfg.Get()
 	c.Muse.AutoSave = false
 	_, _ = cfg.Update(c)
-	p := New(dir, cfg, media.NewStore(filepath.Join(dir, "media")))
-	p.pageFor = func(context.Context, storedAccount) (Page, error) { return page, nil }
+	accts := accounts.New(filepath.Join(dir, "accounts"), cfg, NewSite(cfg))
+	p := New(dir, filepath.Join(dir, "out"), cfg, media.NewStore(filepath.Join(dir, "media")), accts)
+	p.pageFor = func(context.Context, accounts.Record) (Page, error) { return page, nil }
 	var clockMu sync.Mutex
 	clock := time.Now()
 	p.now = func() time.Time {
@@ -141,11 +181,13 @@ func testProvider(t *testing.T, page Page) *Provider {
 	return p
 }
 
-func addSignedIn(t *testing.T, p *Provider, name string) storedAccount {
+func addSignedIn(t *testing.T, p *Provider, name string) accounts.Record {
 	t.Helper()
-	acc := p.newAccount(name, MuseSourceBrowser)
-	acc.Status = MuseAccountSignedIn
-	if err := p.accounts.add(acc); err != nil {
+	acc := accounts.Record{Account: accounts.Account{
+		ID: uuid.NewString(), Provider: accounts.ProviderMuse, Name: name,
+		Source: accounts.SourceBrowser, Status: accounts.StatusSignedIn, Enabled: true,
+	}}
+	if err := p.accounts.Seed(acc); err != nil {
 		t.Fatal(err)
 	}
 	return acc
@@ -153,7 +195,7 @@ func addSignedIn(t *testing.T, p *Provider, name string) storedAccount {
 
 func submit(t *testing.T, p *Provider, kind MuseJobKind, prompts ...string) []MuseJob {
 	t.Helper()
-	res := p.SubmitJobs(MuseJobRequest{Kind: kind, Prompts: prompts, Ratio: "9:16", Count: 1})
+	res := p.SubmitJobs(MuseJobRequest{Kind: kind, Prompts: prompts})
 	if !res.Success {
 		t.Fatalf("submit: %s", res.Error)
 	}
