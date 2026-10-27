@@ -276,6 +276,22 @@ func readProviderBody(r io.Reader) []byte {
 	return body
 }
 
+// shoplikeAPI is Shoplike's rotating-proxy API (getCurrentProxy and
+// getNewProxy, key in access_token). It is https only: the old
+// http://api.shoplike.vn host no longer resolves, and http on this host
+// redirects to https, so the key never crosses the network in clear. A var so
+// tests can point it at a local server.
+var shoplikeAPI = "https://proxy.shoplike.vn/Api/"
+
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
 func fetchRotatingRaw(ctx context.Context, p *Parsed, requestNew bool, timeout time.Duration) CheckResult {
 	checkedAt := time.Now().UTC().Format(time.RFC3339)
 	client := &http.Client{Timeout: timeout}
@@ -382,12 +398,11 @@ func fetchRotatingRaw(ctx context.Context, p *Parsed, requestNew bool, timeout t
 		return CheckResult{Raw: p.Raw, Status: StatusDead, OK: false, Message: string(body), CheckedAt: checkedAt}
 
 	case "shoplike":
-		// Shoplike's API is plain http, so the key crosses the network in
-		// clear; whether it also answers on https is chưa xác minh.
-		ep := fmt.Sprintf("http://api.shoplike.vn/rest/proxy/getcurrentproxy?key=%s", url.QueryEscape(p.Key))
+		method := "getCurrentProxy"
 		if requestNew {
-			ep = fmt.Sprintf("http://api.shoplike.vn/rest/proxy/getnewproxy?key=%s", url.QueryEscape(p.Key))
+			method = "getNewProxy"
 		}
+		ep := shoplikeAPI + method + "?access_token=" + url.QueryEscape(p.Key)
 		req, _ := http.NewRequestWithContext(ctx, "GET", ep, nil)
 		t0 := time.Now()
 		resp, err := client.Do(req)
@@ -413,11 +428,13 @@ func fetchRotatingRaw(ctx context.Context, p *Parsed, requestNew bool, timeout t
 					return CheckResult{Raw: p.Raw, Status: StatusLive, OK: true, IP: m[1], Port: port, LatencyMS: lat, Message: fmt.Sprintf("Live (%dms)", lat), CheckedAt: checkedAt}
 				}
 			}
+			// Shoplike answers without diacritics ("Key khong ton tai hoac da
+			// het han"); both spellings are matched.
 			msg := strings.ToLower(res.Mess)
-			if strings.Contains(msg, "hết hạn") || strings.Contains(msg, "không tồn tại") {
+			if containsAny(msg, "hết hạn", "không tồn tại", "het han", "khong ton tai") {
 				return CheckResult{Raw: p.Raw, Status: StatusLimitReached, OK: false, Message: res.Mess, CheckedAt: checkedAt}
 			}
-			if strings.Contains(msg, "đợi") || strings.Contains(msg, "chờ") {
+			if containsAny(msg, "đợi", "chờ", "giây", "giay", "wait") {
 				return CheckResult{Raw: p.Raw, Status: StatusRateLimited, OK: false, Message: res.Mess, CheckedAt: checkedAt}
 			}
 		}

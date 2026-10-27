@@ -9,6 +9,7 @@ export function useMuseLive() {
   const load = useMuseStore((s) => s.load);
   const loadJobs = useMuseStore((s) => s.loadJobs);
   const setJob = useMuseStore((s) => s.setJob);
+  const loadOptions = useMuseStore((s) => s.loadOptions);
   useAccountsLive();
 
   useEffect(() => {
@@ -19,4 +20,7 @@ export function useMuseLive() {
   // Bulk changes (clear finished, remove selected) carry no payload: reload
   // the jobs (the options did not change).
   useWailsEvent(AppEvent.MuseJobsChanged, () => void loadJobs());
+  // An account check reads Muse's limits (attachments, models): reload the
+  // options so the screens offer them without leaving the section.
+  useWailsEvent(AppEvent.AccountsUpdated, () => void loadOptions());
 }

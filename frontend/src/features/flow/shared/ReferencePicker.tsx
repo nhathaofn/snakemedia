@@ -111,10 +111,10 @@ export function ReferencePicker({
   };
 
   return (
-    <div className="flow-field-group">
-      <label className="flow-field-label">
+    <div className="studio-field-group">
+      <label className="studio-field-label">
         <span>Ảnh tham chiếu</span>
-        <span className="flow-field-badge">
+        <span className="studio-field-badge">
           {images.length}/{limit}
         </span>
       </label>

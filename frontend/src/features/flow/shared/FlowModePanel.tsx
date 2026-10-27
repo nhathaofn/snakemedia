@@ -17,7 +17,7 @@ export function FlowModePanel({
   className?: string;
 }) {
   return (
-    <div className={`flow-mode-panel${className ? ` ${className}` : ''}`}>
+    <div className={`studio-mode-panel${className ? ` ${className}` : ''}`}>
       {children}
       {showRotationStatus && <RotationStatusBadge />}
     </div>
@@ -30,7 +30,7 @@ function RotationStatusBadge() {
   if (count === 0) return <AccountWarning provider={AccountProvider.Flow} compact />;
   return (
     <div
-      className="rotation-status-badge has-accounts"
+      className="studio-status is-ready"
       title="Tự động luân phiên tài khoản để chia đều luồng tạo"
     >
       <span className="status-dot active" />

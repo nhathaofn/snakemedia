@@ -409,3 +409,31 @@ func TestReapedBrowserForgetsRoute(t *testing.T) {
 		t.Fatalf("reaped browser kept its route: %v %v", u, err)
 	}
 }
+
+// followSite adds a step after a sign-in in the window.
+type followSite struct {
+	*fakeSite
+	followed int
+}
+
+func (f *followSite) AfterSignIn(_ context.Context, _ *browser.Browser, _ Record, insp Inspection) Inspection {
+	f.followed++
+	insp.Note = "setup not answered"
+	return insp
+}
+
+// A sign-in in the window runs the site's follow-up step, and the account is
+// signed in with its note; a plain check never runs it.
+func TestSignInRunsFollowUpOnlyInTheWindow(t *testing.T) {
+	s, _, base := testService(t, Inspection{SignedIn: true, Identity: "a@x"})
+	site := &followSite{fakeSite: base}
+	seed(t, s, Record{Account: Account{ID: "a", Status: StatusSigningIn}})
+	s.watch(&browser.Browser{}, "a", site)
+	rec, _ := s.Record("a")
+	if site.followed != 1 || rec.Status != StatusSignedIn || rec.Message != "setup not answered" {
+		t.Fatalf("after sign-in: followed %d, %+v", site.followed, rec.Account)
+	}
+	if res := s.Check(context.Background(), "a"); !res.Success || site.followed != 1 || res.Data.Message != "" {
+		t.Fatalf("check ran the follow-up: %d %+v", site.followed, res)
+	}
+}

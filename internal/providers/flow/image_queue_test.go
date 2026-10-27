@@ -2,15 +2,16 @@ package flow
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"testing"
 	"time"
 
 	"SnakeMedia/internal/config"
 	"SnakeMedia/internal/events"
-	"SnakeMedia/internal/media"
 	"SnakeMedia/internal/models"
 )
 
@@ -64,11 +65,11 @@ func newQueueHarness(t *testing.T) *queueHarness {
 		return resume(ctx, id)
 	}
 	h.q.pendingJobs = func() ([]generationJob, error) { return nil, nil }
-	h.q.saveImage = func(localURL, outputDir, batchID string) models.Response[media.SaveResult] {
+	h.q.saveImage = func(localURL string, t ImageTask) (string, error) {
 		h.mu.Lock()
 		h.saved = append(h.saved, localURL)
 		h.mu.Unlock()
-		return models.SuccessResponse(media.SaveResult{Path: filepath.Join(outputDir, filepath.Base(localURL))})
+		return filepath.Join(t.OutputDir, filepath.Base(localURL)), nil
 	}
 	return h
 }
@@ -87,7 +88,7 @@ func (h *queueHarness) start() {
 
 func (h *queueHarness) submit(prompts ...string) []ImageTask {
 	h.t.Helper()
-	res := h.s.SubmitImageTasks(ImageTaskRequest{Prompts: prompts, ModelID: "m", AspectRatio: "IMAGE_ASPECT_RATIO_SQUARE", Count: 1, OutputDir: h.dir})
+	res := h.s.SubmitImageTasks(ImageTaskRequest{Prompts: prompts, ModelID: "m", AspectRatio: "IMAGE_ASPECT_RATIO_SQUARE", OutputDir: h.dir})
 	if !res.Success {
 		h.t.Fatalf("submit: %s", res.Error)
 	}
@@ -125,7 +126,7 @@ func TestQueueSendsSavesAndFreesTheRequestID(t *testing.T) {
 	}
 	h.start()
 	res := h.s.SubmitImageTasks(ImageTaskRequest{
-		Prompts: []string{"a cat", " "}, ModelID: "m", Count: 1, OutputDir: h.dir,
+		Prompts: []string{"a cat", " "}, ModelID: "m", OutputDir: h.dir,
 		References: []ImageTaskReference{{LocalURL: ref, FileName: "ref.png", MimeType: "image/png"}},
 	})
 	if !res.Success || len(res.Data) != 1 {
@@ -154,7 +155,7 @@ func TestQueueResumesAnInterruptedRequestUnderTheSameID(t *testing.T) {
 		t.Fatal(err)
 	}
 	const rid = "11111111-1111-4111-8111-111111111111"
-	task := ImageTask{ID: "22222222-2222-4222-8222-222222222222", BatchID: "33333333-3333-4333-8333-333333333333", Prompt: "p", ModelID: "m", Count: 1, OutputDir: h.dir,
+	task := ImageTask{ID: "22222222-2222-4222-8222-222222222222", BatchID: "33333333-3333-4333-8333-333333333333", Prompt: "p", ModelID: "m", OutputDir: h.dir,
 		Status: ImageTaskRunning, RequestID: rid, References: []ImageTaskReference{}, Results: []GeneratedImageItem{}, SavedFiles: []string{}}
 	if err := h.q.journal.Add(task); err != nil {
 		t.Fatal(err)
@@ -245,7 +246,7 @@ func TestQueueCancelKeepsAnAcceptedRequestForRetry(t *testing.T) {
 		return models.SuccessResponse(made(id))
 	}
 	h.start()
-	held := h.s.SubmitImageTasks(ImageTaskRequest{Prompts: []string{"held"}, ModelID: "m", Count: 1, OutputDir: h.dir, Hold: true}).Data[0]
+	held := h.s.SubmitImageTasks(ImageTaskRequest{Prompts: []string{"held"}, ModelID: "m", OutputDir: h.dir, Hold: true}).Data[0]
 	if res := h.s.CancelImageTask(held.ID); res.Data.Status != ImageTaskCancelled {
 		t.Fatalf("queued task not cancelled: %+v", res)
 	}
@@ -268,21 +269,21 @@ func TestQueueCancelKeepsAnAcceptedRequestForRetry(t *testing.T) {
 func TestQueueHoldRunAndSaveOnlyRetry(t *testing.T) {
 	h := newQueueHarness(t)
 	saveFails := true
-	h.q.saveImage = func(localURL, outputDir, batchID string) models.Response[media.SaveResult] {
+	h.q.saveImage = func(localURL string, _ ImageTask) (string, error) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		if saveFails {
-			return models.ErrorResponse[media.SaveResult]("ổ đầy", models.CodeInternal)
+			return "", errors.New("ổ đầy")
 		}
 		h.saved = append(h.saved, localURL)
-		return models.SuccessResponse(media.SaveResult{Path: localURL})
+		return localURL, nil
 	}
 	h.onGen = func(_ context.Context, req GenerateImageRequest) models.Response[[]GeneratedImageItem] {
 		h.setPhase(req.RequestID, generationComplete)
 		return models.SuccessResponse(made(req.RequestID))
 	}
 	h.start()
-	task := h.s.SubmitImageTasks(ImageTaskRequest{Prompts: []string{"x"}, ModelID: "m", Count: 1, OutputDir: h.dir, Hold: true}).Data[0]
+	task := h.s.SubmitImageTasks(ImageTaskRequest{Prompts: []string{"x"}, ModelID: "m", OutputDir: h.dir, Hold: true}).Data[0]
 	time.Sleep(50 * time.Millisecond)
 	if got, _ := h.q.journal.Get(task.ID); got.Status != ImageTaskQueued {
 		t.Fatalf("a held task must not start: %+v", got)
@@ -309,7 +310,7 @@ func TestQueueHoldRunAndSaveOnlyRetry(t *testing.T) {
 func TestQueueRejectsOutputOutsideAllowedFolders(t *testing.T) {
 	h := newQueueHarness(t)
 	outside := filepath.Join(os.TempDir(), "not-allowed-"+t.Name())
-	res := h.s.SubmitImageTasks(ImageTaskRequest{Prompts: []string{"x"}, ModelID: "m", Count: 1, OutputDir: outside})
+	res := h.s.SubmitImageTasks(ImageTaskRequest{Prompts: []string{"x"}, ModelID: "m", OutputDir: outside})
 	if res.Success {
 		t.Fatal("an output folder the user never chose must be refused")
 	}
@@ -321,7 +322,7 @@ func TestQueueAdoptsPendingAllModeJobsWithoutResending(t *testing.T) {
 	if err := h.q.journal.Load(); err != nil {
 		t.Fatal(err)
 	}
-	owner := ImageTask{ID: "77777777-7777-4777-8777-777777777777", BatchID: "88888888-8888-4888-8888-888888888888", Prompt: "p", ModelID: "m", Count: 1, OutputDir: h.dir,
+	owner := ImageTask{ID: "77777777-7777-4777-8777-777777777777", BatchID: "88888888-8888-4888-8888-888888888888", Prompt: "p", ModelID: "m", OutputDir: h.dir,
 		Status: ImageTaskQueued, Held: true, RequestID: held, References: []ImageTaskReference{}, Results: []GeneratedImageItem{}, SavedFiles: []string{}}
 	if err := h.q.journal.Add(owner); err != nil {
 		t.Fatal(err)
@@ -361,5 +362,89 @@ func TestQueueAdoptsPendingAllModeJobsWithoutResending(t *testing.T) {
 	defer h.mu.Unlock()
 	if len(h.resumed) != 1 || h.resumed[0] != all || len(done.Results) != 1 || len(h.saved) != 0 {
 		t.Fatalf("resumed %v saved %v task %+v", h.resumed, h.saved, done)
+	}
+}
+
+// A batch's tasks are numbered by their prompt's place, and an image is saved
+// straight into the chosen folder as "<n>-snakemedia-flow-<code>".
+func TestBatchImagesAreNumberedInTheChosenFolder(t *testing.T) {
+	h := newQueueHarness(t)
+	tasks := h.submit("one", "two", "three")
+	for i, task := range tasks {
+		if task.Index != i+1 {
+			t.Fatalf("task %d has index %d", i, task.Index)
+		}
+	}
+	local, err := h.s.media.Put("img", "image/png", ".png", []byte("PNG"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := newImageQueue(h.s).saveImage(local, tasks[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(saved) != tasks[2].OutputDir || filepath.Dir(tasks[2].OutputDir) != h.dir ||
+		!regexp.MustCompile(`^3-snakemedia-flow-[a-z0-9]{6}\.png$`).MatchString(filepath.Base(saved)) {
+		t.Fatalf("saved as %q", saved)
+	}
+}
+
+// Prompts added in several goes while a batch is unfinished join its folder
+// and continue its numbers; once it is done the next prompts open a new folder.
+func TestBatchFolderJoinsOpenBatch(t *testing.T) {
+	h := newQueueHarness(t)
+	submit := func(prompts ...string) []ImageTask {
+		t.Helper()
+		res := h.s.SubmitImageTasks(ImageTaskRequest{Prompts: prompts, ModelID: "m", OutputDir: h.dir, Hold: true})
+		if !res.Success {
+			t.Fatalf("submit: %s", res.Error)
+		}
+		return res.Data
+	}
+	first := submit("a", "b")
+	more := submit("c")
+	if filepath.Dir(first[0].OutputDir) != h.dir || more[0].OutputDir != first[0].OutputDir {
+		t.Fatalf("folders: %q %q", first[0].OutputDir, more[0].OutputDir)
+	}
+	if first[0].Index != 1 || first[1].Index != 2 || more[0].Index != 3 {
+		t.Fatalf("numbers: %d %d %d", first[0].Index, first[1].Index, more[0].Index)
+	}
+	for _, task := range append(first, more...) {
+		if _, err := h.s.queue.journal.Update(task.ID, func(t *ImageTask) { t.Status = ImageTaskSucceeded }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	next := submit("d")
+	if next[0].OutputDir == first[0].OutputDir || filepath.Dir(next[0].OutputDir) != h.dir || next[0].Index != 1 {
+		t.Fatalf("after the batch ended: %q #%d", next[0].OutputDir, next[0].Index)
+	}
+}
+
+// A queued task takes the new prompt in place; an ended one starts over with
+// it as a new request; a running one cannot be edited.
+func TestEditImageTask(t *testing.T) {
+	h := newQueueHarness(t)
+	task := h.s.SubmitImageTasks(ImageTaskRequest{Prompts: []string{"old"}, ModelID: "m", OutputDir: h.dir, Hold: true}).Data[0]
+	if res := h.s.EditImageTask(task.ID, "  "); res.Success {
+		t.Fatal("an empty prompt was accepted")
+	}
+	res := h.s.EditImageTask(task.ID, "new")
+	if !res.Success || res.Data.Prompt != "new" || res.Data.Status != ImageTaskQueued || !res.Data.Held {
+		t.Fatalf("queued edit = %+v", res)
+	}
+	if _, err := h.q.journal.Update(task.ID, func(t *ImageTask) {
+		t.Status, t.RequestID, t.Error = ImageTaskFailed, "req-1", "Flow từ chối"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res = h.s.EditImageTask(task.ID, "newer")
+	if !res.Success || res.Data.Status != ImageTaskQueued || res.Data.RequestID != "" || res.Data.Error != "" || res.Data.Held {
+		t.Fatalf("failed edit = %+v", res)
+	}
+	if _, err := h.q.journal.Update(task.ID, func(t *ImageTask) { t.Status = ImageTaskRunning }); err != nil {
+		t.Fatal(err)
+	}
+	if res := h.s.EditImageTask(task.ID, "x"); res.Success {
+		t.Fatal("a running task was edited")
 	}
 }

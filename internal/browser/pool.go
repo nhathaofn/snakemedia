@@ -203,10 +203,16 @@ func (p *Pool) Reap(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				p.reapIdle()
+				p.safeReap()
 			}
 		}
 	}()
+}
+
+// safeReap runs one reap; a panic is logged and the next tick tries again.
+func (p *Pool) safeReap() {
+	defer logger.Recover("đóng Chrome rảnh")
+	p.reapIdle()
 }
 
 // reapIdle closes every headless browser that no work holds and nothing has
@@ -328,6 +334,7 @@ func (p *Pool) CloseAll() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer logger.Recover("đóng Chrome")
 			unlock := p.lockLaunch(path)
 			defer unlock()
 			p.mu.Lock()

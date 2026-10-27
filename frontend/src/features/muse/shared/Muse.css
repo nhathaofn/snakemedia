@@ -1,3 +1,4 @@
+/* Muse pages: page shell (Thư viện), studio fields, Đơn gallery and Hàng loạt queue. */
 .muse-page {
   display: flex;
   flex-direction: column;
@@ -18,63 +19,30 @@
   color: var(--text-primary);
 }
 
-.muse-subtitle {
-  font-size: var(--font-size-dialog-title);
-  font-weight: var(--font-weight-semibold);
-  color: var(--text-primary);
-}
-
-.muse-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-4);
-}
-
-.muse-panel {
-  padding: var(--space-8);
-}
-
-.muse-inline-field {
-  display: flex;
-  gap: var(--space-3);
-  font-size: var(--font-size-small);
-  color: var(--text-secondary);
-}
-.muse-inline-field {
-  align-items: center;
-}
-
-.muse-input {
-  background-color: var(--bg-primary);
-  color: var(--text-primary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius-md);
-  padding: var(--space-4) var(--space-5);
-  font: inherit;
-  font-size: var(--font-size-body);
-}
-
-.muse-input:focus {
-  outline: none;
-  border-color: var(--primary);
-}
-
-.muse-textarea {
-  resize: vertical;
-  font-family: var(--font-sans);
-}
-
 .muse-hint {
   font-size: var(--font-size-small);
   color: var(--text-muted);
 }
 
+.muse-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--empty-state-min-height);
+  background: var(--empty-state-bg);
+  border: var(--border-width) dashed var(--border-color);
+  border-radius: var(--radius-lg);
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+  text-align: center;
+  padding: var(--space-8);
+}
+
+/* Tools panel fields */
 .muse-references {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 
 .muse-thumb {
@@ -92,6 +60,29 @@
   object-fit: cover;
 }
 
+.muse-thumb-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-style: dashed;
+  background: var(--bg-primary);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.muse-thumb-add:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.muse-thumb-add:hover:not(:disabled) {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
 .muse-thumb-remove {
   position: absolute;
   top: var(--space-1);
@@ -105,13 +96,39 @@
   cursor: pointer;
 }
 
+.muse-thumb-remove:hover {
+  background: var(--danger);
+  color: var(--text-on-danger);
+}
+
+/* Workspace frame: banners, scrolling body, optional bar at the foot */
+.muse-workspace {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.muse-workspace-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-6);
+}
+
+.muse-notices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-6) var(--space-6) 0;
+}
+
 .muse-alert {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-6);
-  padding: var(--space-5) var(--space-6);
+  padding: var(--space-4) var(--space-6);
   border-radius: var(--radius-md);
   font-size: var(--font-size-small);
 }
@@ -128,163 +145,160 @@
   color: var(--danger);
 }
 
-.muse-empty {
+/* Đơn: gallery of single jobs */
+.muse-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--muse-result-width), 1fr));
+  gap: var(--space-6);
+}
+
+.muse-gallery-empty {
+  height: 100%;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: var(--empty-state-min-height);
-  background: var(--empty-state-bg);
-  border: var(--border-width) dashed var(--border-color);
-  border-radius: var(--radius-lg);
+  gap: var(--space-4);
   color: var(--text-muted);
   font-size: var(--font-size-small);
   text-align: center;
-  padding: var(--space-8);
 }
 
-.muse-job {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-6);
-  padding: var(--space-8);
-}
-
-.muse-tag {
-  padding: 0 var(--space-3);
-  border-radius: var(--radius-full);
-  border: var(--border-width) solid var(--border-color);
-  color: var(--text-secondary);
-  font-size: var(--font-size-caption);
-}
-
-.muse-note {
-  font-size: var(--font-size-small);
-  color: var(--text-secondary);
-}
-
-.muse-note-danger {
-  color: var(--danger);
-}
-
-.muse-job {
-  /* Off-screen cards skip layout and paint in long queues. */
-  content-visibility: auto;
-  contain-intrinsic-size: auto var(--muse-job-placeholder-height);
-}
-
-.muse-card-actions {
-  margin-top: auto;
-}
-
-.muse-jobs {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-6);
-}
-
-.muse-job-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.muse-job-time {
-  margin-left: auto;
-  font-size: var(--font-size-caption);
-  color: var(--text-muted);
-}
-
-.muse-badge {
-  padding: var(--space-1) var(--space-4);
-  border-radius: var(--radius-full);
-  font-size: var(--font-size-caption);
-  font-weight: var(--font-weight-semibold);
-  background: var(--bg-tertiary);
-  color: var(--text-secondary);
-}
-
-.muse-job-processing {
-  background: var(--feedback-primary-bg);
-  color: var(--primary);
-}
-
-.muse-job-succeeded {
-  background: var(--feedback-success-bg);
-  color: var(--success);
-}
-
-.muse-job-failed {
-  background: var(--feedback-danger-bg);
-  color: var(--danger);
-}
-
-.muse-job-prompt {
-  font-size: var(--font-size-body);
+.muse-gallery-empty strong {
   color: var(--text-primary);
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  white-space: pre-wrap;
+  font-size: var(--font-size-label);
 }
 
-.muse-results {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-6);
-}
-
-.muse-result {
+.muse-tile {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-2);
-  width: var(--muse-result-width);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-primary);
+  overflow: hidden;
+  content-visibility: auto;
+  contain-intrinsic-size: auto var(--muse-tile-placeholder-height);
 }
 
-.muse-result video,
-.muse-result img {
-  width: 100%;
-  max-height: var(--muse-result-max-height);
-  object-fit: contain;
-  border-radius: var(--radius-md);
+.muse-tile-failed,
+.muse-tile-cancelled {
+  border-color: var(--feedback-danger-border);
+}
+
+.muse-tile-media {
+  aspect-ratio: 1;
   background: var(--media-letterbox);
 }
 
-/* Shared status and helper classes; colours come from theme tokens only. */
-
-.muse-tag-warning {
-  border-color: var(--feedback-warning-border);
-  background: var(--feedback-warning-bg);
-  color: var(--warning);
+.muse-tile-files {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  gap: var(--border-width);
 }
-.muse-toolbar {
+
+.muse-tile-files-2,
+.muse-tile-files-3,
+.muse-tile-files-4 {
+  grid-template-columns: 1fr 1fr;
+}
+
+.muse-tile-file {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
+.muse-tile-open {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+}
+
+.muse-tile-open img,
+.muse-tile-open video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.muse-tile-overlay {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-6) var(--space-8);
-  border: var(--border-width) solid var(--border-color);
+  gap: var(--space-1);
+  padding: var(--space-1);
   border-radius: var(--radius-md);
-  background: var(--bg-secondary);
+  background: var(--media-overlay);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
 }
 
-.muse-check {
+.muse-tile-file:hover .muse-tile-overlay,
+.muse-tile-file:focus-within .muse-tile-overlay {
+  opacity: 1;
+}
+
+.muse-tile-state {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  padding: var(--space-6);
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.muse-tile-failed .muse-tile-state,
+.muse-tile-cancelled .muse-tile-state {
+  color: var(--danger);
+}
+
+.muse-tile-foot {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  cursor: pointer;
+  padding: var(--space-3) var(--space-4);
+  border-top: var(--border-width) solid var(--border-color);
+}
+
+.muse-tile-prompt {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
   font-size: var(--font-size-caption);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.muse-job-held {
-  border-color: var(--feedback-warning-border);
-}
-
-.muse-edit {
+.muse-tile-actions {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* Hàng loạt: compact queue */
+/* Ratio and duration side by side. */
+.muse-format-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--gap-related);
+}
+
+.muse-tile-note {
+  margin-right: var(--space-1);
+  color: var(--warning);
+  vertical-align: text-bottom;
 }

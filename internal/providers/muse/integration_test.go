@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"SnakeMedia/internal/models"
 )
 
 // A restart keeps how often Muse answered "limit" and a job's hold, so the
@@ -65,21 +63,5 @@ func TestCorruptJournalReachesOptions(t *testing.T) {
 	res := p.GetOptions()
 	if !res.Success || res.Data.JournalWarning == "" {
 		t.Fatalf("options = %+v", res)
-	}
-}
-
-// Reveal opens only files the app stored or saved in its own folders.
-func TestRevealRefusesFilesOutsideAppFolders(t *testing.T) {
-	p := testProvider(t, &fakePage{})
-	outside := filepath.Join(t.TempDir(), "secret.txt")
-	if err := os.WriteFile(outside, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if res := p.RevealFile(outside); res.Success || res.Code != models.CodeInvalidArgument {
-		t.Fatalf("reveal outside = %+v", res)
-	}
-	missing := filepath.Join(p.defaultOutputDir, "gone.png")
-	if res := p.RevealFile(missing); res.Success || res.Code != models.CodeNotFound {
-		t.Fatalf("reveal missing file in the output folder = %+v", res)
 	}
 }

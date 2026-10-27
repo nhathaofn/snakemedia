@@ -102,6 +102,16 @@ func ParseLevel(levelStr string) slog.Level {
 	}
 }
 
+// FilePath returns the log file in use, or "" when only stdout is logged to.
+func FilePath() string {
+	mu.Lock()
+	defer mu.Unlock()
+	if logFile == nil {
+		return ""
+	}
+	return logFile.path
+}
+
 // Close flushes and closes the log file, falling back to a stdout-only logger.
 func Close() error {
 	mu.Lock()

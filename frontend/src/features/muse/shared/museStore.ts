@@ -12,6 +12,11 @@ interface MuseState {
   load: () => Promise<void>;
   /** Reloads the jobs only (bulk changes); calls made meanwhile share one reload. */
   loadJobs: () => Promise<void>;
+  /**
+   * Reloads the options only (an account check may have read Muse's limits);
+   * calls made meanwhile share one reload, and a failure keeps the last options.
+   */
+  loadOptions: () => Promise<void>;
   setJob: (job: MuseJob | null) => void;
   dropJob: (id: string) => void;
 }
@@ -23,6 +28,7 @@ const errorText = (cause: unknown) => (cause instanceof Error ? cause.message : 
 const touched = new Map<string, MuseJob | null>();
 let listsInFlight = 0;
 let jobsReload: Promise<void> | null = null;
+let optionsReload: Promise<void> | null = null;
 
 async function listJobs(): Promise<MuseJob[]> {
   listsInFlight++;
@@ -64,6 +70,18 @@ export const useMuseStore = create<MuseState>((set, get) => ({
       }
     })();
     return jobsReload;
+  },
+  loadOptions: () => {
+    optionsReload ??= (async () => {
+      try {
+        set({ options: unwrap(await api.getMuseOptions()) });
+      } catch {
+        // The jobs are unaffected; the next account update tries again.
+      } finally {
+        optionsReload = null;
+      }
+    })();
+    return optionsReload;
   },
   setJob: (job) => {
     // Events can carry no job (bulk changes use MuseJobsChanged); ignore them.

@@ -1,12 +1,16 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"unicode/utf8"
+)
 
 // MuseMode is how queued jobs are spread over accounts.
 type MuseMode string
 
 const (
-	// MuseModeRotate prefers the least busy account, then the lowest quota use.
+	// MuseModeRotate prefers the least busy account, then shares jobs out in
+	// step with the quota each account has left.
 	MuseModeRotate MuseMode = "rotate"
 	// MuseModeSequential uses accounts in their saved order.
 	MuseModeSequential MuseMode = "sequential"
@@ -17,6 +21,22 @@ var AllMuseModes = []struct {
 	Value  MuseMode
 	TSName string
 }{{MuseModeRotate, "Rotate"}, {MuseModeSequential, "Sequential"}}
+
+// ImageFormat is the file type images are saved as for the user.
+type ImageFormat string
+
+const (
+	ImageFormatPNG ImageFormat = "png"
+	ImageFormatJPG ImageFormat = "jpg"
+	// ImageFormatOriginal keeps the file as the provider made it.
+	ImageFormatOriginal ImageFormat = "original"
+)
+
+// AllImageFormats is bound to the frontend as a TypeScript enum (config.ImageFormat).
+var AllImageFormats = []struct {
+	Value  ImageFormat
+	TSName string
+}{{ImageFormatPNG, "PNG"}, {ImageFormatJPG, "JPG"}, {ImageFormatOriginal, "Original"}}
 
 // MuseConfig is how the app runs its Muse queue. What Muse itself allows
 // (attachment types and sizes, quota, models) is read from muse.ai on each
@@ -46,10 +66,9 @@ type MuseConfig struct {
 	SendTimeoutSeconds int `json:"sendTimeoutSeconds"`
 	// MaxJobs caps the journal; the oldest finished jobs are dropped first.
 	MaxJobs int `json:"maxJobs"`
-	// MaxAccounts caps how many accounts work at once; TotalThreads caps jobs
-	// across all accounts and ThreadsPerAccount jobs on one account.
-	MaxAccounts       int      `json:"maxAccounts"`
-	TotalThreads      int      `json:"totalThreads"`
+	// ThreadsPerAccount caps the jobs one account runs at once. Every account
+	// that is signed in and can work takes jobs; there is no account count to
+	// set (an account added, signed out or resting joins or leaves on its own).
 	ThreadsPerAccount int      `json:"threadsPerAccount"`
 	Mode              MuseMode `json:"mode"`
 	// UseTopup lets an account go on with its additional tokens once its
@@ -58,12 +77,29 @@ type MuseConfig struct {
 	// UsagePauseMinutes rests an account after Muse replies that it hit a limit
 	// while its weekly reset time is unknown.
 	UsagePauseMinutes int `json:"usagePauseMinutes"`
-	// AutoSave copies every finished file into OutputDir (a dated sub-folder).
-	AutoSave bool `json:"autoSave"`
-	// OutputDir is where finished files are copied; empty uses the app's
-	// default folder (paths.MuseOutputDir).
+	// OutputDir is the folder the last batch was saved into (chosen in the
+	// batch form); empty uses the app's default folder (paths.MuseOutputDir).
+	// Single jobs are not saved; their files are downloaded by hand.
 	OutputDir string `json:"outputDir"`
+	// SetupMessage is sent in a chat of its own on every Muse account once it
+	// is signed in; the account counts as signed in only once Muse has replied.
+	// A changed message is sent again; empty sends nothing.
+	SetupMessage string `json:"setupMessage"`
+	// ImageFormat is what Muse images (made as WebP) are saved as, in a batch
+	// folder or by the download button.
+	ImageFormat ImageFormat `json:"imageFormat"`
 }
+
+// MaxMuseSetupMessage caps the setup message, in characters.
+const MaxMuseSetupMessage = 8000
+
+// defaultMuseSetupMessage asks Muse to treat every generation request on its
+// own, so nothing from earlier outputs leaks into a new one.
+const defaultMuseSetupMessage = `Please save the following rule to this account's long-term / permanent memory and apply it across the whole account, in every conversation and every future generation, until I cancel or change it myself:
+
+GLOBAL RULE: Every request I make to create an image, a video or any other new output is a completely independent request. Never use, reference or infer anything from any output created earlier on your own, including subject, characters, style, aspect ratio, duration, resolution and old files, even when my generation prompt does not mention this rule. Use only the parameters in the current request. Reuse an earlier output only when I explicitly say in that request that I want to continue, edit or reuse it.
+
+After saving it, please confirm: where you saved it, what its scope is, and whether I need to repeat this rule in later generations.`
 
 func DefaultMuseConfig() MuseConfig {
 	return MuseConfig{
@@ -77,13 +113,12 @@ func DefaultMuseConfig() MuseConfig {
 		SendGapMaxSeconds:   20,
 		SendTimeoutSeconds:  180,
 		MaxJobs:             500,
-		MaxAccounts:         2,
-		TotalThreads:        2,
 		ThreadsPerAccount:   1,
 		Mode:                MuseModeRotate,
 		UseTopup:            true,
 		UsagePauseMinutes:   60,
-		AutoSave:            true,
+		SetupMessage:        defaultMuseSetupMessage,
+		ImageFormat:         ImageFormatPNG,
 	}
 }
 
@@ -109,14 +144,20 @@ func (c MuseConfig) Validate() error {
 	if c.MaxJobs < 10 || c.MaxJobs > 10000 {
 		return fmt.Errorf("muse: maxJobs must be between 10 and 10000")
 	}
-	if c.MaxAccounts < 1 || c.MaxAccounts > 50 || c.TotalThreads < 1 || c.TotalThreads > 100 || c.ThreadsPerAccount < 1 || c.ThreadsPerAccount > 5 {
-		return fmt.Errorf("muse: maxAccounts must be 1-50, totalThreads 1-100 and threadsPerAccount 1-5")
+	if c.ThreadsPerAccount < 1 || c.ThreadsPerAccount > 5 {
+		return fmt.Errorf("muse: threadsPerAccount must be between 1 and 5")
 	}
 	if !isOneOf(c.Mode, MuseModeRotate, MuseModeSequential) {
 		return fmt.Errorf("muse: mode %q is not supported", c.Mode)
 	}
 	if c.UsagePauseMinutes < 1 || c.UsagePauseMinutes > 10080 {
 		return fmt.Errorf("muse: usage pause must be between 1 and 10080 minutes")
+	}
+	if !isOneOf(c.ImageFormat, ImageFormatPNG, ImageFormatJPG, ImageFormatOriginal) {
+		return fmt.Errorf("muse: image format %q is not supported", c.ImageFormat)
+	}
+	if utf8.RuneCountInString(c.SetupMessage) > MaxMuseSetupMessage {
+		return fmt.Errorf("muse: setup message must be at most %d characters", MaxMuseSetupMessage)
 	}
 	return nil
 }

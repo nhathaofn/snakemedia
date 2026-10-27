@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { MuseJobKind, MuseJobStatus } from '../../../types';
+import { MuseJobKind, MuseJobMode, MuseJobStatus } from '../../../types';
 import type { MuseJob } from '../../../types';
-import { mergeSnapshot, selectedShown, upsertJob } from './format';
+import {
+  jobsOf,
+  matchesFilter,
+  mayBePaid,
+  mergeSnapshot,
+  selectedShown,
+  upsertJob,
+} from './format';
 
 const job = (id: string, status: MuseJobStatus = MuseJobStatus.Queued) =>
   ({
@@ -56,5 +63,42 @@ describe('mergeSnapshot', () => {
       ]),
     );
     expect(merged).toEqual([c, newer]);
+  });
+});
+
+describe('jobsOf', () => {
+  it('keeps one kind and mode, reading a missing mode as Hàng loạt', () => {
+    const single = { ...job('single'), mode: MuseJobMode.Single };
+    const batch = { ...job('batch'), mode: MuseJobMode.Batch };
+    const old = job('old');
+    const image = { ...job('image'), kind: MuseJobKind.Image };
+    const jobs = [single, batch, old, image];
+    expect(jobsOf(jobs, MuseJobKind.Video, MuseJobMode.Single).map((j) => j.id)).toEqual([
+      'single',
+    ]);
+    expect(jobsOf(jobs, MuseJobKind.Video, MuseJobMode.Batch).map((j) => j.id)).toEqual([
+      'batch',
+      'old',
+    ]);
+  });
+});
+
+describe('matchesFilter', () => {
+  it('matches held jobs whatever their status', () => {
+    const held = { ...job('h'), held: true };
+    expect(matchesFilter(held, 'held')).toBe(true);
+    expect(matchesFilter(job('q'), 'held')).toBe(false);
+    expect(matchesFilter(job('q'), MuseJobStatus.Queued)).toBe(true);
+    expect(matchesFilter(job('q'), 'all')).toBe(true);
+  });
+});
+
+describe('mayBePaid', () => {
+  it('flags jobs Muse took or may have taken', () => {
+    expect(mayBePaid(job('a', MuseJobStatus.Failed))).toBe(false);
+    expect(mayBePaid({ ...job('b', MuseJobStatus.Failed), sessionId: 's1' } as MuseJob)).toBe(true);
+    expect(mayBePaid({ ...job('c', MuseJobStatus.Failed), sendUnknown: true } as MuseJob)).toBe(
+      true,
+    );
   });
 });

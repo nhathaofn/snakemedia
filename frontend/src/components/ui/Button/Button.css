@@ -79,3 +79,8 @@
 .btn-danger:hover:not(:disabled) {
   background-color: var(--danger-hover);
 }
+
+/* Icon-only button (IconAction). */
+.btn-icon {
+  padding: var(--space-2);
+}

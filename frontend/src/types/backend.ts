@@ -56,10 +56,13 @@ export type MuseJob = muse.MuseJob;
 export type MuseLibraryItem = muse.MuseLibraryItem;
 export type MuseOptions = muse.MuseOptions;
 export type MuseReference = muse.MuseReference;
+export type MuseRatio = muse.MuseRatio;
 export type MuseJobRequest = muse.MuseJobRequest;
 export const MuseJobRequest = muse.MuseJobRequest;
 export const MuseJobKind = muse.MuseJobKind;
 export type MuseJobKind = muse.MuseJobKind;
+export const MuseJobMode = muse.MuseJobMode;
+export type MuseJobMode = muse.MuseJobMode;
 export const MuseJobStatus = muse.MuseJobStatus;
 export type MuseJobStatus = muse.MuseJobStatus;
 
@@ -68,6 +71,8 @@ export const MuseConfig = config.MuseConfig;
 
 export const MuseMode = config.MuseMode;
 export type MuseMode = config.MuseMode;
+export const ImageFormat = config.ImageFormat;
+export type ImageFormat = config.ImageFormat;
 
 export const Theme = config.Theme;
 export type Theme = config.Theme;

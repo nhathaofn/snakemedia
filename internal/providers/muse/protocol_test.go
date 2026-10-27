@@ -2,7 +2,7 @@ package muse
 
 import (
 	"encoding/json"
-	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -76,21 +76,6 @@ func TestParseCapabilities(t *testing.T) {
 	}
 }
 
-func TestClassifyReply(t *testing.T) {
-	var usage *usageError
-	var policy *policyError
-	var muse *museError
-	if !errors.As(classifyReply("Bạn đã hết lượt tạo video hôm nay", "video"), &usage) {
-		t.Error("usage reply not recognised")
-	}
-	if !errors.As(classifyReply("I can't create that, it violates our content policy.", "video"), &policy) {
-		t.Error("policy reply not recognised")
-	}
-	if !errors.As(classifyReply("Công cụ đang bận", "video"), &muse) || !errors.As(classifyReply("", "video"), &muse) {
-		t.Error("plain reply should be a Muse error")
-	}
-}
-
 func TestPausedUntil(t *testing.T) {
 	cfg := config.DefaultMuseConfig()
 	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
@@ -121,7 +106,6 @@ func TestPausedUntil(t *testing.T) {
 
 func TestPlan(t *testing.T) {
 	cfg := config.DefaultMuseConfig()
-	cfg.MaxAccounts, cfg.TotalThreads = 3, 3
 	now := time.Now()
 	acc := func(id string, pct float64) MuseAccount {
 		return MuseAccount{ID: id, Enabled: true, Status: accounts.StatusSignedIn, Quota: &MuseQuota{PercentUsed: pct}}
@@ -150,15 +134,41 @@ func TestPlan(t *testing.T) {
 		t.Fatalf("sequential plan = %+v", got)
 	}
 
-	cfg.TotalThreads = 1
-	if got := plan(jobs[:2], accounts, cfg, map[string]string{"x": "a"}, now); len(got) != 0 {
-		t.Fatalf("total thread limit ignored: %+v", got)
+	// Every account at its thread limit: nothing more starts.
+	if got := plan(jobs[:2], accounts, cfg, map[string]string{"x": "a", "y": "b", "z": "c"}, now); len(got) != 0 {
+		t.Fatalf("thread limit ignored: %+v", got)
+	}
+}
+
+// Every usable account takes work, however many there are; no count is set.
+func TestPlanUsesEveryUsableAccount(t *testing.T) {
+	cfg := config.DefaultMuseConfig()
+	now := time.Now()
+	ok := func(id string) MuseAccount {
+		return MuseAccount{ID: id, Enabled: true, Status: accounts.StatusSignedIn}
+	}
+	accs := []MuseAccount{ok("a"), ok("b"), ok("c"), ok("d"), ok("e")}
+	accs = append(accs,
+		MuseAccount{ID: "out", Enabled: true, Status: accounts.StatusSignedOut},
+		MuseAccount{ID: "noproxy", Enabled: true, Status: accounts.StatusSignedIn, NoRoute: "proxy chết"},
+		MuseAccount{ID: "resting", Enabled: true, Status: accounts.StatusSignedIn, PausedUntil: now.Add(time.Hour).Format(time.RFC3339)},
+	)
+	var jobs []MuseJob
+	for i := range 10 {
+		jobs = append(jobs, MuseJob{ID: fmt.Sprint("q", i), Status: MuseJobQueued, CreatedAt: fmt.Sprint(i)})
+	}
+	got := plan(jobs, accs, cfg, map[string]string{}, now)
+	used := map[string]bool{}
+	for _, a := range got {
+		used[a.accountID] = true
+	}
+	if len(got) != 5 || len(used) != 5 || used["out"] || used["noproxy"] || used["resting"] {
+		t.Fatalf("plan = %+v", got)
 	}
 }
 
 func TestPlanSkipsHeldJobs(t *testing.T) {
 	cfg := config.DefaultMuseConfig()
-	cfg.MaxAccounts, cfg.TotalThreads = 2, 2
 	accs := []MuseAccount{{ID: "a", Enabled: true, Status: accounts.StatusSignedIn}}
 	jobs := []MuseJob{
 		{ID: "held", Status: MuseJobQueued, Held: true, CreatedAt: "1"},
@@ -167,5 +177,75 @@ func TestPlanSkipsHeldJobs(t *testing.T) {
 	got := plan(jobs, accs, cfg, map[string]string{}, time.Now())
 	if len(got) != 1 || got[0].jobID != "ok" {
 		t.Fatalf("plan = %+v", got)
+	}
+}
+
+func TestPlanSharesByQuotaLeft(t *testing.T) {
+	cfg := config.DefaultMuseConfig()
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	acc := func(id string, pct float64, sentAgo time.Duration) MuseAccount {
+		return MuseAccount{
+			ID: id, Enabled: true, Status: accounts.StatusSignedIn,
+			Quota:      &MuseQuota{PercentUsed: pct},
+			LastSentAt: now.Add(-sentAgo).Format(time.RFC3339Nano),
+		}
+	}
+	jobs := []MuseJob{{ID: "q", Status: MuseJobQueued, CreatedAt: "1"}}
+	pick := func(accs ...MuseAccount) string {
+		got := plan(jobs, accs, cfg, map[string]string{}, now)
+		if len(got) != 1 {
+			t.Fatalf("plan = %+v", got)
+		}
+		return got[0].accountID
+	}
+
+	// The lowest usage no longer takes every job: the account it just used
+	// gives way to one rested long enough for its share.
+	if got := pick(acc("low", 10, 20*time.Second), acc("mid", 30, 5*time.Minute)); got != "mid" {
+		t.Fatalf("picked %s, want the rested account", got)
+	}
+	// With equal rest, the account with more room left goes first.
+	if got := pick(acc("low", 10, time.Minute), acc("mid", 30, time.Minute)); got != "low" {
+		t.Fatalf("picked %s, want the account with more room", got)
+	}
+	// An account that never sent goes first.
+	fresh := acc("new", 50, 0)
+	fresh.LastSentAt = ""
+	if got := pick(acc("low", 10, time.Hour), fresh); got != "new" {
+		t.Fatalf("picked %s, want the unused account", got)
+	}
+	// Additional (paid) tokens are spent only when no weekly usage is free.
+	topup := acc("topup", 100, 24*time.Hour)
+	topup.Quota.TopupBalance, topup.Quota.TopupTotal = 900, 1000
+	if got := pick(topup, acc("busy", 95, 20*time.Second)); got != "busy" {
+		t.Fatalf("picked %s, want the account still on weekly usage", got)
+	}
+}
+
+func TestPlanRotatesOverManyJobs(t *testing.T) {
+	cfg := config.DefaultMuseConfig()
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	accs := []MuseAccount{
+		{ID: "a", Enabled: true, Status: accounts.StatusSignedIn, Quota: &MuseQuota{PercentUsed: 10}},
+		{ID: "b", Enabled: true, Status: accounts.StatusSignedIn, Quota: &MuseQuota{PercentUsed: 55}},
+	}
+	jobs := []MuseJob{{ID: "q", Status: MuseJobQueued, CreatedAt: "1"}}
+	count := map[string]int{}
+	for range 100 {
+		got := plan(jobs, accs, cfg, map[string]string{}, now)
+		if len(got) != 1 {
+			t.Fatalf("plan = %+v", got)
+		}
+		count[got[0].accountID]++
+		for i := range accs {
+			if accs[i].ID == got[0].accountID {
+				accs[i].LastSentAt = now.Format(time.RFC3339Nano)
+			}
+		}
+		now = now.Add(time.Minute)
+	}
+	// Room left is 0.9 against 0.45: about two jobs to one, never all on one.
+	if count["b"] < 25 || count["a"] < 55 {
+		t.Fatalf("shares = %v", count)
 	}
 }

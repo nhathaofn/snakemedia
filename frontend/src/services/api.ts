@@ -25,6 +25,7 @@ import type {
   MediaDirectoryResult,
   MuseJob,
   MuseJobKind,
+  MuseJobMode,
   MuseJobRequest,
   MuseLibraryItem,
   MuseOptions,
@@ -174,13 +175,13 @@ export const api = {
     invoke<FlowProjectImage[]>('ListFlowProjectImages', () =>
       Backend.ListFlowProjectImages(accountID, projectID, mode),
     ),
-  getDefaultImageOutputDirectory: () =>
-    invoke<string>('GetDefaultImageOutputDirectory', Backend.GetDefaultImageOutputDirectory),
+  getBatchOutputDirectory: (provider: AccountProvider) =>
+    invoke<string>('GetBatchOutputDirectory', () => Backend.GetBatchOutputDirectory(provider)),
   saveMedia: (localUrl: string) =>
     invoke<SaveMediaResult>('SaveMedia', () => Backend.SaveMedia(localUrl)),
-  chooseImageOutputDirectory: (defaultDir: string) =>
-    invoke<MediaDirectoryResult>('ChooseImageOutputDirectory', () =>
-      Backend.ChooseImageOutputDirectory(defaultDir),
+  chooseBatchOutputDirectory: (provider: AccountProvider) =>
+    invoke<MediaDirectoryResult>('ChooseBatchOutputDirectory', () =>
+      Backend.ChooseBatchOutputDirectory(provider),
     ),
 
   getFlowImageTasks: () =>
@@ -195,10 +196,10 @@ export const api = {
     invoke<FlowImageTask>('CancelFlowImageTask', () => Backend.CancelFlowImageTask(id)),
   retryFlowImageTasks: (ids: string[]) =>
     invoke<number>('RetryFlowImageTasks', () => Backend.RetryFlowImageTasks(ids)),
+  editFlowImageTask: (id: string, prompt: string) =>
+    invoke<FlowImageTask>('EditFlowImageTask', () => Backend.EditFlowImageTask(id, prompt)),
   removeFlowImageTasks: (ids: string[]) =>
     invoke<number>('RemoveFlowImageTasks', () => Backend.RemoveFlowImageTasks(ids)),
-  clearFinishedFlowImageTasks: () =>
-    invoke<number>('ClearFinishedFlowImageTasks', Backend.ClearFinishedFlowImageTasks),
   addFlowImageTaskReferences: (ids: string[], refs: FlowImageTaskReference[]) =>
     invoke<number>('AddFlowImageTaskReferences', () =>
       Backend.AddFlowImageTaskReferences(ids, refs),
@@ -224,19 +225,18 @@ export const api = {
   retryMuseJob: (id: string) => invoke<MuseJob>('RetryMuseJob', () => Backend.RetryMuseJob(id)),
   removeMuseJob: (id: string) => invoke<boolean>('RemoveMuseJob', () => Backend.RemoveMuseJob(id)),
   runMuseJobs: (ids: string[]) => invoke<number>('RunMuseJobs', () => Backend.RunMuseJobs(ids)),
-  holdMuseQueued: (kind: MuseJobKind) =>
-    invoke<number>('HoldMuseQueued', () => Backend.HoldMuseQueued(kind)),
-  retryMuseFailed: (kind: MuseJobKind) =>
-    invoke<number>('RetryMuseFailed', () => Backend.RetryMuseFailed(kind)),
-  clearMuseFinished: (kind: MuseJobKind) =>
-    invoke<number>('ClearMuseFinished', () => Backend.ClearMuseFinished(kind)),
+  holdMuseQueued: (kind: MuseJobKind, mode: MuseJobMode) =>
+    invoke<number>('HoldMuseQueued', () => Backend.HoldMuseQueued(kind, mode)),
+  retryMuseFailed: (kind: MuseJobKind, mode: MuseJobMode) =>
+    invoke<number>('RetryMuseFailed', () => Backend.RetryMuseFailed(kind, mode)),
+  clearMuseFinished: (kind: MuseJobKind, mode: MuseJobMode) =>
+    invoke<number>('ClearMuseFinished', () => Backend.ClearMuseFinished(kind, mode)),
   removeMuseJobs: (ids: string[]) =>
     invoke<number>('RemoveMuseJobs', () => Backend.RemoveMuseJobs(ids)),
   editAndRetryMuseJob: (id: string, prompt: string) =>
     invoke<MuseJob>('EditAndRetryMuseJob', () => Backend.EditAndRetryMuseJob(id, prompt)),
   openMuseOutputFolder: () => invoke<boolean>('OpenMuseOutputFolder', Backend.OpenMuseOutputFolder),
-  revealMuseFile: (path: string) =>
-    invoke<boolean>('RevealMuseFile', () => Backend.RevealMuseFile(path)),
+  revealFile: (path: string) => invoke<boolean>('RevealFile', () => Backend.RevealFile(path)),
   listMuseLibrary: () => invoke<MuseLibraryItem[]>('ListMuseLibrary', Backend.ListMuseLibrary),
   removeMuseLibraryItems: (ids: string[]) =>
     invoke<number>('RemoveMuseLibraryItems', () => Backend.RemoveMuseLibraryItems(ids)),

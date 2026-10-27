@@ -105,7 +105,10 @@ func New(accounts Accounts, cfg *config.Manager, store *media.Store, productName
 	// The balance query must not delay the generation reply; its activity epoch
 	// check already drops a result made stale by a newer request.
 	s.refreshLiveCredits = func(ctx context.Context, id string) {
-		go s.refreshAccountCredits(context.WithoutCancel(ctx), id)
+		go func() {
+			defer logger.Recover("cập nhật credit Flow")
+			s.refreshAccountCredits(context.WithoutCancel(ctx), id)
+		}()
 	}
 	s.generateLiveVideos = s.generateVideosFromAccount
 	s.uploadLiveVideo = s.uploadVideoFromAccount

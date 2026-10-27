@@ -3,7 +3,6 @@ import { useShallow } from 'zustand/react/shallow';
 import { api } from '../../../../services/api';
 import {
   FlowModePanel,
-  QuantityField,
   ReferencePicker,
   SelectField,
   durationLabel,
@@ -13,6 +12,7 @@ import {
   useStudioConfig,
 } from '../../shared';
 import { useFlowVideoStore } from '../store/flowVideoStore';
+import { QuantityField } from '../../../../components/studio';
 
 /**
  * SingleModePanel - Video settings with the same fields as Image. Ratios,
@@ -88,7 +88,7 @@ export const SingleModePanel: React.FC = () => {
       />
 
       {creditCost !== undefined && (
-        <p className="flow-field-hint" role="status">
+        <p className="studio-field-hint" role="status">
           Ước tính {creditCost * store.quantity} credit ({creditCost} credit/video)
         </p>
       )}

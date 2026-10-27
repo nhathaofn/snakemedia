@@ -79,7 +79,7 @@
 .accounts-form {
   display: flex;
   flex-direction: column;
-  gap: var(--space-7);
+  gap: var(--gap-field);
 }
 
 .accounts-form-title {
@@ -91,7 +91,7 @@
 .accounts-field {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--gap-label);
   font-size: var(--font-size-small);
   color: var(--text-secondary);
 }

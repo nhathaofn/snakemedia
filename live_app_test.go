@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +28,11 @@ import (
 //	flow-video   one cheapest Flow video, the wait cancelled midway, then resumed
 //	muse-image   one Muse image job, waited on the queue
 //	muse-video   one Muse video job, waited on the queue
+//	muse-probe   read how Muse reports chat progress (sends nothing)
+//	muse-watch   send SNAKEMEDIA_LIVE_WATCH prompts ("|" separated) and log every state Muse reports
+//	muse-setup   what follows a sign-in: the check, then the setup message, waiting for Muse's reply
+//	             (SNAKEMEDIA_LIVE_ACCOUNT picks the account)
+//	muse-limits  check every signed-in Muse account and print the attachment limits read (sends nothing)
 //
 // SNAKEMEDIA_LIVE_DIRECT lists account IDs to switch to "no proxy" first.
 func TestLiveApp(t *testing.T) {
@@ -94,6 +100,14 @@ func TestLiveApp(t *testing.T) {
 				liveMuse(t, a, muse.MuseJobImage)
 			case "muse-video":
 				liveMuse(t, a, muse.MuseJobVideo)
+			case "muse-probe":
+				liveMuseProbe(t, a)
+			case "muse-watch":
+				liveMuseWatch(t, a)
+			case "muse-setup":
+				liveMuseSetup(t, a)
+			case "muse-limits":
+				liveMuseLimits(t, a)
 			default:
 				t.Fatalf("unknown step %q", step)
 			}
@@ -201,7 +215,24 @@ func liveMuse(t *testing.T, a *App, kind muse.MuseJobKind) {
 	if kind == muse.MuseJobVideo {
 		prompt = "a red paper boat drifting slowly on a calm lake, 5 seconds"
 	}
-	sub := a.SubmitMuseJobs(muse.MuseJobRequest{Kind: kind, Prompts: []string{prompt}, Repeat: 1, Label: "live test"})
+	// SNAKEMEDIA_LIVE_MUSE_PROMPT, _RATIO, _DURATION and _REFS (image paths,
+	// "|" separated, attached in that order) shape the job.
+	if env := os.Getenv("SNAKEMEDIA_LIVE_MUSE_PROMPT"); env != "" {
+		prompt = env
+	}
+	req := muse.MuseJobRequest{Kind: kind, Mode: muse.MuseJobSingle, Prompts: []string{prompt}, Repeat: 1, Label: "live test",
+		Ratio: os.Getenv("SNAKEMEDIA_LIVE_MUSE_RATIO")}
+	req.Duration, _ = strconv.Atoi(os.Getenv("SNAKEMEDIA_LIVE_MUSE_DURATION"))
+	if env := os.Getenv("SNAKEMEDIA_LIVE_MUSE_REFS"); env != "" {
+		refs := a.muse.ImportReferences(strings.Split(env, "|"))
+		if !refs.Success {
+			t.Fatalf("references: %s", refs.Error)
+		}
+		for _, r := range refs.Data {
+			req.References = append(req.References, r.LocalURL)
+		}
+	}
+	sub := a.SubmitMuseJobs(req)
 	if !sub.Success || len(sub.Data) != 1 {
 		t.Fatalf("submit: %s %s", sub.Error, dump(sub.Data))
 	}
@@ -224,6 +255,11 @@ func liveMuse(t *testing.T, a *App, kind muse.MuseJobKind) {
 		}
 		if j.Status == muse.MuseJobSucceeded || j.Status == muse.MuseJobFailed || j.Status == muse.MuseJobCancelled {
 			t.Logf("final: %s", dump(j))
+			for _, f := range j.Files {
+				if path, err := a.media.Path(f); err == nil {
+					t.Logf("file: %s", path)
+				}
+			}
 			return
 		}
 		time.Sleep(5 * time.Second)

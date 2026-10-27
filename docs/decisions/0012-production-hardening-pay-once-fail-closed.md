@@ -27,8 +27,22 @@ not be chained across providers.
      The time limit counts from `SentAt`; a resumed overdue job is read before
      anything is cancelled, and a failed cancel never leads to a resend. Bulk
      "retry failed" skips jobs Muse already accepted. Failures before a send do
-     not spend attempts; re-checks back off; usage/verification replies are
-     capped per job and persisted.
+     not spend attempts; re-checks back off; used-up hand-ons are capped per
+     job and persisted.
+   - Muse: a session ends only when `sessions.list` says `completed` or
+     `interrupted` (checked live on muse.ai, 2026-10-27). The file is the
+     chat's `delta.presentation` event (`payload.data.images|videos`); a
+     follow-up question in the reply is not a failure. Completed without a
+     file is a declined prompt ("CẦN ĐỔI PROMPT"), unless Muse's subscription,
+     read at that moment, says the usage is gone (then the job moves to
+     another account). Interrupted without a file retries in a new chat. The
+     reply's wording is never classified.
+   - Muse: a ratio and a video length are asked in the message line
+     ("Tạo video · tỉ lệ 9:16 (dọc) · dài 8 giây"); the values offered are
+     the ones measured live (`format.go`): images 16:9 (near 14:9), 4:3, 1:1,
+     3:4, 9:16 (near 9:14), Flow's set; videos 9:16, 16:9, 1:1 and 2 to 10
+     seconds (10 is Muse's longest). The first made file is measured and a job whose file
+     differs gets a note; it is never sent again for that.
    - Queue tasks write their request ID before the request can leave the app.
    - A graph run with a `RequestID` derives every billable request ID (Flow) or
      job ID (Muse) from the run key, so running the same graph again resumes
@@ -73,8 +87,9 @@ not be chained across providers.
   `accounts.idleBrowserMinutes` and the `flow.queue*` keys; Flow's
   `maxSourceBytes`, `minTrimSeconds`, `trimStepSeconds` and
   `maxDownloadBytes` are ignored when loaded (the download cap migrates).
-- The Muse status words treated as finished and the reply patterns are still
-  inferred from muse.ai's page; they need a live check when muse.ai changes.
+- The Muse session states and the presentation event were read live
+  (`SNAKEMEDIA_LIVE_APP=muse-probe` reads only; `muse-watch` sends prompts and
+  logs every state); run them again when muse.ai changes.
 - The Flow RPC discovery budget fields stay in `config.AccountConfig` because
   Flow's chrome layer, including the unedited `recaptcha.go`, takes that
   struct; they are no longer shown in the UI.

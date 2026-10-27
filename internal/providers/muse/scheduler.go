@@ -29,7 +29,16 @@ func pausedUntil(acc MuseAccount, cfg config.MuseConfig, now time.Time) time.Tim
 		return time.Time{}
 	}
 	if reset.IsZero() {
-		return now.Add(time.Duration(cfg.UsagePauseMinutes) * time.Minute)
+		// No reset named: the numbers rest the account for a while after they
+		// were read, then count as stale (the runner reads them again first).
+		checked, err := time.Parse(time.RFC3339, q.CheckedAt)
+		if err != nil {
+			checked = now
+		}
+		if until := checked.Add(time.Duration(cfg.UsagePauseMinutes) * time.Minute); until.After(now) {
+			return until
+		}
+		return time.Time{}
 	}
 	return reset
 }
@@ -65,30 +74,17 @@ type assignment struct {
 //
 // A job already sent (it has a SessionID) resumes only on the account that
 // sent it, because only that account can read the chat. Queued jobs go to
-// usable accounts within the thread limits, oldest first.
+// every usable account (signed in, enabled, routed, not resting), up to
+// ThreadsPerAccount each, oldest first.
 func plan(jobs []MuseJob, accs []MuseAccount, cfg config.MuseConfig, running map[string]string, now time.Time) []assignment {
 	busy := make(map[string]int, len(accs))
 	for _, accID := range running {
 		busy[accID]++
 	}
-	total := len(running)
-	active := func() int {
-		n := 0
-		for _, b := range busy {
-			if b > 0 {
-				n++
-			}
-		}
-		return n
-	}
-	canTake := func(acc MuseAccount) bool {
-		b := busy[acc.ID]
-		return b < cfg.ThreadsPerAccount && total < cfg.TotalThreads && (b > 0 || active() < cfg.MaxAccounts)
-	}
+	canTake := func(acc MuseAccount) bool { return busy[acc.ID] < cfg.ThreadsPerAccount }
 	var out []assignment
 	take := func(job MuseJob, acc MuseAccount) {
 		busy[acc.ID]++
-		total++
 		out = append(out, assignment{jobID: job.ID, accountID: acc.ID})
 	}
 	find := func(id string) (MuseAccount, bool) {
@@ -139,19 +135,7 @@ func plan(jobs []MuseJob, accs []MuseAccount, cfg config.MuseConfig, running map
 				if d := busy[a.ID] - busy[b.ID]; d != 0 {
 					return d
 				}
-				if d := quotaUse(a) - quotaUse(b); d != 0 {
-					if d < 0 {
-						return -1
-					}
-					return 1
-				}
-				switch {
-				case a.LastSentAt < b.LastSentAt:
-					return -1
-				case a.LastSentAt > b.LastSentAt:
-					return 1
-				}
-				return 0
+				return compareShare(a, b, cfg, now)
 			})
 		}
 		take(job, pool[0])
@@ -159,9 +143,73 @@ func plan(jobs []MuseJob, accs []MuseAccount, cfg config.MuseConfig, running map
 	return out
 }
 
-func quotaUse(acc MuseAccount) float64 {
-	if acc.Quota == nil {
-		return 0
+// compareShare orders two idle accounts for the next job so that each gets a
+// share of the work in step with the quota it has left, instead of the one
+// with the lowest usage taking every job until it catches up:
+//   - an account still on its weekly usage goes before one spending its
+//     additional tokens (paid), which only take jobs when no other can;
+//   - an account that never sent goes first (more room first among those);
+//   - otherwise the higher idle time × room left wins. Sending resets the idle
+//     time, so an account with twice the room is chosen about twice as often,
+//     and an account waiting out its send gap gives way to a rested one.
+func compareShare(a, b MuseAccount, cfg config.MuseConfig, now time.Time) int {
+	ta, ra := room(a, cfg)
+	tb, rb := room(b, cfg)
+	if ta != tb {
+		return ta - tb
 	}
-	return acc.Quota.PercentUsed
+	ia, na := idle(a, now)
+	ib, nb := idle(b, now)
+	switch {
+	case na && nb:
+		return cmpDesc(ra, rb)
+	case na:
+		return -1
+	case nb:
+		return 1
+	}
+	if d := cmpDesc(ia*ra, ib*rb); d != 0 {
+		return d
+	}
+	return cmpDesc(ra, rb)
+}
+
+// room is how much an account has left, as a tier (0: weekly usage, 1:
+// additional tokens) and a fraction in (0, 1]. An unread quota counts as full:
+// the first job reads it.
+func room(acc MuseAccount, cfg config.MuseConfig) (tier int, left float64) {
+	q := acc.Quota
+	if q == nil {
+		return 0, 1
+	}
+	if !q.weeklyOut() {
+		return 0, max(1-q.PercentUsed/100, minRoom)
+	}
+	if cfg.UseTopup && q.TopupTotal > 0 {
+		return 1, max(min(q.TopupBalance/q.TopupTotal, 1), minRoom)
+	}
+	return 1, minRoom
+}
+
+// minRoom keeps an almost used-up account in turn, just rarely.
+const minRoom = 0.01
+
+// idle is how long ago the account last sent, in seconds; never reports an
+// account that has not sent (or whose time cannot be read).
+func idle(acc MuseAccount, now time.Time) (seconds float64, never bool) {
+	last, err := time.Parse(time.RFC3339Nano, acc.LastSentAt)
+	if err != nil {
+		return 0, true
+	}
+	return max(now.Sub(last).Seconds(), 1), false
+}
+
+func cmpDesc(a, b float64) int {
+	switch {
+	case a > b:
+		return -1
+	case a < b:
+		return 1
+	}
+	return 0
 }

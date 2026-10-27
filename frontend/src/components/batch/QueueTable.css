@@ -1,0 +1,515 @@
+/* Above the table: status filters on the left, queue actions on the right. */
+.queue-bar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+  min-height: var(--flow-bottom-bar-height);
+  padding: var(--space-3) var(--space-6);
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.queue-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+/* No rows: the message sits in the middle of the free space. */
+.queue-table-body.is-empty {
+  display: flex;
+}
+
+.queue-table-body.is-empty .queue-table-empty {
+  flex: 1;
+}
+
+/*
+ * The batch queue table both providers show (Flow Ảnh → Hàng loạt, Muse
+ * Ảnh/Video → Hàng loạt): one row per prompt in the same fixed columns.
+ */
+.queue-scroll {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--gap-related);
+  width: 100%;
+  min-height: 0;
+  padding: 0 var(--space-6) var(--space-6);
+  overflow: auto;
+}
+
+.queue-scroll > * {
+  flex-shrink: 0;
+}
+
+.queue-table {
+  /* Number, prompt, references, results, progress. Progress keeps one width so
+     rows line up; the prompt takes what is left. */
+  --queue-columns: 34px minmax(160px, 2.4fr) minmax(112px, 1fr) minmax(112px, 1.3fr)
+    var(--queue-progress-width);
+
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: var(--queue-table-min-width);
+  min-height: 100%;
+}
+
+.queue-table-header,
+.queue-table-row {
+  display: grid;
+  grid-template-columns: var(--queue-columns);
+  align-items: center;
+  gap: var(--space-5);
+  padding: 0 var(--space-4);
+}
+
+.queue-table-header > :not(:last-child),
+.queue-table-row > :not(:last-child) {
+  position: relative;
+  align-self: stretch;
+}
+
+.queue-table-header > :not(:last-child)::after,
+.queue-table-row > :not(:last-child)::after {
+  position: absolute;
+  top: 0;
+  right: calc(0px - var(--space-2) - var(--border-width));
+  bottom: 0;
+  width: var(--border-width);
+  background: var(--border-color);
+  content: '';
+  pointer-events: none;
+}
+
+.queue-table-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  flex: 0 0 var(--tabs-height);
+  width: 100%;
+  height: var(--tabs-height);
+  border-bottom: var(--border-width) solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: var(--font-size-label);
+  font-weight: 700;
+  text-align: center;
+}
+
+.queue-table-header > span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-table-index-heading,
+.queue-table-index {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+}
+
+.queue-table-index {
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--space-1);
+}
+
+.queue-table-index-heading input,
+.queue-table-index input {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  margin: 0;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.queue-table-index-heading input:disabled,
+.queue-table-index input:disabled {
+  cursor: not-allowed;
+}
+
+.queue-table-body {
+  flex: 1;
+  min-height: 0;
+}
+
+.queue-table-empty {
+  display: flex;
+  min-height: 220px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  padding: var(--space-8);
+  text-align: center;
+}
+
+.queue-table-empty strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-label);
+  font-weight: var(--font-weight-semibold);
+}
+
+.queue-table-empty span {
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+}
+
+.queue-table-row {
+  min-height: 72px;
+  padding-top: var(--space-3);
+  padding-bottom: var(--space-3);
+  border-bottom: var(--border-width) solid var(--border-subtle);
+  color: var(--text-primary);
+  font-size: var(--font-size-small);
+}
+
+.queue-table-row {
+  /* Off-screen rows skip layout and paint in long queues. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto var(--queue-row-placeholder-height);
+}
+
+.queue-table-row.is-selected {
+  background: var(--feedback-primary-bg);
+}
+
+.queue-table-index {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.queue-table-prompt {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.queue-table-refs,
+.queue-table-results,
+.queue-table-progress {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.queue-table-refs,
+.queue-table-results {
+  justify-content: center;
+}
+
+.queue-ref-thumb {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  object-fit: cover;
+}
+
+.queue-ref-overflow,
+.queue-ref-empty {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  align-items: center;
+  justify-content: center;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+}
+
+.queue-ref-overflow {
+  padding: 0;
+  cursor: pointer;
+}
+
+.queue-ref-overflow:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.queue-ref-overflow:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.queue-ref-empty {
+  width: auto;
+  white-space: nowrap;
+  min-width: 52px;
+  padding: 0 var(--space-2);
+  color: var(--text-muted);
+  font-weight: var(--font-weight-regular);
+}
+
+.queue-result-thumb {
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 88px;
+  min-width: 0;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  object-fit: contain;
+}
+
+.queue-result {
+  display: block;
+  max-width: min(88px, 100%);
+  /* As wide as its thumbnail (a portrait one is narrower than 88px), so the
+     play mark centred over the button is centred over the picture. */
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.queue-result:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.queue-result .queue-result-thumb {
+  display: block;
+}
+
+.queue-muted {
+  color: var(--text-muted);
+}
+
+.queue-error {
+  min-width: 0;
+  color: var(--danger);
+  font-size: var(--font-size-caption);
+  overflow-wrap: anywhere;
+}
+
+/* Status pill on top, one line of detail under it, then the row's action:
+   one centred stack, tight enough to read as one cell. */
+.queue-table-progress {
+  align-content: center;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--space-2);
+  text-align: center;
+}
+
+.queue-status {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-4);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.4;
+}
+
+.queue-status.is-running,
+.queue-status.is-processing {
+  border-color: var(--feedback-primary-border);
+  background: var(--feedback-primary-bg);
+  color: var(--primary);
+}
+
+.queue-status.is-succeeded {
+  border-color: var(--feedback-success-border);
+  background: var(--feedback-success-bg);
+  color: var(--success);
+}
+
+.queue-status.is-held {
+  border-color: var(--feedback-warning-border);
+  background: var(--feedback-warning-bg);
+  color: var(--warning);
+}
+
+.queue-status.is-failed,
+.queue-status.is-cancelled {
+  border-color: var(--feedback-danger-border);
+  background: var(--feedback-danger-bg);
+  color: var(--danger);
+}
+
+.queue-table-progress > .queue-muted,
+.queue-table-progress > .queue-warning {
+  font-size: var(--font-size-caption);
+}
+
+.queue-spinner {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: var(--radius-full);
+  animation: spin var(--animation-spin-fast-duration) linear infinite;
+}
+
+.queue-error {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.queue-row-action {
+  padding: var(--space-1) var(--space-5);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.queue-row-action:hover {
+  border-color: var(--feedback-primary-border);
+  background: var(--feedback-primary-bg);
+  color: var(--primary);
+}
+
+.queue-row-action:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* A long prompt inside its cell shows a few lines; the full text is its title. */
+.queue-table-prompt > span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
+.queue-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-1) var(--space-3);
+}
+
+.queue-row-actions .queue-row-action {
+  align-self: auto;
+}
+
+/* A video result: its first frame with a play mark. */
+.queue-result {
+  position: relative;
+}
+
+.queue-result-play {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-on-media);
+  pointer-events: none;
+}
+
+.queue-result-play svg {
+  padding: var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--media-overlay);
+}
+
+/* The result differs from what was asked (not an error: the file is there). */
+.queue-warning {
+  min-width: 0;
+  color: var(--warning);
+  font-size: var(--font-size-caption);
+  overflow-wrap: anywhere;
+}
+
+/* One line of detail, cut with an ellipsis (the full text is its title). */
+.queue-line {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The folder a result was saved in; opens it with the file selected. */
+.queue-folder {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+}
+
+.queue-folder span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-folder:hover span {
+  text-decoration: underline;
+}
+
+.queue-folder:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* A prompt being edited fills its cell. */
+.queue-edit {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.queue-edit-input {
+  width: 100%;
+  resize: none;
+  font-family: var(--font-sans);
+}
+
+.queue-edit-actions {
+  display: flex;
+  gap: var(--space-2);
+}

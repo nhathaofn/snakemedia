@@ -90,7 +90,7 @@ func (f *fakePage) Status(context.Context, string) (string, error) {
 		return "", f.statusErr
 	}
 	if len(f.statuses) == 0 {
-		return "idle", nil
+		return "completed", nil
 	}
 	s := f.statuses[0]
 	if len(f.statuses) > 1 {
@@ -158,9 +158,6 @@ func testProvider(t *testing.T, page Page) *Provider {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := cfg.Get()
-	c.Muse.AutoSave = false
-	_, _ = cfg.Update(c)
 	accts := accounts.New(filepath.Join(dir, "accounts"), cfg, NewSite(cfg))
 	p := New(dir, filepath.Join(dir, "out"), cfg, media.NewStore(filepath.Join(dir, "media")), accts)
 	p.pageFor = func(context.Context, accounts.Record) (Page, error) { return page, nil }

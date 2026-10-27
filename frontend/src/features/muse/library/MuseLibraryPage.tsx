@@ -121,7 +121,7 @@ export const MuseLibraryPage: React.FC = () => {
                       onClick={() =>
                         void act(
                           async () =>
-                            void unwrap(await api.revealMuseFile(item.savedPath || item.localUrl)),
+                            void unwrap(await api.revealFile(item.savedPath || item.localUrl)),
                         )
                       }
                     >

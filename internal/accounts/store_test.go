@@ -2,8 +2,10 @@ package accounts
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -139,4 +141,24 @@ func TestNotifyCoalescesChanges(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("want one coalesced event, got %d", count)
 	}
+}
+
+func TestStoreFromAnotherWindowsUserSaysSoInsteadOfCorrupt(t *testing.T) {
+	if !secureEncrypts() {
+		t.Skip("only Windows encrypts the store")
+	}
+	path := filepath.Join(t.TempDir(), "accounts.dat")
+	// A blob DPAPI cannot open for this user, as after copying the folder.
+	if err := os.WriteFile(path, []byte(storeHeader+"sealed for someone else"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := newStore(path).list()
+	if !errors.Is(err, secure.ErrOtherUser) || !strings.Contains(err.Error(), "người dùng Windows khác") {
+		t.Fatalf("list error = %v, want it to explain the data belongs to another Windows user", err)
+	}
+}
+
+func secureEncrypts() bool {
+	sealed, err := secure.Protect([]byte("x"))
+	return err == nil && string(sealed) != "x"
 }

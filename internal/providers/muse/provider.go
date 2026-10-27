@@ -35,8 +35,7 @@ type Provider struct {
 	jobs     *jobStore
 	// library lists every file finished jobs made, kept apart from the queue.
 	library *jobs.Journal[MuseLibraryItem]
-	// defaultOutputDir is where finished files are copied when the user has
-	// not chosen a folder.
+	// defaultOutputDir is the batch folder until the user picks one.
 	defaultOutputDir string
 
 	// Seams for tests.
@@ -79,10 +78,23 @@ func New(dataDir, outputDir string, cfg *config.Manager, store *media.Store, acc
 		navs:      make(map[string]*sync.RWMutex),
 		wake:      make(chan struct{}, 1),
 	}
-	// The folders Muse saves results to are the app's own, wherever settings
-	// point them.
+	// The folders Muse saves results to are the app's own: the default, the
+	// one the batch form remembers, and those queued batches still save into.
 	store.AllowRoot(outputDir)
-	store.AllowRootsFrom(func() []string { return []string{p.cfg.Get().Muse.OutputDir} })
+	// Muse makes its images as WebP; they are saved in the format the user picked.
+	store.ConvertImages("muse-", func() string { return string(p.cfg.Get().Muse.ImageFormat) })
+	store.AllowRootsFrom(func() []string {
+		dirs := []string{p.cfg.Get().Muse.OutputDir}
+		if p.jobs == nil {
+			return dirs
+		}
+		for _, j := range p.jobs.list() {
+			if !j.finished() && j.OutputDir != "" {
+				dirs = append(dirs, j.OutputDir)
+			}
+		}
+		return dirs
+	})
 	p.jobs = newJobStore(filepath.Join(root, "jobs.json"), func() int { return p.cfg.Get().Muse.MaxJobs })
 	p.library = newLibrary(filepath.Join(root, "library.json"))
 	p.pageFor = p.openPage
@@ -127,7 +139,7 @@ func (p *Provider) Start(ctx context.Context, emit func(events.Event, any)) {
 		}
 		if job.Sending {
 			p.jobs.update(job.ID, func(j *MuseJob) {
-				j.Status, j.Error, j.Step, j.Sending = MuseJobFailed, errSendUnknown.Error(), "", false
+				j.Status, j.Error, j.Step, j.Sending, j.SendUnknown = MuseJobFailed, errSendUnknown.Error(), "", false, true
 				j.FinishedAt = p.now().UTC().Format(time.RFC3339)
 			})
 			continue
@@ -184,7 +196,7 @@ func (p *Provider) loop() {
 	ticker := time.NewTicker(pumpInterval)
 	defer ticker.Stop()
 	for {
-		p.pump()
+		p.safePump()
 		select {
 		case <-p.ctx.Done():
 			return
@@ -192,6 +204,13 @@ func (p *Provider) loop() {
 		case <-p.wake:
 		}
 	}
+}
+
+// safePump runs one pump; a panic in it is logged and the loop carries on
+// at the next tick instead of the queue stopping for the rest of the run.
+func (p *Provider) safePump() {
+	defer logger.Recover("hàng đợi Muse")
+	p.pump()
 }
 
 // trigger asks the loop to re-plan soon.
@@ -317,6 +336,18 @@ func (p *Provider) navLock(accountID string) *sync.RWMutex {
 	return nav
 }
 
+// errRunStopping refuses to queue a job again while its cancelled run is
+// still finishing (a send in flight runs to its own end).
+var errRunStopping = errors.New("Tác vụ đang dừng, thử lại sau vài giây.")
+
+// runActive reports whether a run of the job has not ended yet.
+func (p *Provider) runActive(jobID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, ok := p.running[jobID]
+	return ok
+}
+
 func (p *Provider) finishRun(jobID string) {
 	job, ok := p.jobs.get(jobID)
 	p.mu.Lock()
@@ -355,7 +386,7 @@ func (p *Provider) updateAccount(id string, change func(r *accounts.Record, d *m
 		_ = accounts.DecodeData(*r, &data)
 		change(r, &data)
 		if err := r.SetData(data); err == nil {
-			r.Usage = quotaUsage(data.Quota)
+			r.Usage = accountUsage(data)
 		}
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {

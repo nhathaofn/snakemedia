@@ -82,8 +82,8 @@ export function SourceVideoPanel() {
 
   if (!source) {
     return (
-      <div className="flow-field-group">
-        <span className="flow-field-label">Video gốc</span>
+      <div className="studio-field-group">
+        <span className="studio-field-label">Video gốc</span>
         <button
           type="button"
           className="reference-dropzone"
@@ -106,8 +106,8 @@ export function SourceVideoPanel() {
   const tooLong = maxInput > 0 && duration > maxInput;
 
   return (
-    <div className="flow-field-group">
-      <div className="flow-field-label">
+    <div className="studio-field-group">
+      <div className="studio-field-label">
         <span>Video gốc</span>
         <button
           type="button"

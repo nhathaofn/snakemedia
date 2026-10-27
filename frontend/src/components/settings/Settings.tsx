@@ -41,11 +41,13 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({ title, childre
 interface SettingRowProps {
   label: string;
   hint?: string;
+  /** Puts the control under the label at full width (long text). */
+  stacked?: boolean;
   children: ReactNode;
 }
 
-export const SettingRow: React.FC<SettingRowProps> = ({ label, hint, children }) => (
-  <div className="settings-row">
+export const SettingRow: React.FC<SettingRowProps> = ({ label, hint, stacked, children }) => (
+  <div className={stacked ? 'settings-row is-stacked' : 'settings-row'}>
     <div className="settings-row-text">
       <div className="settings-row-label">{label}</div>
       {hint && <div className="settings-row-hint">{hint}</div>}
@@ -146,6 +148,46 @@ export const TextSetting: React.FC<TextSettingProps> = ({
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => e.key === 'Enter' && commit()}
+    />
+  );
+};
+
+interface TextAreaSettingProps {
+  value: string;
+  rows: number;
+  placeholder?: string;
+  disabled?: boolean;
+  'aria-label': string;
+  onCommit: (value: string) => void;
+}
+
+/** Multi-line text that saves when it loses focus. */
+export const TextAreaSetting: React.FC<TextAreaSettingProps> = ({
+  value,
+  rows,
+  placeholder,
+  disabled,
+  'aria-label': ariaLabel,
+  onCommit,
+}) => {
+  // null while not editing: the box then shows the saved value.
+  const [draft, setDraft] = useState<string | null>(null);
+  const commit = () => {
+    if (draft === null) return;
+    setDraft(null);
+    const next = draft.trim();
+    if (next !== value) onCommit(next);
+  };
+  return (
+    <textarea
+      className="settings-input settings-textarea"
+      aria-label={ariaLabel}
+      rows={rows}
+      placeholder={placeholder}
+      value={draft ?? value}
+      disabled={disabled}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
     />
   );
 };

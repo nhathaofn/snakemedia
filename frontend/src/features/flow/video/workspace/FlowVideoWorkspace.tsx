@@ -4,7 +4,6 @@ import { api } from '../../../../services/api';
 import { GenerateVideoRequest } from '../../../../types';
 import {
   ConversationGallery,
-  PromptBar,
   VideoCard,
   selectedModelOf,
   useRestoreJobs,
@@ -14,6 +13,7 @@ import {
   useStudioSubmit,
 } from '../../shared';
 import { useFlowVideoStore } from '../store/flowVideoStore';
+import { PromptBar } from '../../../../components/studio';
 
 export const FlowVideoWorkspace: React.FC = () => {
   const store = useFlowVideoStore(

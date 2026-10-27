@@ -39,6 +39,9 @@ type FlowConfig struct {
 	QueueGapMaxSeconds int `json:"queueGapMaxSeconds"`
 	// QueueMaxTasks caps the image queue journal; the oldest finished tasks go first.
 	QueueMaxTasks int `json:"queueMaxTasks"`
+	// BatchOutputDir is the folder the last batch was saved into (chosen in
+	// the batch form); empty uses the app's default folder.
+	BatchOutputDir string `json:"batchOutputDir,omitempty"`
 	// MaxDiscoveryBytes and MaxDiscoveryScripts bound how much of Flow's
 	// scripts RPC discovery reads; RPCCacheSeconds is how long a discovery
 	// result (or a failed one) is reused before the scripts are scanned again.

@@ -30,20 +30,24 @@ export function CheckProxies() {
   return window['go']['main']['App']['CheckProxies']();
 }
 
-export function ChooseImageOutputDirectory(arg1) {
-  return window['go']['main']['App']['ChooseImageOutputDirectory'](arg1);
+export function ChooseBatchOutputDirectory(arg1) {
+  return window['go']['main']['App']['ChooseBatchOutputDirectory'](arg1);
 }
 
 export function ClearFinishedFlowImageTasks() {
   return window['go']['main']['App']['ClearFinishedFlowImageTasks']();
 }
 
-export function ClearMuseFinished(arg1) {
-  return window['go']['main']['App']['ClearMuseFinished'](arg1);
+export function ClearMuseFinished(arg1, arg2) {
+  return window['go']['main']['App']['ClearMuseFinished'](arg1, arg2);
 }
 
 export function EditAndRetryMuseJob(arg1, arg2) {
   return window['go']['main']['App']['EditAndRetryMuseJob'](arg1, arg2);
+}
+
+export function EditFlowImageTask(arg1, arg2) {
+  return window['go']['main']['App']['EditFlowImageTask'](arg1, arg2);
 }
 
 export function EditVideos(arg1) {
@@ -70,12 +74,12 @@ export function GetAppInfo() {
   return window['go']['main']['App']['GetAppInfo']();
 }
 
-export function GetConfig() {
-  return window['go']['main']['App']['GetConfig']();
+export function GetBatchOutputDirectory(arg1) {
+  return window['go']['main']['App']['GetBatchOutputDirectory'](arg1);
 }
 
-export function GetDefaultImageOutputDirectory() {
-  return window['go']['main']['App']['GetDefaultImageOutputDirectory']();
+export function GetConfig() {
+  return window['go']['main']['App']['GetConfig']();
 }
 
 export function GetEditModels() {
@@ -118,8 +122,8 @@ export function HoldFlowImageTasks(arg1) {
   return window['go']['main']['App']['HoldFlowImageTasks'](arg1);
 }
 
-export function HoldMuseQueued(arg1) {
-  return window['go']['main']['App']['HoldMuseQueued'](arg1);
+export function HoldMuseQueued(arg1, arg2) {
+  return window['go']['main']['App']['HoldMuseQueued'](arg1, arg2);
 }
 
 export function ImportAccountCookies(arg1, arg2, arg3) {
@@ -226,16 +230,16 @@ export function RetryFlowImageTasks(arg1) {
   return window['go']['main']['App']['RetryFlowImageTasks'](arg1);
 }
 
-export function RetryMuseFailed(arg1) {
-  return window['go']['main']['App']['RetryMuseFailed'](arg1);
+export function RetryMuseFailed(arg1, arg2) {
+  return window['go']['main']['App']['RetryMuseFailed'](arg1, arg2);
 }
 
 export function RetryMuseJob(arg1) {
   return window['go']['main']['App']['RetryMuseJob'](arg1);
 }
 
-export function RevealMuseFile(arg1) {
-  return window['go']['main']['App']['RevealMuseFile'](arg1);
+export function RevealFile(arg1) {
+  return window['go']['main']['App']['RevealFile'](arg1);
 }
 
 export function RotateAccountIP(arg1) {

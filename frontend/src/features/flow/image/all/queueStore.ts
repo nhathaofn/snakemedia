@@ -41,6 +41,29 @@ export function countTasks(tasks: readonly FlowImageTask[]) {
   return counts;
 }
 
+/** Queue filter: every task, one status, or the tasks on hold. */
+export type TaskFilter = 'all' | 'held' | FlowImageTaskStatus;
+
+/** The filters above the queue, in order (labels as on Muse's queue). */
+export const TASK_FILTERS: readonly { value: TaskFilter; label: string }[] = [
+  { value: 'all', label: 'Tất cả' },
+  { value: FlowImageTaskStatus.Running, label: 'Đang chạy' },
+  { value: FlowImageTaskStatus.Queued, label: 'Chờ chạy' },
+  { value: 'held', label: 'Tạm dừng' },
+  { value: FlowImageTaskStatus.Succeeded, label: 'Xong' },
+  { value: FlowImageTaskStatus.Failed, label: 'Lỗi' },
+];
+
+/** Whether task shows under filter; a held task counts as Tạm dừng, not Chờ chạy. */
+export function matchesTaskFilter(task: FlowImageTask, filter: TaskFilter): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'held') return task.status === FlowImageTaskStatus.Queued && !!task.held;
+  if (filter === FlowImageTaskStatus.Queued) {
+    return task.status === FlowImageTaskStatus.Queued && !task.held;
+  }
+  return task.status === filter;
+}
+
 interface QueueState {
   tasks: FlowImageTask[];
   warning: string;

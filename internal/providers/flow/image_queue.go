@@ -66,7 +66,12 @@ type ImageTask struct {
 	Quality     ImageQuality         `json:"quality"`
 	Count       int                  `json:"count"`
 	References  []ImageTaskReference `json:"references"`
-	OutputDir   string               `json:"outputDir"`
+	// OutputDir is the batch's own folder under the one the user chose
+	// (imageQueue.batchFolder).
+	OutputDir string `json:"outputDir"`
+	// Index is the prompt's place in its batch (from 1); saved files are
+	// numbered with it (media.OutputName).
+	Index int `json:"index,omitempty"`
 	// Held tasks wait in the queue until the user starts them.
 	Held      bool            `json:"held,omitempty"`
 	Status    ImageTaskStatus `json:"status"`
@@ -77,8 +82,10 @@ type ImageTask struct {
 	Rechecks    int                  `json:"rechecks,omitempty"`
 	NextCheckAt string               `json:"nextCheckAt,omitempty"`
 	Results     []GeneratedImageItem `json:"results"`
-	// SavedFiles are the results (local URLs) already copied to OutputDir.
+	// SavedFiles are the results (local URLs) already copied to OutputDir, and
+	// SavedPaths where those copies are on disk.
 	SavedFiles []string `json:"savedFiles"`
+	SavedPaths []string `json:"savedPaths,omitempty"`
 	Error      string   `json:"error,omitempty"`
 	CreatedAt  string   `json:"createdAt"`
 	StartedAt  string   `json:"startedAt,omitempty"`
@@ -93,13 +100,16 @@ func (t ImageTask) Finished() bool {
 	return t.Status == ImageTaskSucceeded || t.Status == ImageTaskFailed || t.Status == ImageTaskCancelled
 }
 
+// batchImagesPerPrompt is how many images one queue task asks Flow for: a
+// batch makes one result per prompt; variants exist only in the single studio.
+const batchImagesPerPrompt = 1
+
 // ImageTaskRequest queues one task per non-empty prompt with shared settings.
 type ImageTaskRequest struct {
 	Prompts     []string             `json:"prompts"`
 	ModelID     string               `json:"modelId"`
 	AspectRatio string               `json:"aspectRatio"`
 	Quality     ImageQuality         `json:"quality"`
-	Count       int                  `json:"count"`
 	References  []ImageTaskReference `json:"references"`
 	OutputDir   string               `json:"outputDir"`
 	// Hold adds the tasks without starting them.
@@ -144,7 +154,7 @@ type imageQueue struct {
 	resume       func(ctx context.Context, id string) models.Response[[]GeneratedImageItem]
 	requestPhase func(id string) (phase string, found bool)
 	pendingJobs  func() ([]generationJob, error)
-	saveImage    func(localURL, outputDir, batchID string) models.Response[media.SaveResult]
+	saveImage    func(localURL string, t ImageTask) (string, error)
 	now          func() time.Time
 	gap          func(min, max int) time.Duration
 }
@@ -187,8 +197,21 @@ func newImageQueue(s *Provider) *imageQueue {
 		return job.Phase, true
 	}
 	q.pendingJobs = func() ([]generationJob, error) { return s.pendingGenerationJobs(generationJobImage) }
-	q.saveImage = func(localURL, outputDir, batchID string) models.Response[media.SaveResult] {
-		return s.media.SaveImageToTaskFolder(localURL, outputDir, batchID)
+	q.saveImage = func(localURL string, t ImageTask) (string, error) {
+		return s.media.SaveTo(localURL, t.OutputDir, media.OutputName(t.Index, "flow"))
+	}
+	// A batch keeps saving into the folder it was queued with, also after the
+	// user picks another one or the app restarts.
+	if s.media != nil {
+		s.media.AllowRootsFrom(func() []string {
+			var dirs []string
+			for _, t := range q.journal.List() {
+				if !t.Finished() && t.OutputDir != "" {
+					dirs = append(dirs, t.OutputDir)
+				}
+			}
+			return dirs
+		})
 	}
 	q.gap = func(min, max int) time.Duration {
 		if max <= min {
@@ -297,7 +320,7 @@ func (q *imageQueue) loop() {
 	defer ticker.Stop()
 	ctx := q.lifetime()
 	for {
-		q.pump()
+		q.safePump()
 		select {
 		case <-ctx.Done():
 			return
@@ -305,6 +328,13 @@ func (q *imageQueue) loop() {
 		case <-q.wake:
 		}
 	}
+}
+
+// safePump runs one pump; a panic in it is logged and the loop carries on
+// at the next tick instead of the queue stopping for the rest of the run.
+func (q *imageQueue) safePump() {
+	defer logger.Recover("hàng đợi ảnh Flow")
+	q.pump()
 }
 
 func (q *imageQueue) trigger() {
@@ -363,6 +393,9 @@ func (q *imageQueue) pump() {
 		go func() {
 			defer q.wg.Done()
 			defer q.release(task.ID)
+			// The request ID is kept: a request that may have left the app is
+			// checked again on retry, never sent anew.
+			defer logger.Recover("tác vụ ảnh Flow", func(err error) { q.fail(task.ID, err.Error(), false) })
 			q.execute(taskCtx, started)
 		}()
 	}
@@ -524,23 +557,24 @@ func (q *imageQueue) settle(t ImageTask, res models.Response[[]GeneratedImageIte
 // folder and finishes the task.
 func (q *imageQueue) finishWithResults(t ImageTask, items []GeneratedImageItem) {
 	saved := slices.Clone(t.SavedFiles)
+	paths := slices.Clone(t.SavedPaths)
 	var saveErr string
 	for _, item := range items {
 		// An adopted task has no folder: its images stay in the media store.
 		if t.OutputDir == "" || item.LocalURL == "" || slices.Contains(saved, item.LocalURL) {
 			continue
 		}
-		res := q.saveImage(item.LocalURL, t.OutputDir, t.BatchID)
-		if !res.Success {
+		path, err := q.saveImage(item.LocalURL, t)
+		if err != nil {
 			if saveErr == "" {
-				saveErr = res.Error
+				saveErr = err.Error()
 			}
 			continue
 		}
-		saved = append(saved, item.LocalURL)
+		saved, paths = append(saved, item.LocalURL), append(paths, path)
 	}
 	updated, err := q.journal.Update(t.ID, func(t *ImageTask) {
-		t.SavedFiles, t.Step, t.NextCheckAt = saved, "", ""
+		t.SavedFiles, t.SavedPaths, t.Step, t.NextCheckAt = saved, paths, "", ""
 		t.FinishedAt = q.stamp()
 		if saveErr != "" {
 			t.Status, t.Error = ImageTaskFailed, "Lỗi lưu ảnh: "+saveErr
@@ -671,9 +705,6 @@ func (s *Provider) SubmitImageTasks(req ImageTaskRequest) models.Response[[]Imag
 	if err != nil {
 		return queueFail[[]ImageTask](err, models.CodeInvalidArgument)
 	}
-	if req.Count < 1 || req.Count > maxImagesPerRequest() {
-		return queueFail[[]ImageTask](fmt.Errorf("Số ảnh mỗi prompt phải từ 1 đến %d.", maxImagesPerRequest()), models.CodeInvalidArgument)
-	}
 	if strings.TrimSpace(req.OutputDir) == "" {
 		return queueFail[[]ImageTask](errors.New("Chưa chọn thư mục lưu."), models.CodeInvalidArgument)
 	}
@@ -685,12 +716,13 @@ func (s *Provider) SubmitImageTasks(req ImageTaskRequest) models.Response[[]Imag
 	if err != nil {
 		return queueFail[[]ImageTask](err, models.CodeInvalidArgument)
 	}
+	dir, first := q.batchFolder(dir)
 	batch, now := uuid.NewString(), q.stamp()
 	tasks := make([]ImageTask, len(prompts))
 	for i, p := range prompts {
 		tasks[i] = ImageTask{
 			ID: uuid.NewString(), BatchID: batch, Prompt: p, ModelID: req.ModelID, AspectRatio: req.AspectRatio,
-			Quality: quality, Count: req.Count, References: slices.Clone(refs), OutputDir: dir, Held: req.Hold,
+			Quality: quality, Count: batchImagesPerPrompt, References: slices.Clone(refs), OutputDir: dir, Index: first + i, Held: req.Hold,
 			Status: ImageTaskQueued, Results: []GeneratedImageItem{}, SavedFiles: []string{}, CreatedAt: now,
 		}
 	}
@@ -699,6 +731,19 @@ func (s *Provider) SubmitImageTasks(req ImageTaskRequest) models.Response[[]Imag
 	}
 	q.changed()
 	return models.SuccessResponse(tasks)
+}
+
+// batchFolder picks the batch's folder under parent and the first number for
+// the prompts being added (media.BatchFolder): an unfinished batch is joined,
+// otherwise a new "snakemedia-flow-image-<date-time>" is opened.
+func (q *imageQueue) batchFolder(parent string) (string, int) {
+	var items []media.BatchItem
+	for _, t := range q.journal.List() {
+		if t.OutputDir != "" {
+			items = append(items, media.BatchItem{Dir: t.OutputDir, Index: t.Index, CreatedAt: t.CreatedAt, Open: !t.Finished()})
+		}
+	}
+	return media.BatchFolder(parent, "snakemedia-flow-image", q.now(), items)
 }
 
 // checkTaskReferences accepts only references already in the media store.
@@ -789,6 +834,43 @@ func (s *Provider) CancelImageTask(id string) models.Response[ImageTask] {
 	return models.SuccessResponse(updated)
 }
 
+// EditImageTask changes the prompt of a task that is not running. A queued
+// task keeps its place and hold; an ended one starts over with the new prompt
+// as a new request (the user asked for a different image, so nothing Flow
+// made for the old prompt is read back).
+func (s *Provider) EditImageTask(id, prompt string) models.Response[ImageTask] {
+	q := s.queue
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return queueFail[ImageTask](errors.New("Prompt không được để trống."), models.CodeInvalidArgument)
+	}
+	q.mu.Lock()
+	_, running := q.running[id]
+	q.mu.Unlock()
+	t, ok := q.journal.Get(id)
+	if !ok {
+		return queueFail[ImageTask](errors.New("Tác vụ không tồn tại."), models.CodeNotFound)
+	}
+	if running || t.Status == ImageTaskRunning {
+		return queueFail[ImageTask](errors.New("Tác vụ đang chạy, hãy hủy trước khi sửa."), models.CodeInvalidArgument)
+	}
+	updated, err := q.journal.Update(id, func(t *ImageTask) {
+		t.Prompt = prompt
+		if t.Status == ImageTaskQueued {
+			return
+		}
+		t.Status, t.Error, t.Step, t.NextCheckAt, t.FinishedAt = ImageTaskQueued, "", "", "", ""
+		t.RequestID, t.Rechecks, t.Held = "", 0, false
+		t.Results, t.SavedFiles, t.SavedPaths = []GeneratedImageItem{}, []string{}, nil
+	})
+	if err != nil {
+		return queueFail[ImageTask](err, models.CodeInternal)
+	}
+	q.publish(updated)
+	q.trigger()
+	return models.SuccessResponse(updated)
+}
+
 // RetryImageTasks queues failed or cancelled tasks again. A task whose request
 // Flow may still hold is read back under the same ID; a task whose images were
 // made but not saved is only saved again; any other starts a new request.
@@ -804,7 +886,7 @@ func (s *Provider) RetryImageTasks(ids []string) models.Response[int] {
 			t.Status, t.Error, t.Step, t.NextCheckAt, t.FinishedAt = ImageTaskQueued, "", "", "", ""
 			t.Rechecks, t.Held = 0, false
 			if t.RequestID == "" && len(unsaved(*t)) == 0 {
-				t.Results, t.SavedFiles = []GeneratedImageItem{}, []string{}
+				t.Results, t.SavedFiles, t.SavedPaths = []GeneratedImageItem{}, []string{}, nil
 			}
 		})
 		if err == nil {

@@ -43,7 +43,8 @@ what happens around that call:
    fails at once; a usage-limit reply or a signed-out page returns the job to
    the queue without spending an attempt and rests the account.
 5. **Scheduling** is a pure `plan` function (HaoHao's scheduler): rotate or
-   sequential mode, `maxAccounts`, `totalThreads`, `threadsPerAccount`, quota
+   sequential mode over every usable account (signed in, enabled, routed, not
+   resting; no account count to configure), `threadsPerAccount`, quota
    pauses with optional top-up and keep-going, and a random gap between sends
    on one account.
 6. **Accounts** are a DPAPI-encrypted store (`internal/secure`, shared with the

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	xproxy "golang.org/x/net/proxy"
+
+	"SnakeMedia/internal/logger"
 )
 
 // bridgeGrace keeps a bridge nobody's route names yet: a route is picked
@@ -112,6 +114,7 @@ func (b *localBridge) close() {
 }
 
 func (b *localBridge) serve() {
+	defer logger.Recover("cầu nối proxy")
 	for {
 		client, err := b.listener.Accept()
 		if err != nil {
@@ -126,6 +129,7 @@ func (b *localBridge) serve() {
 		b.active.Add(1)
 		go func() {
 			defer b.active.Add(-1)
+			defer logger.Recover("kết nối qua proxy")
 			b.handleClient(client)
 		}()
 	}

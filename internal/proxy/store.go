@@ -53,6 +53,8 @@ func (s *Store) loadLocked() error {
 		backup := fmt.Sprintf("%s.corrupt-%s", s.path, time.Now().Format("20060102-150405"))
 		if moveErr := os.Rename(s.path, backup); moveErr != nil {
 			s.err = fmt.Errorf("Dữ liệu proxy hỏng và không cách ly được: %w", moveErr)
+		} else if errors.Is(err, secure.ErrOtherUser) {
+			s.err = fmt.Errorf("Không đọc được danh sách proxy. %s Bản cũ được giữ tại %s; mở lại app rồi dán lại danh sách proxy: %w", secure.ForeignDataHelp, backup, err)
 		} else {
 			s.err = fmt.Errorf("Dữ liệu proxy hỏng đã được giữ tại %s. Khôi phục dữ liệu trước khi tiếp tục.", backup)
 		}

@@ -83,6 +83,24 @@ describe('museStore', () => {
     expect(backend.getMuseOptions).not.toHaveBeenCalled();
   });
 
+  // An account check reads Muse's limits; the screens pick them up without
+  // reloading the jobs, and a failed reload keeps what was known.
+  it('reloads the options alone and keeps them on failure', async () => {
+    const known = { known: true, maxFiles: 10 };
+    backend.getMuseOptions.mockResolvedValue(ok(known));
+    await Promise.all([
+      useMuseStore.getState().loadOptions(),
+      useMuseStore.getState().loadOptions(),
+    ]);
+    expect(backend.getMuseOptions).toHaveBeenCalledTimes(1);
+    expect(backend.listMuseJobs).not.toHaveBeenCalled();
+    expect(useMuseStore.getState().options).toEqual(known);
+
+    backend.getMuseOptions.mockRejectedValue(new Error('down'));
+    await useMuseStore.getState().loadOptions();
+    expect(useMuseStore.getState().options).toEqual(known);
+  });
+
   it('treats a null job list as empty', async () => {
     backend.listMuseJobs.mockResolvedValue(ok(null));
     await useMuseStore.getState().loadJobs();

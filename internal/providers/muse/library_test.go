@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 )
 
@@ -11,7 +12,7 @@ import (
 // removing the job leaves them listed.
 func TestLibraryOutlivesTheQueue(t *testing.T) {
 	events, files := videoResult("/out/a.mp4", []byte("video-bytes"))
-	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "idle"}, events: events, files: files}
+	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "completed"}, events: events, files: files}
 	p := testProvider(t, page)
 	p.loadLibrary()
 	acc := addSignedIn(t, p, "A")
@@ -22,7 +23,7 @@ func TestLibraryOutlivesTheQueue(t *testing.T) {
 	if len(items) != 1 || items[0].Job != job.ID || items[0].Kind != MuseJobVideo || items[0].Prompt != "một con mèo" {
 		t.Fatalf("library = %+v", items)
 	}
-	if res := p.ClearFinished(""); !res.Success || res.Data != 1 {
+	if res := p.ClearFinished("", ""); !res.Success || res.Data != 1 {
 		t.Fatalf("clear = %+v", res)
 	}
 	if got := p.ListLibrary().Data; len(got) != 1 {
@@ -81,22 +82,90 @@ func TestLibraryMigratesSucceededJobsOnce(t *testing.T) {
 // nothing is copied out to the output folder.
 func TestSaveOutputsSkipsCancelledJob(t *testing.T) {
 	p := testProvider(t, &fakePage{})
-	c := p.cfg.Get()
-	c.Muse.AutoSave = true
-	if _, err := p.cfg.Update(c); err != nil {
-		t.Fatal(err)
-	}
 	local, err := p.media.Put("r", "image/png", ".png", []byte("PNG"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	job := submit(t, p, MuseJobImage, "x")[0]
-	p.updateJob(job.ID, func(j *MuseJob) { j.Status = MuseJobProcessing })
+	p.updateJob(job.ID, func(j *MuseJob) { j.Status, j.OutputDir, j.Index = MuseJobProcessing, p.defaultOutputDir, 1 })
 	if saved := p.saveOutputs(mustJob(t, p, job.ID), []string{local}); len(saved) != 1 {
 		t.Fatalf("running job saved %v", saved)
 	}
 	p.updateJob(job.ID, func(j *MuseJob) { j.Status = MuseJobCancelled })
 	if saved := p.saveOutputs(mustJob(t, p, job.ID), []string{local}); len(saved) != 0 {
 		t.Fatalf("cancelled job saved %v", saved)
+	}
+}
+
+// A Hàng loạt batch saves each file into the folder it was queued with, named
+// by the prompt's place in the batch; Đơn saves nothing (downloaded by hand).
+func TestBatchSavesNumberedFilesSingleSavesNothing(t *testing.T) {
+	_, files := videoResult("/out/a.mp4", []byte("video"))
+	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "completed"},
+		events: []AssistantEvent{{Videos: []ResultMedia{{Path: "/out/a.mp4", Mime: "video/mp4", ByteLen: 5}}}}, files: files}
+	p := testProvider(t, page)
+	acc := addSignedIn(t, p, "A")
+	dir := t.TempDir()
+	if res := p.SubmitJobs(MuseJobRequest{Kind: MuseJobVideo, Mode: MuseJobBatch, Prompts: []string{"a", "b"}}); res.Success {
+		t.Fatal("a batch without a folder was queued")
+	}
+	if res := p.SubmitJobs(MuseJobRequest{Kind: MuseJobVideo, Mode: MuseJobBatch, Prompts: []string{"a"}, OutputDir: dir}); res.Success {
+		t.Fatal("a batch was queued into a folder nobody chose")
+	}
+	p.media.AllowRoot(dir)
+	batch := p.SubmitJobs(MuseJobRequest{Kind: MuseJobVideo, Mode: MuseJobBatch, Prompts: []string{"a", "b"}, OutputDir: dir})
+	single := p.SubmitJobs(MuseJobRequest{Kind: MuseJobVideo, Mode: MuseJobSingle, Prompts: []string{"c"}, OutputDir: dir})
+	if !batch.Success || !single.Success {
+		t.Fatalf("submit: %s %s", batch.Error, single.Error)
+	}
+
+	p.runOne(context.Background(), batch.Data[1].ID, acc.ID)
+	p.runOne(context.Background(), single.Data[0].ID, acc.ID)
+	p.wg.Wait()
+
+	got := mustJob(t, p, batch.Data[1].ID)
+	if got.Status != MuseJobSucceeded || len(got.SavedFiles) != 1 || filepath.Dir(got.SavedFiles[0]) != batch.Data[1].OutputDir ||
+		filepath.Dir(batch.Data[1].OutputDir) != dir ||
+		!regexp.MustCompile(`^2-snakemedia-muse-[a-z0-9]{6}\.mp4$`).MatchString(filepath.Base(got.SavedFiles[0])) {
+		t.Fatalf("batch job = %+v", got)
+	}
+	if s := mustJob(t, p, single.Data[0].ID); s.Status != MuseJobSucceeded || len(s.SavedFiles) != 0 {
+		t.Fatalf("single job = %+v", s)
+	}
+}
+
+// Prompts added in several goes while a batch is unfinished join its folder
+// and continue its numbers; once it is done the next prompts open a new folder.
+func TestBatchFolderJoinsOpenBatch(t *testing.T) {
+	p := testProvider(t, &fakePage{loggedIn: true})
+	dir := t.TempDir()
+	p.media.AllowRoot(dir)
+	submit := func(kind MuseJobKind, prompts ...string) []MuseJob {
+		t.Helper()
+		res := p.SubmitJobs(MuseJobRequest{Kind: kind, Mode: MuseJobBatch, Prompts: prompts, OutputDir: dir, Held: true})
+		if !res.Success {
+			t.Fatalf("submit: %s", res.Error)
+		}
+		return res.Data
+	}
+	first := submit(MuseJobImage, "a", "b")
+	more := submit(MuseJobImage, "c")
+	video := submit(MuseJobVideo, "v")
+	if filepath.Dir(first[0].OutputDir) != dir || more[0].OutputDir != first[0].OutputDir {
+		t.Fatalf("folders: %q %q", first[0].OutputDir, more[0].OutputDir)
+	}
+	if first[0].Index != 1 || first[1].Index != 2 || more[0].Index != 3 {
+		t.Fatalf("numbers: %d %d %d", first[0].Index, first[1].Index, more[0].Index)
+	}
+	if video[0].OutputDir == first[0].OutputDir || video[0].Index != 1 {
+		t.Fatalf("video batch = %q #%d", video[0].OutputDir, video[0].Index)
+	}
+
+	for _, j := range append(first, more...) {
+		p.updateJob(j.ID, func(j *MuseJob) { j.Status = MuseJobSucceeded })
+	}
+	next := submit(MuseJobImage, "d")
+	if next[0].OutputDir == first[0].OutputDir || filepath.Dir(next[0].OutputDir) != dir || next[0].Index != 1 {
+		t.Fatalf("after the batch ended: %q #%d", next[0].OutputDir, next[0].Index)
 	}
 }

@@ -81,6 +81,8 @@ func (s *store) loadLocked() error {
 		backup := fmt.Sprintf("%s.corrupt-%s", s.path, time.Now().Format("20060102-150405"))
 		if moveErr := os.Rename(s.path, backup); moveErr != nil {
 			s.err = fmt.Errorf("Dữ liệu tài khoản hỏng và không cách ly được: %w", moveErr)
+		} else if errors.Is(err, secure.ErrOtherUser) {
+			s.err = fmt.Errorf("Không đọc được danh sách tài khoản. %s Bản cũ được giữ tại %s; mở lại app để bắt đầu danh sách mới rồi đăng nhập lại hoặc dán lại cookie: %w", secure.ForeignDataHelp, backup, err)
 		} else {
 			s.err = fmt.Errorf("Dữ liệu tài khoản hỏng (%v) đã được giữ tại %s. Khôi phục dữ liệu trước khi tiếp tục.", err, backup)
 		}

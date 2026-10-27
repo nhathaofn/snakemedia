@@ -22,7 +22,7 @@ func TestSaveNodeCopiesIntoConfiguredFolder(t *testing.T) {
 	}
 	store.AllowRoot(dir)
 	out, err := store.SaveNode().Run(context.Background(), input)
-	if res, ok := out.(SaveNodeResult); err != nil || !ok || len(res.Paths) != 1 || res.Paths[0] != filepath.Join(dir, "img.png") {
+	if res, ok := out.(SaveNodeResult); err != nil || !ok || len(res.Paths) != 1 || filepath.Dir(res.Paths[0]) != dir || !savedFile.MatchString(filepath.Base(res.Paths[0])) {
 		t.Fatalf("unexpected result %+v %v", out, err)
 	}
 	if _, err := store.SaveNode().Run(context.Background(), json.RawMessage(`{"media":[{"localUrl":"`+local+`","kind":"image"}]}`)); err == nil {

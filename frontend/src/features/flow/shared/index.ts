@@ -1,7 +1,6 @@
-export { FlowStudioLayout } from './FlowStudioLayout';
-export { QuantityField, SelectField } from './fields';
+export { SelectField } from './fields';
 export type { SelectOption } from './fields';
-export { ConversationGallery, PromptBar } from './workspace';
+export { ConversationGallery } from './workspace';
 export { VideoCard } from './VideoCard';
 export { clockLabel, cssAspectRatio, durationLabel, ratioLabel } from './format';
 export {

@@ -183,6 +183,7 @@ func (m *Manager) CheckAll(ctx context.Context) ([]CheckResult, error) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
+			defer logger.Recover("kiểm tra proxy")
 			parsed := Parse(line)
 			if parsed == nil || parsed.Error != "" {
 				msg := "Sai cú pháp"

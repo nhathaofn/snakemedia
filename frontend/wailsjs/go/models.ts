@@ -143,6 +143,11 @@ export namespace chrome {
 
 export namespace config {
 	
+	export enum ImageFormat {
+	    JPG = "jpg",
+	    Original = "original",
+	    PNG = "png",
+	}
 	export enum LogLevel {
 	    Debug = "debug",
 	    Error = "error",
@@ -197,14 +202,13 @@ export namespace config {
 	    sendGapMaxSeconds: number;
 	    sendTimeoutSeconds: number;
 	    maxJobs: number;
-	    maxAccounts: number;
-	    totalThreads: number;
 	    threadsPerAccount: number;
 	    mode: MuseMode;
 	    useTopup: boolean;
 	    usagePauseMinutes: number;
-	    autoSave: boolean;
 	    outputDir: string;
+	    setupMessage: string;
+	    imageFormat: ImageFormat;
 	
 	    static createFrom(source: any = {}) {
 	        return new MuseConfig(source);
@@ -222,14 +226,13 @@ export namespace config {
 	        this.sendGapMaxSeconds = source["sendGapMaxSeconds"];
 	        this.sendTimeoutSeconds = source["sendTimeoutSeconds"];
 	        this.maxJobs = source["maxJobs"];
-	        this.maxAccounts = source["maxAccounts"];
-	        this.totalThreads = source["totalThreads"];
 	        this.threadsPerAccount = source["threadsPerAccount"];
 	        this.mode = source["mode"];
 	        this.useTopup = source["useTopup"];
 	        this.usagePauseMinutes = source["usagePauseMinutes"];
-	        this.autoSave = source["autoSave"];
 	        this.outputDir = source["outputDir"];
+	        this.setupMessage = source["setupMessage"];
+	        this.imageFormat = source["imageFormat"];
 	    }
 	}
 	export class FlowConfig {
@@ -250,6 +253,7 @@ export namespace config {
 	    queueGapMinSeconds: number;
 	    queueGapMaxSeconds: number;
 	    queueMaxTasks: number;
+	    batchOutputDir?: string;
 	    maxDiscoveryBytes: number;
 	    maxDiscoveryScripts: number;
 	    rpcCacheSeconds: number;
@@ -277,6 +281,7 @@ export namespace config {
 	        this.queueGapMinSeconds = source["queueGapMinSeconds"];
 	        this.queueGapMaxSeconds = source["queueGapMaxSeconds"];
 	        this.queueMaxTasks = source["queueMaxTasks"];
+	        this.batchOutputDir = source["batchOutputDir"];
 	        this.maxDiscoveryBytes = source["maxDiscoveryBytes"];
 	        this.maxDiscoveryScripts = source["maxDiscoveryScripts"];
 	        this.rpcCacheSeconds = source["rpcCacheSeconds"];
@@ -994,6 +999,7 @@ export namespace flow {
 	    count: number;
 	    references: ImageTaskReference[];
 	    outputDir: string;
+	    index?: number;
 	    held?: boolean;
 	    status: ImageTaskStatus;
 	    step?: string;
@@ -1002,6 +1008,7 @@ export namespace flow {
 	    nextCheckAt?: string;
 	    results: GeneratedImageItem[];
 	    savedFiles: string[];
+	    savedPaths?: string[];
 	    error?: string;
 	    createdAt: string;
 	    startedAt?: string;
@@ -1022,6 +1029,7 @@ export namespace flow {
 	        this.count = source["count"];
 	        this.references = this.convertValues(source["references"], ImageTaskReference);
 	        this.outputDir = source["outputDir"];
+	        this.index = source["index"];
 	        this.held = source["held"];
 	        this.status = source["status"];
 	        this.step = source["step"];
@@ -1030,6 +1038,7 @@ export namespace flow {
 	        this.nextCheckAt = source["nextCheckAt"];
 	        this.results = this.convertValues(source["results"], GeneratedImageItem);
 	        this.savedFiles = source["savedFiles"];
+	        this.savedPaths = source["savedPaths"];
 	        this.error = source["error"];
 	        this.createdAt = source["createdAt"];
 	        this.startedAt = source["startedAt"];
@@ -1093,7 +1102,6 @@ export namespace flow {
 	    modelId: string;
 	    aspectRatio: string;
 	    quality: ImageQuality;
-	    count: number;
 	    references: ImageTaskReference[];
 	    outputDir: string;
 	    hold: boolean;
@@ -1108,7 +1116,6 @@ export namespace flow {
 	        this.modelId = source["modelId"];
 	        this.aspectRatio = source["aspectRatio"];
 	        this.quality = source["quality"];
-	        this.count = source["count"];
 	        this.references = this.convertValues(source["references"], ImageTaskReference);
 	        this.outputDir = source["outputDir"];
 	        this.hold = source["hold"];
@@ -2484,6 +2491,10 @@ export namespace muse {
 	    Image = "image",
 	    Video = "video",
 	}
+	export enum MuseJobMode {
+	    Batch = "batch",
+	    Single = "single",
+	}
 	export enum MuseJobStatus {
 	    Cancelled = "cancelled",
 	    Failed = "failed",
@@ -2494,9 +2505,15 @@ export namespace muse {
 	export class MuseJob {
 	    id: string;
 	    kind: MuseJobKind;
+	    mode?: MuseJobMode;
 	    prompt: string;
 	    label?: string;
 	    references: string[];
+	    outputDir?: string;
+	    index?: number;
+	    ratio?: string;
+	    duration?: number;
+	    formatNote?: string;
 	    rechecks?: number;
 	    held?: boolean;
 	    status: MuseJobStatus;
@@ -2504,6 +2521,7 @@ export namespace muse {
 	    accountId?: string;
 	    sessionId?: string;
 	    sending?: boolean;
+	    sendUnknown?: boolean;
 	    attempts: number;
 	    error?: string;
 	    files: string[];
@@ -2523,9 +2541,15 @@ export namespace muse {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
 	        this.kind = source["kind"];
+	        this.mode = source["mode"];
 	        this.prompt = source["prompt"];
 	        this.label = source["label"];
 	        this.references = source["references"];
+	        this.outputDir = source["outputDir"];
+	        this.index = source["index"];
+	        this.ratio = source["ratio"];
+	        this.duration = source["duration"];
+	        this.formatNote = source["formatNote"];
 	        this.rechecks = source["rechecks"];
 	        this.held = source["held"];
 	        this.status = source["status"];
@@ -2533,6 +2557,7 @@ export namespace muse {
 	        this.accountId = source["accountId"];
 	        this.sessionId = source["sessionId"];
 	        this.sending = source["sending"];
+	        this.sendUnknown = source["sendUnknown"];
 	        this.attempts = source["attempts"];
 	        this.error = source["error"];
 	        this.files = source["files"];
@@ -2547,11 +2572,15 @@ export namespace muse {
 	}
 	export class MuseJobRequest {
 	    kind: MuseJobKind;
+	    mode: MuseJobMode;
 	    prompts: string[];
 	    repeat: number;
 	    references: string[];
 	    label: string;
 	    held: boolean;
+	    outputDir: string;
+	    ratio: string;
+	    duration: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new MuseJobRequest(source);
@@ -2560,11 +2589,15 @@ export namespace muse {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
+	        this.mode = source["mode"];
 	        this.prompts = source["prompts"];
 	        this.repeat = source["repeat"];
 	        this.references = source["references"];
 	        this.label = source["label"];
 	        this.held = source["held"];
+	        this.outputDir = source["outputDir"];
+	        this.ratio = source["ratio"];
+	        this.duration = source["duration"];
 	    }
 	}
 	export class MuseLibraryItem {
@@ -2609,6 +2642,22 @@ export namespace muse {
 	        this.name = source["name"];
 	    }
 	}
+	export class MuseRatio {
+	    value: string;
+	    label: string;
+	    kinds: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseRatio(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.value = source["value"];
+	        this.label = source["label"];
+	        this.kinds = source["kinds"];
+	    }
+	}
 	export class MuseOptions {
 	    known: boolean;
 	    maxFileBytes: number;
@@ -2617,6 +2666,8 @@ export namespace muse {
 	    models: MuseModel[];
 	    checkedAt: string;
 	    journalWarning: string;
+	    ratios: MuseRatio[];
+	    durations: number[];
 	
 	    static createFrom(source: any = {}) {
 	        return new MuseOptions(source);
@@ -2631,6 +2682,8 @@ export namespace muse {
 	        this.models = this.convertValues(source["models"], MuseModel);
 	        this.checkedAt = source["checkedAt"];
 	        this.journalWarning = source["journalWarning"];
+	        this.ratios = this.convertValues(source["ratios"], MuseRatio);
+	        this.durations = source["durations"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2651,6 +2704,7 @@ export namespace muse {
 		    return a;
 		}
 	}
+	
 	export class MuseReference {
 	    localUrl: string;
 	    fileName: string;

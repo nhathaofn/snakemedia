@@ -1,81 +1,4 @@
-/* Shared by every Flow studio page (Image, Video): layout, mode panel, gallery and prompt bar. */
-.flow-studio-page {
-  flex: 1;
-  display: flex;
-  gap: var(--space-5);
-  padding: var(--space-5);
-  overflow: hidden;
-}
-
-.flow-studio-sidebar {
-  width: var(--flow-studio-panel-width);
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  background-color: var(--bg-secondary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-}
-
-.flow-studio-content {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  background-color: var(--bg-secondary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-}
-
-.flow-studio-workspace-panel {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  overflow: hidden;
-}
-
-.flow-studio-workspace-panel[hidden] {
-  display: none;
-}
-
-.flow-mode-panel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-8);
-  padding: var(--space-6);
-  overflow-y: auto;
-}
-
-.flow-field-group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.flow-field-label {
-  font-size: var(--font-size-small);
-  font-weight: var(--font-weight-medium);
-  color: var(--text-secondary);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.flow-field-hint {
-  font-size: var(--font-size-caption);
-  color: var(--text-secondary);
-}
-
-.flow-field-badge {
-  font-size: var(--font-size-caption);
-  color: var(--primary);
-  font-weight: var(--font-weight-regular);
-}
-
+/* Shared by every Flow studio page (Image, Video): fields, gallery and prompt bar. The frame is components/studio. */
 /* Custom styled Select for Models */
 .flow-select-wrapper {
   position: relative;
@@ -115,75 +38,6 @@
   transform: translateY(-50%);
   pointer-events: none;
   color: var(--text-muted);
-}
-
-/* Quantity Grid (x1 to x4) */
-.quantity-grid {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 1fr;
-  gap: var(--space-2);
-  background-color: var(--bg-primary);
-  padding: 3px;
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius-md);
-}
-
-.quantity-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 32px;
-  border: none;
-  background: transparent;
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-family: inherit;
-  font-size: var(--font-size-small);
-  font-weight: var(--font-weight-medium);
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-
-.quantity-btn:hover {
-  color: var(--text-primary);
-}
-
-.quantity-btn.active {
-  background-color: var(--bg-secondary);
-  color: var(--primary);
-  font-weight: var(--font-weight-semibold);
-  box-shadow: var(--shadow-sm);
-}
-
-/* Rotation status badge */
-.rotation-status-badge {
-  flex-wrap: wrap;
-  margin-top: auto;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-4) var(--space-6);
-  background-color: var(--bg-primary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius-md);
-  font-size: var(--font-size-caption);
-  color: var(--text-secondary);
-}
-
-.rotation-status-badge.has-accounts {
-  border-color: var(--feedback-success-border);
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: var(--radius-full);
-}
-
-.status-dot.active {
-  background-color: var(--success);
-  box-shadow: 0 0 6px var(--success);
 }
 
 /* Error state banner */
@@ -549,23 +403,6 @@
   color: var(--primary);
 }
 
-/* Bottom Pinned Prompt Bar */
-.flow-prompt-bar {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-6);
-  background-color: var(--bg-secondary);
-  border-top: var(--border-width) solid var(--border-color);
-  flex-shrink: 0;
-}
-
-.flow-prompt-hint {
-  margin: 0;
-  font-size: var(--font-size-caption);
-  color: var(--text-muted);
-}
-
 .flow-chat-stop {
   display: inline-flex;
   align-items: center;
@@ -584,67 +421,6 @@
   color: var(--danger);
   font-size: var(--font-size-caption);
   overflow-wrap: anywhere;
-}
-
-.flow-prompt-input-row {
-  display: flex;
-  gap: var(--space-4);
-  align-items: flex-end;
-}
-
-.flow-prompt-textarea {
-  flex: 1;
-  min-height: 48px;
-  max-height: 120px;
-  background-color: var(--bg-primary);
-  color: var(--text-primary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius-md);
-  padding: var(--space-4) var(--space-6);
-  font-family: inherit;
-  font-size: var(--font-size-body);
-  line-height: 1.4;
-  resize: vertical;
-  transition: border-color var(--transition-fast);
-}
-
-.flow-prompt-textarea:focus {
-  outline: none;
-  border-color: var(--primary);
-}
-
-.flow-prompt-textarea::placeholder {
-  color: var(--text-muted);
-}
-
-.flow-generate-btn {
-  height: 48px;
-  padding: 0 var(--space-8);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-3);
-  background-color: var(--primary);
-  color: var(--text-on-primary);
-  border: none;
-  border-radius: var(--radius-md);
-  font-family: inherit;
-  font-size: var(--font-size-body);
-  font-weight: var(--font-weight-semibold);
-  cursor: pointer;
-  white-space: nowrap;
-  transition:
-    background-color var(--transition-fast),
-    opacity var(--transition-fast);
-}
-
-.flow-generate-btn:hover:not(:disabled) {
-  background-color: var(--primary-hover);
-}
-
-.flow-generate-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 .spin {
@@ -734,9 +510,4 @@
   background-color: var(--feedback-warning-bg);
   color: var(--text-primary);
   font-size: var(--font-size-caption);
-}
-
-/* The account warning sits at the panel's foot, like the rotation badge. */
-.flow-mode-panel > .account-warning {
-  margin-top: auto;
 }

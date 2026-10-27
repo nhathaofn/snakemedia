@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/providers/flow/session"
 )
 
@@ -31,6 +32,7 @@ func accountChoices[C any](
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer logger.Recover("chọn tài khoản Flow")
 			answers[i] = pick(ctx, acc)
 		}()
 	}

@@ -21,13 +21,15 @@ export function CheckAccount(arg1:string):Promise<models.Response_SnakeMedia_int
 
 export function CheckProxies():Promise<models.Response___SnakeMedia_internal_proxy_CheckResult_>;
 
-export function ChooseImageOutputDirectory(arg1:string):Promise<models.Response_SnakeMedia_internal_media_DirectoryResult_>;
+export function ChooseBatchOutputDirectory(arg1:accounts.Provider):Promise<models.Response_SnakeMedia_internal_media_DirectoryResult_>;
 
 export function ClearFinishedFlowImageTasks():Promise<models.Response_int_>;
 
-export function ClearMuseFinished(arg1:muse.MuseJobKind):Promise<models.Response_int_>;
+export function ClearMuseFinished(arg1:muse.MuseJobKind,arg2:muse.MuseJobMode):Promise<models.Response_int_>;
 
 export function EditAndRetryMuseJob(arg1:string,arg2:string):Promise<models.Response_SnakeMedia_internal_providers_muse_MuseJob_>;
+
+export function EditFlowImageTask(arg1:string,arg2:string):Promise<models.Response_SnakeMedia_internal_providers_flow_ImageTask_>;
 
 export function EditVideos(arg1:flow.EditVideoRequest):Promise<models.Response___SnakeMedia_internal_providers_flow_GeneratedVideoItem_>;
 
@@ -41,9 +43,9 @@ export function GetActiveRotationCount():Promise<models.Response_int_>;
 
 export function GetAppInfo():Promise<models.Response_SnakeMedia_internal_buildinfo_Info_>;
 
-export function GetConfig():Promise<models.Response_SnakeMedia_internal_config_AppConfig_>;
+export function GetBatchOutputDirectory(arg1:accounts.Provider):Promise<models.Response_string_>;
 
-export function GetDefaultImageOutputDirectory():Promise<models.Response_string_>;
+export function GetConfig():Promise<models.Response_SnakeMedia_internal_config_AppConfig_>;
 
 export function GetEditModels():Promise<models.Response___SnakeMedia_internal_providers_flow_FlowEditModel_>;
 
@@ -65,7 +67,7 @@ export function GetVideoModels():Promise<models.Response___SnakeMedia_internal_p
 
 export function HoldFlowImageTasks(arg1:Array<string>):Promise<models.Response_int_>;
 
-export function HoldMuseQueued(arg1:muse.MuseJobKind):Promise<models.Response_int_>;
+export function HoldMuseQueued(arg1:muse.MuseJobKind,arg2:muse.MuseJobMode):Promise<models.Response_int_>;
 
 export function ImportAccountCookies(arg1:accounts.Provider,arg2:string,arg3:string):Promise<models.Response_SnakeMedia_internal_accounts_Account_>;
 
@@ -119,11 +121,11 @@ export function ResumeVideoGeneration(arg1:string):Promise<models.Response___Sna
 
 export function RetryFlowImageTasks(arg1:Array<string>):Promise<models.Response_int_>;
 
-export function RetryMuseFailed(arg1:muse.MuseJobKind):Promise<models.Response_int_>;
+export function RetryMuseFailed(arg1:muse.MuseJobKind,arg2:muse.MuseJobMode):Promise<models.Response_int_>;
 
 export function RetryMuseJob(arg1:string):Promise<models.Response_SnakeMedia_internal_providers_muse_MuseJob_>;
 
-export function RevealMuseFile(arg1:string):Promise<models.Response_bool_>;
+export function RevealFile(arg1:string):Promise<models.Response_bool_>;
 
 export function RotateAccountIP(arg1:string):Promise<models.Response_SnakeMedia_internal_proxy_CheckResult_>;
 

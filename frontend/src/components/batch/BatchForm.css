@@ -1,13 +1,26 @@
+/* Fields are --gap-field apart; inside a field the label hugs its control (--gap-label). */
 .batch-form {
   display: flex;
   flex-direction: column;
-  gap: var(--space-6);
+  gap: var(--gap-field);
+}
+
+/* A label, its control and the meta/hint that belong to it. */
+.batch-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-label);
+}
+
+.batch-group > .batch-hint,
+.batch-group > .batch-error {
+  margin-top: var(--gap-label);
 }
 
 .batch-field,
 .batch-inline-field {
   display: flex;
-  gap: var(--space-3);
+  gap: var(--gap-inline);
   color: var(--text-secondary);
   font-size: var(--font-size-small);
 }
@@ -39,8 +52,8 @@
   font-family: var(--font-sans);
 }
 
-.batch-number {
-  width: var(--settings-number-width);
+.batch-select {
+  padding-block: var(--space-2);
 }
 
 .batch-meta {
@@ -48,7 +61,16 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-4);
+  gap: var(--gap-related);
+  color: var(--text-muted);
+  font-size: var(--font-size-caption);
+}
+
+.batch-field {
+  align-items: baseline;
+}
+
+.batch-count {
   color: var(--text-muted);
   font-size: var(--font-size-caption);
 }
@@ -69,5 +91,87 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--gap-related);
+  margin-top: calc(var(--gap-group) - var(--gap-field));
+}
+
+/* Folder a batch saves into: the path, then the button that picks it. */
+.batch-folder-control {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--gap-related);
+}
+
+.batch-folder-control output {
+  display: block;
+  min-width: 0;
+  height: 32px;
+  padding: 0 var(--space-3);
+  overflow: hidden;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: var(--font-size-small);
+  line-height: 30px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-folder-control output.is-empty {
+  color: var(--text-muted);
+}
+
+.batch-folder-control .btn-sm {
+  height: 32px;
+  padding-right: var(--space-3);
+  padding-left: var(--space-3);
+}
+
+/* ConfigGroup: a titled settings group, always open, above the prompt box. */
+.batch-config-group {
+  overflow: hidden;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.batch-config-title {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  border-bottom: var(--border-width) solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+}
+
+.batch-config-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-field);
+  padding: var(--space-6);
+}
+
+.batch-config-content .studio-field-group {
+  gap: var(--gap-label);
+}
+
+.batch-config-content .studio-field-label {
+  min-height: 1.2em;
+  line-height: 1.25;
+}
+
+.batch-config-content .studio-field-label > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.batch-config-content .studio-field-badge {
+  flex: 0 0 auto;
 }

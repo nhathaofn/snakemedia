@@ -95,6 +95,23 @@ function pageMain(CHUNK) {
       }
     } catch (e) {}
   };
+  // A scan that found nothing is not repeated for a while: every check would
+  // otherwise fetch all of Muse's scripts again.
+  const MISS_MS = 10 * 60 * 1000;
+  const misses = new Map();
+  // Scripts are fetched a few at a time; the first find in list order wins.
+  const PARALLEL = 6;
+  const first = async (urls, find, seen) => {
+    for (let i = 0; i < urls.length; i += PARALLEL) {
+      const texts = await Promise.all(urls.slice(i, i + PARALLEL).map(source));
+      for (let j = 0; j < texts.length; j++) {
+        const v = find(texts[j]);
+        if (v != null) return v;
+        if (seen) seen(urls[i + j], texts[j]);
+      }
+    }
+    return null;
+  };
   // scan returns the first non-null find(source) over the loaded scripts, then
   // over the lazy chunks they list ("static/chunks/x.js"), which the page has
   // not needed yet (the subscription screen, for one).
@@ -106,6 +123,7 @@ function pageMain(CHUNK) {
       const kept = localStorage.getItem(memo);
       if (kept) return JSON.parse(kept);
     } catch (e) {}
+    if (Date.now() - (misses.get(memo) || -Infinity) < MISS_MS) return null;
     const loaded = loadedChunks();
     const remember = (v) => {
       try {
@@ -115,20 +133,17 @@ function pageMain(CHUNK) {
     };
     const lazy = new Set();
     const known = new Set(loaded.map((u) => u.split("?")[0]));
-    for (const u of loaded) {
-      const text = await source(u);
-      const v = find(text);
-      if (v != null) return remember(v);
+    const listLazy = (u, text) => {
       const base = u.slice(0, u.indexOf("/static/chunks/") + 1);
       const query = u.includes("?") ? u.slice(u.indexOf("?")) : "";
       for (const m of text.matchAll(/static\/chunks\/[\w.-]+\.js/g)) {
         if (!known.has(base + m[0])) lazy.add(base + m[0] + query);
       }
-    }
-    for (const u of lazy) {
-      const v = find(await source(u));
-      if (v != null) return remember(v);
-    }
+    };
+    const v =
+      (await first(loaded, find, listLazy)) ?? (await first([...lazy], find));
+    if (v != null) return remember(v);
+    misses.set(memo, Date.now());
     return null;
   };
   // A Next.js server action is registered as createServerReference)("<id>",…,"<name>").
@@ -168,33 +183,34 @@ function pageMain(CHUNK) {
     }
     return null;
   };
-  // Muse's composer limits: the object exported as DEFAULT_UPLOAD_CONFIG
-  // ({maxFileSize, maxFilesPerUpload, supportedMimeTypes: [...]}).
+  // Muse's composer limits, the same for every chat: its DEFAULT_UPLOAD_CONFIG
+  // object literal {maxFileSize, maxFilesPerUpload, supportedMimeTypes: [...]}.
+  // Builds do not all keep the export name, so the literal itself is found.
   const uploadConfig = (text) => {
-    const at = text.indexOf('"DEFAULT_UPLOAD_CONFIG",0,');
-    if (at < 0) return null;
-    const name = /^"DEFAULT_UPLOAD_CONFIG",0,([\w$]+)/.exec(
-      text.slice(at),
-    )?.[1];
-    const start = name ? text.lastIndexOf(`${name}={maxFileSize:`, at) : -1;
-    if (start < 0) return null;
-    let i = start + name.length + 1;
-    const from = i;
-    for (let depth = 0; i < text.length; i++) {
-      if (text[i] === "{") depth++;
-      else if (text[i] === "}" && --depth === 0) break;
+    const head = "{maxFileSize:";
+    for (
+      let from = text.indexOf(head);
+      from >= 0;
+      from = text.indexOf(head, from + 1)
+    ) {
+      let i = from;
+      for (let depth = 0; i < text.length; i++) {
+        if (text[i] === "{") depth++;
+        else if (text[i] === "}" && --depth === 0) break;
+      }
+      const literal = text
+        .slice(from, i + 1)
+        .replace(/([{,])([A-Za-z_$][\w$]*):/g, '$1"$2":')
+        .replace(/\b0x[0-9a-f]+\b/gi, (h) => String(parseInt(h, 16)))
+        .replace(/!0\b/g, "true")
+        .replace(/!1\b/g, "false");
+      try {
+        const v = JSON.parse(literal);
+        if (v.maxFilesPerUpload > 0 && Array.isArray(v.supportedMimeTypes))
+          return v;
+      } catch (e) {}
     }
-    const literal = text
-      .slice(from, i + 1)
-      .replace(/([{,])([A-Za-z_$][\w$]*):/g, '$1"$2":')
-      .replace(/\b0x[0-9a-f]+\b/gi, (h) => String(parseInt(h, 16)))
-      .replace(/!0\b/g, "true")
-      .replace(/!1\b/g, "false");
-    try {
-      return JSON.parse(literal);
-    } catch (e) {
-      return null;
-    }
+    return null;
   };
 
   return {
@@ -260,47 +276,12 @@ function pageMain(CHUNK) {
           byteLen: Number(m.byte_len) || 0,
           missing: Boolean(m.missing),
         }));
-      // Small status-like fields of an event (its status, error code, refusal
-      // or safety flags), so Go can tell why no file came without reading the
-      // reply's wording. Message text and file lists are never collected.
-      const SIGNAL =
-        /status|state|error|code|reason|refus|block|safety|moderat/i;
-      const SKIP = new Set([
-        "display_text",
-        "text",
-        "content",
-        "images",
-        "videos",
-      ]);
-      const signals = (event) => {
-        const out = {};
-        let n = 0;
-        const walk = (v, path, depth) => {
-          if (!v || typeof v !== "object" || depth > 4) return;
-          for (const [k, x] of Object.entries(v)) {
-            if (n >= 16) return;
-            if (SKIP.has(k)) continue;
-            const key = path ? `${path}.${k}` : k;
-            if (x && typeof x === "object") walk(x, key, depth + 1);
-            else if (SIGNAL.test(k) && x !== undefined) {
-              const s = String(x);
-              if (s.length <= 80) {
-                out[key] = s;
-                n++;
-              }
-            }
-          }
-        };
-        walk(event, "", 0);
-        return out;
-      };
       return (h.chat_events || [])
         .filter((e) => e.role === "assistant")
         .map((e) => ({
           text: e.display_text || "",
           images: media(e.payload?.data?.images),
           videos: media(e.payload?.data?.videos),
-          signals: signals(e),
         }));
     },
     async open(path) {

@@ -107,6 +107,7 @@ func (s *Provider) ListImageProjects(ctx context.Context, requestedMode ImagePro
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer logger.Recover("đọc project Flow", func(err error) { failures[i] = err })
 			perAccount[i], failures[i] = s.accountImageProjects(ctx, account, mode, now)
 		}()
 	}

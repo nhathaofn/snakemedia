@@ -7,11 +7,13 @@ package providers
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"SnakeMedia/internal/accounts"
 	"SnakeMedia/internal/config"
 	"SnakeMedia/internal/engine"
 	"SnakeMedia/internal/events"
+	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/media"
 	"SnakeMedia/internal/paths"
 )
@@ -55,9 +57,10 @@ type Plugin struct {
 
 // Set is the app's providers, built in plugin order.
 type Set struct {
-	sites []accounts.Site
-	built []Provider
-	news  []func(Deps) Provider
+	sites     []accounts.Site
+	built     []Provider
+	news      []func(Deps) Provider
+	closeWait time.Duration // 0 means closeWait; tests shorten it
 }
 
 // Prepare makes every plugin's Site; Build then makes the providers.
@@ -110,11 +113,36 @@ func (s *Set) Start(ctx context.Context, emit func(events.Event, any)) {
 	}
 }
 
-// Close closes every provider with background work, in plugin order.
+// closeWait bounds how long Close waits for all providers together. Their
+// journals keep unfinished jobs resumable, so a provider stuck on a slow call
+// is left behind (and ends with the process) rather than holding up the exit;
+// the account browsers it may be waiting on close right after.
+const closeWait = 10 * time.Second
+
+// Close closes every provider with background work, in plugin order, for at
+// most closeWait in all.
 func (s *Set) Close() {
+	wait := s.closeWait
+	if wait <= 0 {
+		wait = closeWait
+	}
+	deadline := time.After(wait)
 	for _, p := range s.built {
-		if l, ok := p.(Lifecycle); ok {
+		l, ok := p.(Lifecycle)
+		if !ok {
+			continue
+		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			defer logger.Recover("đóng " + p.Name())
 			l.Close()
+		}()
+		select {
+		case <-done:
+		case <-deadline:
+			logger.Get().Warn("provider did not close in time, leaving it to end with the app", "provider", p.ID(), "wait", wait)
+			return
 		}
 	}
 }

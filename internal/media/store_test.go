@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"SnakeMedia/internal/models"
-	"github.com/google/uuid"
 )
 
 func TestPutUsesContentTypeExtension(t *testing.T) {
@@ -47,8 +46,9 @@ func TestSaveCopiesIntoChosenFolder(t *testing.T) {
 	if !first.Success || !second.Success {
 		t.Fatalf("save failed: %+v %+v", first, second)
 	}
-	if first.Data.Path != filepath.Join(dir, "clip.mp4") || second.Data.Path != filepath.Join(dir, "clip-2.mp4") {
-		t.Fatalf("existing files must not be replaced: %q %q", first.Data.Path, second.Data.Path)
+	firstName, secondName := filepath.Base(first.Data.Path), filepath.Base(second.Data.Path)
+	if !savedFile.MatchString(firstName) || !strings.HasPrefix(firstName, "1-snakemedia-flow-") || !strings.HasPrefix(secondName, "2-snakemedia-flow-") {
+		t.Fatalf("saved as %q and %q", firstName, secondName)
 	}
 	if len(defaults) != 2 || defaults[0] != "" || defaults[1] != dir {
 		t.Fatalf("dialog did not start at the last folder: %v", defaults)
@@ -65,70 +65,6 @@ func TestSaveCopiesIntoChosenFolder(t *testing.T) {
 		if strings.Contains(bad, "..") && res.Code != models.CodeInvalidArgument {
 			t.Errorf("%q: path traversal must be rejected as invalid", bad)
 		}
-	}
-}
-
-func TestSaveImageToTaskFolderKeepsBatchImagesTogether(t *testing.T) {
-	store := NewStore(t.TempDir())
-	firstImage, err := store.Put("image-one", "image/png", ".png", []byte("PNG-1"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondImage, err := store.Put("image-two", "image/png", ".png", []byte("PNG-2"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	outputDir := t.TempDir()
-	store.AllowRoot(outputDir)
-	taskID := uuid.NewString()
-
-	first := store.SaveImageToTaskFolder(firstImage, outputDir, taskID)
-	second := store.SaveImageToTaskFolder(secondImage, outputDir, taskID)
-	if !first.Success || !second.Success {
-		t.Fatalf("could not save task images: %+v %+v", first, second)
-	}
-	firstDir := filepath.Dir(first.Data.Path)
-	if firstDir != filepath.Dir(second.Data.Path) || filepath.Base(firstDir) != "task-"+taskID {
-		t.Fatalf("images from one batch must share its task folder: %q %q", first.Data.Path, second.Data.Path)
-	}
-	for path, expected := range map[string]string{first.Data.Path: "PNG-1", second.Data.Path: "PNG-2"} {
-		data, err := os.ReadFile(path)
-		if err != nil || string(data) != expected {
-			t.Errorf("saved file %q = %q, %v; want %q", path, data, err, expected)
-		}
-	}
-
-	otherTask := store.SaveImageToTaskFolder(firstImage, outputDir, uuid.NewString())
-	if !otherTask.Success || filepath.Dir(otherTask.Data.Path) == firstDir {
-		t.Fatalf("a new prompt batch must use a new task folder: %+v", otherTask)
-	}
-}
-
-func TestSaveImageToTaskFolderRejectsInvalidInputs(t *testing.T) {
-	store := NewStore(t.TempDir())
-	image, err := store.Put("image", "image/png", ".png", []byte("PNG"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	video, err := store.Put("video", "video/mp4", ".mp4", []byte("MP4"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	allowed := t.TempDir()
-	store.AllowRoot(allowed)
-	for _, tc := range []struct {
-		name, localURL, outputDir, taskID string
-	}{
-		{"invalid task id", image, allowed, "../outside"},
-		{"missing folder", image, filepath.Join(allowed, "missing"), uuid.NewString()},
-		{"video result", video, allowed, uuid.NewString()},
-		{"folder never chosen", image, t.TempDir(), uuid.NewString()},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if response := store.SaveImageToTaskFolder(tc.localURL, tc.outputDir, tc.taskID); response.Success {
-				t.Fatalf("invalid save input was accepted: %+v", response)
-			}
-		})
 	}
 }
 

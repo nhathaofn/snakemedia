@@ -2,10 +2,10 @@ import { Clapperboard, Film, Image, Settings, Sparkles } from 'lucide-react';
 import type { AppSection } from '../../types';
 import { MuseJobKind } from '../../types';
 import { MuseLibraryPage } from './library/MuseLibraryPage';
+import { MuseStudio } from './MuseStudio';
 import { MuseSettingsPage } from './settings/MuseSettingsPage';
-import { MuseWorkspace } from './shared/MuseWorkspace';
 
-/** Muse tab: batch image and video generation with Muse's agent across the Muse accounts. */
+/** Muse tab: single and batch image and video generation with Muse's agent across the Muse accounts. */
 export const museSection = {
   id: 'muse',
   path: '/muse',
@@ -17,14 +17,16 @@ export const museSection = {
       path: 'image',
       label: 'Ảnh',
       icon: Image,
-      element: <MuseWorkspace kind={MuseJobKind.Image} />,
+      element: <MuseStudio kind={MuseJobKind.Image} />,
+      layout: 'full',
     },
     {
       id: 'video',
       path: 'video',
       label: 'Video',
       icon: Clapperboard,
-      element: <MuseWorkspace kind={MuseJobKind.Video} />,
+      element: <MuseStudio kind={MuseJobKind.Video} />,
+      layout: 'full',
     },
     {
       id: 'library',

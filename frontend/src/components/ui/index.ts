@@ -1,4 +1,5 @@
 export * from './Button/Button';
+export * from './Button/IconAction';
 export * from './Card/Card';
 export * from './Spinner/Spinner';
 export * from './SegmentedControl/SegmentedControl';

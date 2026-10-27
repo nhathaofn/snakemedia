@@ -29,21 +29,23 @@ import (
 // App is the Wails-bound controller. Every exported method is exposed to the
 // frontend, so keep internal helpers unexported.
 type App struct {
-	ctx                  context.Context
-	info                 buildinfo.Info
-	cfg                  *config.Manager
-	system               *services.SystemService
-	settings             *services.SettingsService
-	accounts             *accounts.Service
-	providers            *providers.Set
-	providerEnum         accounts.ProviderEnum
-	flow                 *flow.Provider
-	muse                 *muse.Provider
-	media                *media.Store
-	imageOutputDirectory string
-	nodes                *engine.Registry
-	dispatcher           *events.Dispatcher
-	requests             *services.RequestRegistry
+	ctx                 context.Context
+	info                buildinfo.Info
+	cfg                 *config.Manager
+	system              *services.SystemService
+	settings            *services.SettingsService
+	accounts            *accounts.Service
+	providers           *providers.Set
+	providerEnum        accounts.ProviderEnum
+	flow                *flow.Provider
+	muse                *muse.Provider
+	media               *media.Store
+	batchOutputDefaults map[accounts.Provider]string
+	nodes               *engine.Registry
+	dispatcher          *events.Dispatcher
+	requests            *services.RequestRegistry
+	// startupNotice is shown once the window is up (config reset to defaults).
+	startupNotice string
 }
 
 // NewApp resolves storage paths, loads configuration and initialises logging.
@@ -60,8 +62,10 @@ func NewApp(info buildinfo.Info) (*App, error) {
 	if logErr != nil {
 		log.Warn("file logging unavailable", "error", logErr)
 	}
+	var notice string
 	if cfgErr != nil {
 		log.Warn("configuration could not be loaded, using defaults", "error", cfgErr)
+		notice = "Không đọc được file cài đặt, app đang dùng cài đặt mặc định. Hãy kiểm tra lại trong Cài đặt.\n\n" + cfgErr.Error()
 	}
 	log.Info("starting application",
 		"name", info.Name, "version", info.Version, "commit", info.Commit, "dataDir", p.DataDir)
@@ -72,27 +76,30 @@ func NewApp(info buildinfo.Info) (*App, error) {
 	accts := accounts.New(p.AccountsDir, cfgManager, set.Sites()...)
 	store := media.NewStore(p.MediaDir)
 	// Files are saved or revealed only under the app's output folders (Muse
-	// adds its own) and folders the user picks in a dialog.
+	// adds its own), folders the user picks in a dialog and the batch folders
+	// remembered in the settings.
 	store.AllowRoot(p.ImageOutputDir)
+	store.AllowRootsFrom(func() []string { return []string{cfgManager.Get().Flow.BatchOutputDir} })
 	set.Build(providers.Deps{Paths: p, Config: cfgManager, Media: store, Accounts: accts, ProductName: info.ProductName})
 	nodes := engine.NewRegistry()
 	if err := set.Register(nodes, store.SaveNode()); err != nil {
 		return nil, err
 	}
 	return &App{
-		info:                 info,
-		cfg:                  cfgManager,
-		system:               services.NewSystemService(info),
-		settings:             services.NewSettingsService(cfgManager),
-		accounts:             accts,
-		providers:            set,
-		providerEnum:         accounts.Providers(set.Sites()...),
-		flow:                 providers.Find[*flow.Provider](set),
-		muse:                 providers.Find[*muse.Provider](set),
-		media:                store,
-		imageOutputDirectory: p.ImageOutputDir,
-		nodes:                nodes,
-		requests:             services.NewRequestRegistry(),
+		info:                info,
+		cfg:                 cfgManager,
+		system:              services.NewSystemService(info),
+		settings:            services.NewSettingsService(cfgManager),
+		accounts:            accts,
+		providers:           set,
+		providerEnum:        accounts.Providers(set.Sites()...),
+		flow:                providers.Find[*flow.Provider](set),
+		muse:                providers.Find[*muse.Provider](set),
+		media:               store,
+		batchOutputDefaults: map[accounts.Provider]string{accounts.ProviderFlow: p.ImageOutputDir, accounts.ProviderMuse: p.MuseOutputDir},
+		nodes:               nodes,
+		requests:            services.NewRequestRegistry(),
+		startupNotice:       notice,
 	}, nil
 }
 
@@ -122,6 +129,15 @@ func (a *App) domReady(ctx context.Context) {
 	logger.Get().Info("frontend ready")
 	a.showMainWindow(ctx)
 	a.dispatcher.Emit(events.EventAppReady)
+	if a.startupNotice != "" {
+		// Off the callback: the dialog waits for the user.
+		go func() {
+			defer logger.Recover("thông báo khởi động")
+			_, _ = runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
+				Type: runtime.WarningDialog, Title: a.info.ProductName, Message: a.startupNotice,
+			})
+		}()
+	}
 }
 
 // showMainWindow sizes the (initially hidden) window to the configured fraction of
@@ -304,19 +320,32 @@ func (a *App) SaveMedia(localURL string) models.Response[media.SaveResult] {
 	})
 }
 
-// GetDefaultImageOutputDirectory returns the per-user default folder for Image > All.
-func (a *App) GetDefaultImageOutputDirectory() models.Response[string] {
-	if err := os.MkdirAll(a.imageOutputDirectory, 0o755); err != nil {
-		return models.ErrorResponse[string]("Không tạo được thư mục lưu ảnh mặc định: "+err.Error(), models.CodeInternal)
+// GetBatchOutputDirectory returns the folder a provider's batch form saves
+// into: the last one chosen there, else the app's default folder (created).
+func (a *App) GetBatchOutputDirectory(provider accounts.Provider) models.Response[string] {
+	def, ok := a.batchOutputDefaults[provider]
+	if !ok {
+		return models.ErrorResponse[string]("Nguồn tạo không hợp lệ.", models.CodeInvalidArgument)
 	}
-	return models.SuccessResponse(a.imageOutputDirectory)
+	if dir := batchOutputDir(a.cfg.Get(), provider); dir != "" {
+		return models.SuccessResponse(dir)
+	}
+	if err := os.MkdirAll(def, 0o755); err != nil {
+		return models.ErrorResponse[string]("Không tạo được thư mục lưu mặc định: "+err.Error(), models.CodeInternal)
+	}
+	return models.SuccessResponse(def)
 }
 
-// ChooseImageOutputDirectory opens the native folder picker for Image > All.
-func (a *App) ChooseImageOutputDirectory(defaultDir string) models.Response[media.DirectoryResult] {
+// ChooseBatchOutputDirectory opens the folder picker for a provider's batch
+// form and remembers the folder for its next batches.
+func (a *App) ChooseBatchOutputDirectory(provider accounts.Provider) models.Response[media.DirectoryResult] {
+	current := a.GetBatchOutputDirectory(provider)
+	if !current.Success {
+		return models.ErrorResponse[media.DirectoryResult](current.Error, current.Code)
+	}
 	dir, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
-		Title:                "Chọn thư mục lưu ảnh",
-		DefaultDirectory:     defaultDir,
+		Title:                "Chọn thư mục lưu",
+		DefaultDirectory:     current.Data,
 		CanCreateDirectories: true,
 	})
 	if err != nil {
@@ -326,7 +355,24 @@ func (a *App) ChooseImageOutputDirectory(defaultDir string) models.Response[medi
 		return models.SuccessResponse(media.DirectoryResult{Canceled: true})
 	}
 	a.media.AllowRoot(dir)
+	cfg := a.cfg.Get()
+	if provider == accounts.ProviderFlow {
+		cfg.Flow.BatchOutputDir = dir
+	} else {
+		cfg.Muse.OutputDir = dir
+	}
+	if _, err := a.cfg.Update(cfg); err != nil {
+		return models.ErrorResponse[media.DirectoryResult]("Không lưu được thư mục đã chọn: "+err.Error(), models.CodeInternal)
+	}
 	return models.SuccessResponse(media.DirectoryResult{Path: dir})
+}
+
+// batchOutputDir is the batch folder remembered for provider ("" for none).
+func batchOutputDir(cfg config.AppConfig, provider accounts.Provider) string {
+	if provider == accounts.ProviderFlow {
+		return cfg.Flow.BatchOutputDir
+	}
+	return cfg.Muse.OutputDir
 }
 
 // GetStudioConfig returns the choices and limits shared by the Flow studios.
@@ -470,6 +516,11 @@ func (a *App) CancelFlowImageTask(id string) models.Response[flow.ImageTask] {
 	return logged("CancelFlowImageTask", a.flow.CancelImageTask(id))
 }
 
+// EditFlowImageTask changes the prompt of a task that is not running.
+func (a *App) EditFlowImageTask(id, prompt string) models.Response[flow.ImageTask] {
+	return logged("EditFlowImageTask", a.flow.EditImageTask(id, prompt))
+}
+
 // RetryFlowImageTasks queues failed or cancelled tasks again.
 func (a *App) RetryFlowImageTasks(ids []string) models.Response[int] {
 	return logged("RetryFlowImageTasks", a.flow.RetryImageTasks(ids))
@@ -554,19 +605,19 @@ func (a *App) RunMuseJobs(ids []string) models.Response[int] {
 	return logged("RunMuseJobs", a.muse.RunJobs(ids))
 }
 
-// HoldMuseQueued puts the queued jobs of kind (all when empty) on hold.
-func (a *App) HoldMuseQueued(kind muse.MuseJobKind) models.Response[int] {
-	return logged("HoldMuseQueued", a.muse.HoldQueued(kind))
+// HoldMuseQueued puts the queued jobs of kind and mode (all when empty) on hold.
+func (a *App) HoldMuseQueued(kind muse.MuseJobKind, mode muse.MuseJobMode) models.Response[int] {
+	return logged("HoldMuseQueued", a.muse.HoldQueued(kind, mode))
 }
 
-// RetryMuseFailed restarts the failed or cancelled jobs of kind (all when empty).
-func (a *App) RetryMuseFailed(kind muse.MuseJobKind) models.Response[int] {
-	return logged("RetryMuseFailed", a.muse.RetryFailed(kind))
+// RetryMuseFailed restarts the failed or cancelled jobs of kind and mode (all when empty).
+func (a *App) RetryMuseFailed(kind muse.MuseJobKind, mode muse.MuseJobMode) models.Response[int] {
+	return logged("RetryMuseFailed", a.muse.RetryFailed(kind, mode))
 }
 
-// ClearMuseFinished clears the succeeded jobs of kind (all when empty) from the queue.
-func (a *App) ClearMuseFinished(kind muse.MuseJobKind) models.Response[int] {
-	return logged("ClearMuseFinished", a.muse.ClearFinished(kind))
+// ClearMuseFinished clears the succeeded jobs of kind and mode (all when empty) from the queue.
+func (a *App) ClearMuseFinished(kind muse.MuseJobKind, mode muse.MuseJobMode) models.Response[int] {
+	return logged("ClearMuseFinished", a.muse.ClearFinished(kind, mode))
 }
 
 // RemoveMuseJobs deletes multiple jobs from the queue.
@@ -584,9 +635,10 @@ func (a *App) OpenMuseOutputFolder() models.Response[bool] {
 	return logged("OpenMuseOutputFolder", a.muse.OpenOutputFolder())
 }
 
-// RevealMuseFile opens the system file manager and selects the file.
-func (a *App) RevealMuseFile(path string) models.Response[bool] {
-	return logged("RevealMuseFile", a.muse.RevealFile(path))
+// RevealFile opens the system file manager with a stored or saved file
+// selected (Flow and Muse alike).
+func (a *App) RevealFile(path string) models.Response[bool] {
+	return logged("RevealFile", a.media.Reveal(path))
 }
 
 // ListMuseLibrary lists every file finished Muse jobs made, newest first.

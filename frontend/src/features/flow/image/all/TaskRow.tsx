@@ -1,4 +1,6 @@
 import { memo } from 'react';
+import { QueuePrompt, QueueProgress } from '../../../../components/batch';
+import type { QueueTone } from '../../../../components/batch';
 import { FlowImageTaskStatus } from '../../../../types';
 import type { FlowImageTask, GeneratedImageItem } from '../../../../types';
 
@@ -8,39 +10,43 @@ export interface TaskRowActions {
   showReferences: (task: FlowImageTask, number: number) => void;
   cancel: (id: string) => void;
   retry: (id: string) => void;
+  edit: (id: string, prompt: string) => void;
+  reveal: (path: string) => void;
 }
 
 interface TaskRowProps {
   task: FlowImageTask;
   number: number;
-  batchNumber: number;
-  modelName: string;
   referenceLimit: number;
   selected: boolean;
   actions: TaskRowActions;
 }
 
+/** Labels as on Muse's queue. */
 function statusLabel(task: FlowImageTask): string {
   switch (task.status) {
     case FlowImageTaskStatus.Queued:
-      return task.held ? 'Chờ bắt đầu' : 'Chờ xử lý';
+      return task.held ? 'Tạm dừng' : 'Chờ chạy';
     case FlowImageTaskStatus.Running:
-      return 'Đang xử lý';
+      return 'Đang chạy';
     case FlowImageTaskStatus.Succeeded:
-      return 'Hoàn tất';
+      return 'Xong';
     case FlowImageTaskStatus.Cancelled:
-      return 'Đã hủy';
+      return 'Đã huỷ';
     default:
-      return 'Thất bại';
+      return 'Lỗi';
   }
+}
+
+function toneOf(task: FlowImageTask): QueueTone {
+  if (task.status === FlowImageTaskStatus.Queued) return task.held ? 'held' : 'queued';
+  return task.status as QueueTone;
 }
 
 /** One task of the image queue; re-renders only when its own task changes. */
 export const TaskRow = memo(function TaskRow({
   task,
   number,
-  batchNumber,
-  modelName,
   referenceLimit,
   selected,
   actions,
@@ -51,9 +57,10 @@ export const TaskRow = memo(function TaskRow({
   const shownReferences = task.references.slice(0, 2);
   const overflow = Math.max(task.references.length - shownReferences.length, 0);
   const results = task.results.filter((result) => result.localUrl);
+  const saved = task.savedPaths?.[0];
   return (
-    <div className={`flow-image-all-card${selected ? ' is-selected' : ''}`} role="row">
-      <span className="flow-image-all-index" role="cell">
+    <div className={`queue-table-row${selected ? ' is-selected' : ''}`} role="row">
+      <span className="queue-table-index" role="cell">
         {number}
         <input
           type="checkbox"
@@ -64,23 +71,19 @@ export const TaskRow = memo(function TaskRow({
         />
       </span>
 
-      <div className="flow-image-all-task-meta" role="cell">
-        <strong>Lô {batchNumber}</strong>
-        <span>{modelName}</span>
-        <span>{task.aspectRatio || 'Chưa có'}</span>
-        <span>{task.count} ảnh / prompt</span>
-      </div>
+      <QueuePrompt
+        prompt={task.prompt}
+        editable={!running}
+        saveLabel={task.status === FlowImageTaskStatus.Queued ? 'Lưu' : 'Lưu & chạy lại'}
+        onSave={(prompt) => actions.edit(task.id, prompt)}
+      />
 
-      <span className="flow-image-all-prompt" role="cell" title={task.prompt}>
-        {task.prompt}
-      </span>
-
-      <div className="flow-image-all-references" role="cell">
+      <div className="queue-table-refs" role="cell">
         {task.references.length > 0 ? (
           <>
             {shownReferences.map((reference) => (
               <img
-                className="flow-image-all-reference-thumb"
+                className="queue-ref-thumb"
                 key={reference.localUrl}
                 src={reference.localUrl}
                 alt={reference.fileName}
@@ -91,7 +94,7 @@ export const TaskRow = memo(function TaskRow({
             {overflow > 0 && (
               <button
                 type="button"
-                className="flow-image-all-reference-overflow"
+                className="queue-ref-overflow"
                 aria-label={`Xem ảnh tham chiếu của tác vụ ${number}: ${task.references.length} đã chọn, tối đa ${referenceLimit}`}
                 title={`${task.references.length}/${referenceLimit} ảnh đã chọn`}
                 onClick={() => actions.showReferences(task, number)}
@@ -101,23 +104,23 @@ export const TaskRow = memo(function TaskRow({
             )}
           </>
         ) : (
-          <span className="flow-image-all-reference-empty">Chưa có</span>
+          <span className="queue-ref-empty">Chưa có</span>
         )}
       </div>
 
-      <div className="flow-image-all-results" role="cell">
+      <div className="queue-table-results" role="cell">
         {results.length > 0 ? (
           results.map((result, index) => (
             <button
               type="button"
-              className="flow-image-all-preview-trigger"
+              className="queue-result"
               key={`${task.id}-result-${result.id || index}`}
               aria-label="Phóng to ảnh kết quả"
               title="Xem ảnh lớn"
               onClick={() => actions.preview(result)}
             >
               <img
-                className="flow-image-all-result-thumb"
+                className="queue-result-thumb"
                 src={result.localUrl}
                 alt={result.prompt || task.prompt}
                 loading="lazy"
@@ -125,52 +128,31 @@ export const TaskRow = memo(function TaskRow({
             </button>
           ))
         ) : (
-          <span className="flow-image-all-empty-value">—</span>
+          <span className="queue-muted">—</span>
         )}
       </div>
 
-      <div className="flow-image-all-progress" role="cell">
-        <span className={`flow-image-all-status is-${task.status}`}>
-          {running && <span className="flow-image-all-spinner" aria-hidden="true" />}
-          {statusLabel(task)}
-        </span>
-        {task.step && (
-          <span className="flow-image-all-empty-value" title={task.step}>
-            {task.step}
-          </span>
-        )}
-        {task.error && (
-          <span className="flow-image-all-task-error" title={task.error}>
-            {task.error}
-          </span>
-        )}
-        {task.status === FlowImageTaskStatus.Succeeded && task.savedFiles.length > 0 && (
-          <span className="flow-image-all-empty-value">Đã lưu {task.savedFiles.length} ảnh</span>
-        )}
-        {(task.status === FlowImageTaskStatus.Queued || running) && (
-          <button
-            type="button"
-            className="flow-image-all-row-action"
-            onClick={() => actions.cancel(task.id)}
-          >
-            Hủy
-          </button>
-        )}
-        {ended && (
-          <button
-            type="button"
-            className="flow-image-all-row-action"
-            title={
-              task.requestId
-                ? 'Kiểm tra lại job Flow đã nhận, không gửi yêu cầu mới.'
-                : 'Gửi lại tác vụ này.'
-            }
-            onClick={() => actions.retry(task.id)}
-          >
-            {task.requestId ? 'Kiểm tra lại' : 'Chạy lại'}
-          </button>
-        )}
-      </div>
+      <QueueProgress
+        tone={toneOf(task)}
+        label={statusLabel(task)}
+        detail={running ? task.step : undefined}
+        error={ended || task.status === FlowImageTaskStatus.Succeeded ? task.error : undefined}
+        savedPath={task.status === FlowImageTaskStatus.Succeeded ? saved : undefined}
+        onReveal={saved ? () => actions.reveal(saved) : undefined}
+        action={
+          running
+            ? { label: 'Hủy', onClick: () => actions.cancel(task.id) }
+            : ended
+              ? {
+                  label: task.requestId ? 'Kiểm tra lại' : 'Chạy lại',
+                  title: task.requestId
+                    ? 'Kiểm tra lại job Flow đã nhận, không gửi yêu cầu mới.'
+                    : 'Gửi lại tác vụ này.',
+                  onClick: () => actions.retry(task.id),
+                }
+              : undefined
+        }
+      />
     </div>
   );
 });

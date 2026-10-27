@@ -104,7 +104,7 @@ func TestOverdueResumedJobIsCollected(t *testing.T) {
 
 // The time limit counts from the send, not from when the job was picked.
 func TestTimeLimitCountsFromSend(t *testing.T) {
-	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "idle"}}
+	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "completed"}}
 	page.events, page.files = videoResult("/v.mp4", []byte("v"))
 	p := testProvider(t, page)
 	acc := addSignedIn(t, p, "A")
@@ -125,7 +125,7 @@ func TestTimeLimitCountsFromSend(t *testing.T) {
 
 // A file Muse made but cannot hand over is read again later, not paid again.
 func TestMissingResultIsRechecked(t *testing.T) {
-	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "idle"},
+	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "completed"},
 		events: []AssistantEvent{{Videos: []ResultMedia{{Path: "/v.mp4", Mime: "video/mp4", Missing: true}}}}}
 	p := testProvider(t, page)
 	acc := addSignedIn(t, p, "A")
@@ -140,7 +140,7 @@ func TestMissingResultIsRechecked(t *testing.T) {
 
 // A result whose size Muse left out is still downloaded.
 func TestResultWithoutSizeIsDownloaded(t *testing.T) {
-	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "idle"},
+	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "completed"},
 		events: []AssistantEvent{{Videos: []ResultMedia{{Path: "/v.mp4", Mime: "video/mp4"}}}},
 		files:  map[string][]byte{"/v.mp4": []byte("video")}}
 	p := testProvider(t, page)
@@ -162,7 +162,7 @@ func TestRetryFailedSkipsAcceptedJobs(t *testing.T) {
 	p.jobs.update(jobs[1].ID, func(j *MuseJob) { j.Status, j.SessionID = MuseJobFailed, "s1" })
 	p.jobs.update(jobs[2].ID, func(j *MuseJob) { j.Status, j.Error = MuseJobFailed, errSendUnknown.Error() })
 
-	if res := p.RetryFailed(""); !res.Success || res.Data != 1 {
+	if res := p.RetryFailed("", ""); !res.Success || res.Data != 1 {
 		t.Fatalf("retried %+v", res)
 	}
 	if got := mustJob(t, p, jobs[0].ID); got.Status != MuseJobQueued {
@@ -172,5 +172,33 @@ func TestRetryFailedSkipsAcceptedJobs(t *testing.T) {
 		if got := mustJob(t, p, j.ID); got.Status != MuseJobFailed {
 			t.Fatalf("job %s re-queued: %+v", j.Prompt, got)
 		}
+	}
+}
+
+// Bulk actions of one screen leave the other screen's jobs alone; a job from a
+// journal written before modes existed belongs to Hàng loạt.
+func TestBulkActionsStayInTheirMode(t *testing.T) {
+	p := testProvider(t, &fakePage{})
+	single := p.SubmitJobs(MuseJobRequest{Kind: MuseJobImage, Mode: MuseJobSingle, Prompts: []string{"đơn"}}).Data[0]
+	batch := submit(t, p, MuseJobImage, "hàng loạt", "cũ")
+	if single.Mode != MuseJobSingle || batch[0].Mode != MuseJobBatch {
+		t.Fatalf("modes = %q %q", single.Mode, batch[0].Mode)
+	}
+	p.jobs.update(batch[1].ID, func(j *MuseJob) { j.Mode = "" })
+
+	if res := p.HoldQueued(MuseJobImage, MuseJobBatch); !res.Success || res.Data != 2 {
+		t.Fatalf("hold = %+v", res)
+	}
+	if got := mustJob(t, p, single.ID); got.Held {
+		t.Fatalf("single job held by the batch hold: %+v", got)
+	}
+	if res := p.SubmitJobs(MuseJobRequest{Kind: MuseJobImage, Mode: "x", Prompts: []string{"a"}}); res.Success {
+		t.Fatalf("unknown mode accepted: %+v", res)
+	}
+	if res := p.SubmitJobs(MuseJobRequest{Kind: MuseJobImage, Mode: MuseJobBatch, Prompts: []string{"a"}, Repeat: 2}); res.Success {
+		t.Fatalf("batch variants accepted: %+v", res)
+	}
+	if res := p.SubmitJobs(MuseJobRequest{Kind: MuseJobImage, Mode: MuseJobSingle, Prompts: []string{"a"}, Repeat: 2}); !res.Success || len(res.Data) != 2 {
+		t.Fatalf("single variants = %+v", res)
 	}
 }

@@ -1,17 +1,18 @@
 import { useMemo, useState } from 'react';
 import { X } from 'lucide-react';
-import { Icon, Modal, RevealList } from '../../../../components/ui';
-import { LIST_REVEAL_STEP } from '../../../../constants/ui';
+import { QueueFilterBar, QueueTable } from '../../../../components/batch';
+import { Icon, Modal } from '../../../../components/ui';
 import { api } from '../../../../services/api';
 import { useAppStore } from '../../../../stores';
 import { FlowImageTaskStatus } from '../../../../types';
 import type { FlowImageTask, FlowImageTaskReference, GeneratedImageItem } from '../../../../types';
 import { useFlowImageStore } from '../store/flowImageStore';
-import { QueueToolbar } from './QueueToolbar';
+import { QueueActions } from './QueueActions';
 import { ReferenceBankDialog } from './ReferenceBankDialog';
 import { TaskRow } from './TaskRow';
 import type { TaskRowActions } from './TaskRow';
-import { useImageQueueStore } from './queueStore';
+import { TASK_FILTERS, matchesTaskFilter, useImageQueueStore } from './queueStore';
+import type { TaskFilter } from './queueStore';
 import { applyToTasks, overCapacity, referenceTargets } from './references';
 import { useImageQueueLive } from './useImageQueueLive';
 import './AllWorkspace.css';
@@ -26,32 +27,49 @@ export function AllWorkspace() {
   const models = useFlowImageStore((s) => s.models);
   const addToast = useAppStore((state) => state.addToast);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [filter, setFilter] = useState<TaskFilter>('all');
   const [previewImage, setPreviewImage] = useState<GeneratedImageItem | null>(null);
   const [gallery, setGallery] = useState<{ task: FlowImageTask; number: number } | null>(null);
   const [bankOpen, setBankOpen] = useState(false);
 
-  const numbers = useMemo(() => {
-    const byTask = new Map<string, number>();
-    const byBatch = new Map<string, number>();
-    tasks.forEach((task, index) => {
-      byTask.set(task.id, index + 1);
-      if (!byBatch.has(task.batchId)) byBatch.set(task.batchId, byBatch.size + 1);
-    });
-    return { byTask, byBatch };
-  }, [tasks]);
-  const modelNames = useMemo(() => new Map(models.map((m) => [m.id, m.name])), [models]);
+  // A task's number is its prompt's place in its batch, as in its file names;
+  // tasks queued before batches were numbered use their place in the queue.
+  const numbers = useMemo(
+    () => new Map(tasks.map((task, index) => [task.id, task.index || index + 1])),
+    [tasks],
+  );
   const modelLimits = useMemo(
     () => new Map(models.map((m) => [m.id, m.maxReferenceImages])),
     [models],
   );
 
-  const notRunning = tasks.filter((task) => task.status !== FlowImageTaskStatus.Running);
+  const shown = useMemo(
+    () => tasks.filter((task) => matchesTaskFilter(task, filter)),
+    [tasks, filter],
+  );
+  const filterOptions = useMemo(
+    () =>
+      TASK_FILTERS.map(({ value, label }) => ({
+        value,
+        label,
+        count: tasks.filter((task) => matchesTaskFilter(task, value)).length,
+      })),
+    [tasks],
+  );
+  // Selection and bulk actions cover only the tasks the filter shows.
+  const notRunning = shown.filter((task) => task.status !== FlowImageTaskStatus.Running);
   const selectedTasks = notRunning.filter((task) => selected.has(task.id));
   const retryable = selectedTasks.filter(
     (task) =>
       task.status === FlowImageTaskStatus.Failed || task.status === FlowImageTaskStatus.Cancelled,
   );
-  const finished = tasks.filter((task) => task.status === FlowImageTaskStatus.Succeeded);
+  const failed = tasks.filter((task) => task.status === FlowImageTaskStatus.Failed);
+  const busy = tasks.some(
+    (task) =>
+      task.status === FlowImageTaskStatus.Running ||
+      (task.status === FlowImageTaskStatus.Queued && !task.held),
+  );
+  const removable = tasks.filter((task) => task.status !== FlowImageTaskStatus.Running);
   const allSelected = notRunning.length > 0 && notRunning.every((task) => selected.has(task.id));
   // References go to the selected tasks, or to every task that can take them.
   const targets = referenceTargets(selectedTasks.length > 0 ? selectedTasks : tasks);
@@ -78,6 +96,14 @@ export function AllWorkspace() {
         void api.retryFlowImageTasks([id]).then((res) => {
           if (!res.success) report('Không chạy lại được tác vụ', res.error);
         }),
+      edit: (id, prompt) =>
+        void api.editFlowImageTask(id, prompt).then((res) => {
+          if (!res.success) report('Không sửa được prompt', res.error);
+        }),
+      reveal: (path) =>
+        void api.revealFile(path).then((res) => {
+          if (!res.success) report('Không mở được thư mục', res.error);
+        }),
     }),
     // report only wraps the stable addToast.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -90,7 +116,7 @@ export function AllWorkspace() {
       if (tooMany) {
         report(
           'Không thể thêm ảnh cho tất cả prompt',
-          `Model của tác vụ ${numbers.byTask.get(tooMany.id)} không đủ chỗ cho ảnh tham chiếu đã chọn.`,
+          `Model của tác vụ ${numbers.get(tooMany.id)} không đủ chỗ cho ảnh tham chiếu đã chọn.`,
         );
         return false;
       }
@@ -144,91 +170,94 @@ export function AllWorkspace() {
           </button>
         </div>
       )}
-      <div className="flow-image-all-scroll">
-        <div className="flow-image-all-table" role="table" aria-label="Hàng đợi tạo ảnh">
-          <div className="flow-image-all-header" role="row">
-            <span className="flow-image-all-index-heading" role="columnheader">
-              <input
-                type="checkbox"
-                aria-label="Chọn tất cả tác vụ"
-                checked={allSelected}
-                disabled={notRunning.length === 0}
-                onChange={(event) =>
-                  setSelected(
-                    event.currentTarget.checked
-                      ? new Set(notRunning.map((task) => task.id))
-                      : new Set(),
-                  )
-                }
-              />
-            </span>
-            <span role="columnheader">Tác vụ</span>
-            <span role="columnheader">Prompt</span>
-            <span role="columnheader">Ảnh tham chiếu</span>
-            <span role="columnheader">Kết quả</span>
-            <span role="columnheader">Tiến độ</span>
-          </div>
-          {tasks.length === 0 ? (
-            <div className="flow-image-all-body" role="rowgroup">
-              <div className="flow-image-all-empty-state">
-                <strong>{loadError ? 'Không tải được hàng đợi' : 'Chưa có tác vụ'}</strong>
-                <span>{loadError ?? 'Dán prompt vào ô ở cột bên trái rồi bấm "Thêm & chạy".'}</span>
-              </div>
-            </div>
-          ) : (
-            <RevealList
-              className="flow-image-all-body"
-              items={tasks}
-              keyOf={(task) => task.id}
-              step={LIST_REVEAL_STEP}
-              render={(task) => (
-                <TaskRow
-                  task={task}
-                  number={numbers.byTask.get(task.id) ?? 0}
-                  batchNumber={numbers.byBatch.get(task.batchId) ?? 0}
-                  modelName={modelNames.get(task.modelId) ?? 'Chưa có'}
-                  referenceLimit={Math.max(
-                    task.references.length,
-                    modelLimits.get(task.modelId) ?? 0,
-                  )}
-                  selected={selected.has(task.id)}
-                  actions={actions}
-                />
-              )}
-            />
-          )}
-        </div>
-      </div>
-
-      <QueueToolbar
-        selectedCount={selectedTasks.length}
-        retryableCount={retryable.length}
-        finishedCount={finished.length}
-        removableCount={notRunning.length}
-        canAddReferences={models.length > 0}
-        onPickReferences={() => void pickReferences()}
-        onOpenBank={() => setBankOpen(true)}
-        onRemoveSelected={() =>
-          void bulk(
-            api.removeFlowImageTasks(selectedTasks.map((task) => task.id)),
-            'Không xóa được tác vụ',
-          )
+      <QueueFilterBar
+        options={filterOptions}
+        value={filter}
+        onChange={(next) => {
+          setFilter(next);
+          setSelected(new Set());
+        }}
+        actions={
+          <QueueActions
+            selectedCount={selectedTasks.length}
+            retryableCount={retryable.length}
+            failedCount={failed.length}
+            busy={busy}
+            removableCount={removable.length}
+            canAddReferences={models.length > 0}
+            onPickReferences={() => void pickReferences()}
+            onOpenBank={() => setBankOpen(true)}
+            onRetrySelected={() =>
+              void bulk(
+                api.retryFlowImageTasks(retryable.map((task) => task.id)),
+                'Không chạy lại được tác vụ',
+              )
+            }
+            onRemoveSelected={() =>
+              void bulk(
+                api.removeFlowImageTasks(selectedTasks.map((task) => task.id)),
+                'Không xóa được tác vụ',
+              )
+            }
+            onRetryFailed={() =>
+              void bulk(
+                api.retryFlowImageTasks(failed.map((task) => task.id)),
+                'Không chạy lại được tác vụ lỗi',
+              )
+            }
+            onRemoveAll={() =>
+              void bulk(
+                api.removeFlowImageTasks(removable.map((task) => task.id)),
+                'Không xóa được hàng đợi',
+              )
+            }
+          />
         }
-        onClearFinished={() =>
-          void bulk(api.clearFinishedFlowImageTasks(), 'Không xóa được tác vụ đã xong')
+      />
+      <QueueTable
+        label="Hàng đợi tạo ảnh"
+        selectAll={
+          <input
+            type="checkbox"
+            aria-label="Chọn tất cả tác vụ"
+            checked={allSelected}
+            disabled={notRunning.length === 0}
+            onChange={(event) =>
+              setSelected(
+                event.currentTarget.checked
+                  ? new Set(notRunning.map((task) => task.id))
+                  : new Set(),
+              )
+            }
+          />
         }
-        onRetrySelected={() =>
-          void bulk(
-            api.retryFlowImageTasks(retryable.map((task) => task.id)),
-            'Không chạy lại được tác vụ lỗi',
-          )
+        headings={['Prompt', 'Ảnh tham chiếu', 'Kết quả', 'Tiến độ']}
+        items={shown}
+        keyOf={(task) => task.id}
+        resetKey={filter}
+        empty={
+          <>
+            <strong>
+              {loadError
+                ? 'Không tải được hàng đợi'
+                : tasks.length > 0
+                  ? 'Không có tác vụ nào ở mục này'
+                  : 'Chưa có tác vụ'}
+            </strong>
+            {(loadError || tasks.length === 0) && (
+              <span>{loadError ?? 'Dán prompt vào ô ở cột bên trái rồi bấm "Thêm & chạy".'}</span>
+            )}
+          </>
         }
-        onRemoveAll={() =>
-          void bulk(
-            api.removeFlowImageTasks(notRunning.map((task) => task.id)),
-            'Không xóa được hàng đợi',
-          )
-        }
+        render={(task) => (
+          <TaskRow
+            task={task}
+            number={numbers.get(task.id) ?? 0}
+            referenceLimit={Math.max(task.references.length, modelLimits.get(task.modelId) ?? 0)}
+            selected={selected.has(task.id)}
+            actions={actions}
+          />
+        )}
       />
 
       {bankOpen && (

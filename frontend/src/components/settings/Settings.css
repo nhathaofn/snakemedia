@@ -93,6 +93,22 @@
   text-align: left;
 }
 
+.settings-row.is-stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-4);
+}
+
+.settings-row.is-stacked .settings-row-control {
+  flex-shrink: 1;
+}
+
+.settings-textarea {
+  width: 100%;
+  text-align: left;
+  resize: vertical;
+}
+
 .settings-unit {
   font-size: var(--font-size-small);
   color: var(--text-muted);

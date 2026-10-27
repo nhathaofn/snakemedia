@@ -14,8 +14,6 @@ export interface FlowImageState extends StudioSlice<FlowModel, GeneratedImageIte
   setAllAspectRatio: (ratio: string) => void;
   allImageQuality: FlowImageQualityType;
   setAllImageQuality: (quality: FlowImageQualityType) => void;
-  allImageCountPerPrompt: number;
-  setAllImageCountPerPrompt: (count: number) => void;
   imageOutputDirectory: string;
   setImageOutputDirectory: (directory: string) => void;
   /** References (in the media store) given to prompts added to the All queue next. */
@@ -34,12 +32,6 @@ export const useFlowImageStore = create<FlowImageState>()((set) => ({
   setAllAspectRatio: (allAspectRatio) => set({ allAspectRatio }),
   allImageQuality: FlowImageQuality.OneK,
   setAllImageQuality: (allImageQuality) => set({ allImageQuality }),
-  allImageCountPerPrompt: 1,
-  setAllImageCountPerPrompt: (allImageCountPerPrompt) => {
-    if (Number.isInteger(allImageCountPerPrompt) && allImageCountPerPrompt >= 1) {
-      set({ allImageCountPerPrompt });
-    }
-  },
   imageOutputDirectory: '',
   setImageOutputDirectory: (imageOutputDirectory) => set({ imageOutputDirectory }),
   queueReferences: [],

@@ -1,22 +1,25 @@
 import React from 'react';
-import { FolderOpen } from 'lucide-react';
-import { Button, Icon, SegmentedControl } from '../../../components/ui';
+import { SegmentedControl } from '../../../components/ui';
 import {
   NumberSetting,
   SettingRow,
   SettingsSection,
   SettingsShell,
-  TextSetting,
+  TextAreaSetting,
   ToggleSetting,
 } from '../../../components/settings';
 import { useConfigSection } from '../../../hooks';
-import { api, unwrap } from '../../../services';
-import { useAppStore } from '../../../stores';
-import { MuseMode } from '../../../types';
+import { ImageFormat, MuseMode } from '../../../types';
 
 const modeOptions = [
   { value: MuseMode.Rotate, label: 'Luân phiên' },
   { value: MuseMode.Sequential, label: 'Tuần tự' },
+] as const;
+
+const imageFormatOptions = [
+  { value: ImageFormat.PNG, label: 'PNG' },
+  { value: ImageFormat.JPG, label: 'JPG' },
+  { value: ImageFormat.Original, label: 'Giữ nguyên (WebP)' },
 ] as const;
 
 /**
@@ -26,20 +29,10 @@ const modeOptions = [
  */
 export const MuseSettingsPage: React.FC = () => {
   const { section: muse, patch, saving } = useConfigSection('muse');
-  const addToast = useAppStore((s) => s.addToast);
 
   if (!muse) {
     return <SettingsShell title="Cài đặt Muse">Đang tải cài đặt…</SettingsShell>;
   }
-
-  const pickFolder = async () => {
-    try {
-      const res = unwrap(await api.chooseImageOutputDirectory(muse.outputDir));
-      if (!res.canceled && res.path) patch({ outputDir: res.path });
-    } catch (cause) {
-      addToast({ type: 'error', message: cause instanceof Error ? cause.message : String(cause) });
-    }
-  };
 
   return (
     <SettingsShell title="Cài đặt Muse">
@@ -104,31 +97,15 @@ export const MuseSettingsPage: React.FC = () => {
             onChange={(mode) => patch({ mode })}
           />
         </SettingRow>
-        <SettingRow label="Tài khoản chạy cùng lúc">
-          <NumberSetting
-            aria-label="Tài khoản chạy cùng lúc"
-            value={muse.maxAccounts}
-            min={1}
-            max={50}
-            disabled={saving}
-            onCommit={(maxAccounts) => patch({ maxAccounts })}
-          />
-        </SettingRow>
-        <SettingRow label="Luồng" hint="Tổng số tác vụ chạy cùng lúc / trên mỗi tài khoản.">
-          <NumberSetting
-            aria-label="Tổng số luồng"
-            value={muse.totalThreads}
-            min={1}
-            max={100}
-            disabled={saving}
-            onCommit={(totalThreads) => patch({ totalThreads })}
-          />
+        <SettingRow
+          label="Luồng mỗi tài khoản"
+          hint="Mọi tài khoản đã đăng nhập và đang dùng được đều tự nhận việc; tài khoản hết lượt, lỗi proxy hay đăng xuất tự được bỏ qua."
+        >
           <NumberSetting
             aria-label="Luồng mỗi tài khoản"
             value={muse.threadsPerAccount}
             min={1}
             max={5}
-            unit="/ tài khoản"
             disabled={saving}
             onCommit={(threadsPerAccount) => patch({ threadsPerAccount })}
           />
@@ -163,6 +140,38 @@ export const MuseSettingsPage: React.FC = () => {
             value={muse.useTopup}
             disabled={saving}
             onChange={(useTopup) => patch({ useTopup })}
+          />
+        </SettingRow>
+      </SettingsSection>
+
+      <SettingsSection title="Lưu file">
+        <SettingRow
+          label="Định dạng ảnh khi lưu"
+          hint="Muse tạo ảnh dạng WebP. Ảnh được chuyển sang định dạng này khi lưu vào thư mục Hàng loạt hoặc bằng nút tải xuống; PNG giữ nguyên chất lượng nhưng nặng hơn, JPG nhẹ hơn. Thư viện trong app vẫn giữ bản gốc."
+        >
+          <SegmentedControl
+            aria-label="Định dạng ảnh khi lưu"
+            options={imageFormatOptions}
+            value={muse.imageFormat}
+            disabled={saving}
+            onChange={(imageFormat) => patch({ imageFormat })}
+          />
+        </SettingRow>
+      </SettingsSection>
+
+      <SettingsSection title="Tài khoản">
+        <SettingRow
+          label="Tin nhắn thiết lập sau khi đăng nhập"
+          hint="Gửi một lần duy nhất cho mỗi tài khoản, trong một chat riêng, sau lần đầu bạn đăng nhập tài khoản Muse trong cửa sổ Chrome và app đọc được hạn mức. Muse đã nhận thì không gửi lại, kể cả khi sửa nội dung này; chỉ khi Muse không nhận, lần đăng nhập sau mới gửi lại. Gửi lỗi chỉ được ghi chú trên thẻ tài khoản. Để trống để không gửi."
+          stacked
+        >
+          <TextAreaSetting
+            aria-label="Tin nhắn thiết lập sau khi đăng nhập"
+            value={muse.setupMessage}
+            rows={8}
+            placeholder="Không gửi tin nhắn nào"
+            disabled={saving}
+            onCommit={(setupMessage) => patch({ setupMessage })}
           />
         </SettingRow>
       </SettingsSection>
@@ -207,30 +216,6 @@ export const MuseSettingsPage: React.FC = () => {
             disabled={saving}
             onCommit={(videoTimeoutMinutes) => patch({ videoTimeoutMinutes })}
           />
-        </SettingRow>
-      </SettingsSection>
-
-      <SettingsSection title="Lưu file">
-        <SettingRow label="Tự lưu ra thư mục" hint="Chép mỗi file xong vào thư mục theo ngày.">
-          <ToggleSetting
-            aria-label="Tự lưu ra thư mục"
-            value={muse.autoSave}
-            disabled={saving}
-            onChange={(autoSave) => patch({ autoSave })}
-          />
-        </SettingRow>
-        <SettingRow label="Thư mục lưu" hint="Để trống: thư mục muse-output trong dữ liệu của app.">
-          <TextSetting
-            aria-label="Thư mục lưu"
-            value={muse.outputDir}
-            placeholder="Mặc định của app"
-            disabled={saving}
-            onCommit={(outputDir) => patch({ outputDir })}
-          />
-          <Button size="sm" disabled={saving} onClick={pickFolder}>
-            <Icon icon={FolderOpen} size="sm" />
-            <span>Chọn</span>
-          </Button>
         </SettingRow>
       </SettingsSection>
     </SettingsShell>

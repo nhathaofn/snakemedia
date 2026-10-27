@@ -75,6 +75,8 @@ type Store struct {
 	// a dialog (see AllowRoot).
 	roots        []string
 	dynamicRoots []func() []string
+	// formats are the saved image formats by stored-name prefix (ConvertImages).
+	formats map[string]func() string
 }
 
 // NewStore keeps media in dir, created on first use.
@@ -115,8 +117,8 @@ func (s *Store) Path(localURL string) (string, error) {
 }
 
 // Save copies a stored file into a folder chooseDir returns (starting at the
-// last folder used), never replacing an existing file. An empty folder means
-// the user canceled.
+// last folder used) under the next number of that folder (see OutputName),
+// never replacing an existing file. An empty folder means the user canceled.
 func (s *Store) Save(localURL string, chooseDir func(defaultDir string) (string, error)) models.Response[SaveResult] {
 	path, err := s.Path(localURL)
 	if err != nil {
@@ -135,9 +137,7 @@ func (s *Store) Save(localURL string, chooseDir func(defaultDir string) (string,
 	if dir == "" {
 		return models.SuccessResponse(SaveResult{Canceled: true})
 	}
-	name := filepath.Base(path)
-	ext := filepath.Ext(name)
-	saved, err := copyUniqueFile(dir, strings.TrimSuffix(name, ext), ext, path)
+	saved, err := s.saveFile(dir, OutputName(NextNumber(dir), ProviderOf(localURL)), path)
 	if err != nil {
 		return models.ErrorResponse[SaveResult](err.Error(), models.CodeInternal)
 	}
@@ -147,52 +147,9 @@ func (s *Store) Save(localURL string, chooseDir func(defaultDir string) (string,
 	return models.SuccessResponse(SaveResult{Path: saved})
 }
 
-// SaveImageToTaskFolder copies a generated image into a stable folder for one
-// prompt batch. taskID must be a UUID so it cannot escape outputDir.
-func (s *Store) SaveImageToTaskFolder(localURL, outputDir, taskID string) models.Response[SaveResult] {
-	mediaPath, err := s.Path(localURL)
-	if err != nil {
-		return models.ErrorResponse[SaveResult]("Tệp không hợp lệ.", models.CodeInvalidArgument)
-	}
-	ext := strings.ToLower(filepath.Ext(mediaPath))
-	switch ext {
-	case ".png", ".jpg", ".webp", ".gif":
-	default:
-		return models.ErrorResponse[SaveResult]("Chỉ có thể lưu ảnh được tạo.", models.CodeInvalidArgument)
-	}
-	id, err := uuid.Parse(taskID)
-	if err != nil {
-		return models.ErrorResponse[SaveResult]("Mã tác vụ không hợp lệ.", models.CodeInvalidArgument)
-	}
-	if strings.TrimSpace(outputDir) == "" {
-		return models.ErrorResponse[SaveResult]("Chưa chọn thư mục lưu.", models.CodeInvalidArgument)
-	}
-	if outputDir, err = s.CheckDir(outputDir); err != nil {
-		return models.ErrorResponse[SaveResult](err.Error(), models.CodeInvalidArgument)
-	}
-	rootInfo, err := os.Stat(outputDir)
-	if err != nil || !rootInfo.IsDir() {
-		return models.ErrorResponse[SaveResult](fmt.Sprintf("Thư mục lưu %q không tồn tại.", outputDir), models.CodeInvalidArgument)
-	}
-	if _, err := os.Stat(mediaPath); err != nil {
-		return models.ErrorResponse[SaveResult]("Không đọc được ảnh đã tạo: "+err.Error(), models.CodeNotFound)
-	}
-	taskDir := filepath.Join(outputDir, "task-"+id.String())
-	if err := os.MkdirAll(taskDir, 0o755); err != nil {
-		return models.ErrorResponse[SaveResult]("Không tạo được thư mục tác vụ: "+err.Error(), models.CodeInternal)
-	}
-
-	// Several queue workers can save into the same task folder at once; the
-	// exclusive create keeps them from taking the same name.
-	saved, err := copyUniqueFile(taskDir, strings.TrimSuffix(filepath.Base(mediaPath), filepath.Ext(mediaPath)), ext, mediaPath)
-	if err != nil {
-		return models.ErrorResponse[SaveResult](err.Error(), models.CodeInternal)
-	}
-	return models.SuccessResponse(SaveResult{Path: saved})
-}
-
-// SaveTo copies a stored file into dir as name plus the file's extension,
-// numbering the name when it is taken (name-2, name-3, …). dir must lie inside
+// SaveTo copies a stored file into dir as name plus the file's extension (or
+// the format ConvertImages set for it), numbering the name when it is taken
+// (name-2, name-3, …). dir must lie inside
 // an allowed root and is created when missing. The copy is streamed, so a long
 // video is never read into memory.
 func (s *Store) SaveTo(localURL, dir, name string) (string, error) {
@@ -209,7 +166,7 @@ func (s *Store) SaveTo(localURL, dir, name string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("Không tạo được thư mục %q: %w", dir, err)
 	}
-	return copyUniqueFile(dir, name, filepath.Ext(src), src)
+	return s.saveFile(dir, name, src)
 }
 
 // ImportVideo copies the video file chooseFile returns into the media folder,
@@ -287,15 +244,24 @@ func fileBase(id string) string {
 // savers never write the same file and an existing file is never replaced; a
 // failed copy leaves no partial file behind.
 func copyUniqueFile(dir, name, ext, src string) (string, error) {
-	info, err := os.Stat(dir)
-	if err != nil || !info.IsDir() {
-		return "", fmt.Errorf("Thư mục %q không tồn tại.", dir)
-	}
 	in, err := os.Open(src)
 	if err != nil {
 		return "", fmt.Errorf("Không đọc được tệp đã tải: %w", err)
 	}
 	defer in.Close()
+	return writeUniqueFile(dir, name, ext, func(w io.Writer) error {
+		_, err := io.Copy(w, in)
+		return err
+	})
+}
+
+// writeUniqueFile creates name+ext in dir (name-2+ext and so on when taken)
+// and fills it with write, leaving no partial file behind on failure.
+func writeUniqueFile(dir, name, ext string, write func(io.Writer) error) (string, error) {
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return "", fmt.Errorf("Thư mục %q không tồn tại.", dir)
+	}
 	for i := 1; i <= maxSaveAttempts; i++ {
 		candidate := name + ext
 		if i > 1 {
@@ -309,7 +275,7 @@ func copyUniqueFile(dir, name, ext, src string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("Không lưu được tệp vào %q: %w", dir, err)
 		}
-		_, err = io.Copy(out, in)
+		err = write(out)
 		if err == nil {
 			err = out.Sync()
 		}

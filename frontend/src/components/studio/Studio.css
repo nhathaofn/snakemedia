@@ -1,0 +1,282 @@
+/* Studio frame shared by Flow and Muse media pages: tools panel with mode tabs on the left, workspace on the right. */
+.studio-page {
+  flex: 1;
+  display: flex;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  overflow: hidden;
+}
+
+.studio-sidebar {
+  width: var(--studio-panel-width);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.studio-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.studio-workspace-panel {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.studio-workspace-panel[hidden] {
+  display: none;
+}
+
+.studio-mode-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-field);
+  padding: var(--space-6);
+  overflow-y: auto;
+}
+
+/* Account status at the foot of a mode panel */
+.studio-status {
+  flex-wrap: wrap;
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
+  background-color: var(--bg-primary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-caption);
+  color: var(--text-secondary);
+}
+
+.studio-status.is-ready {
+  border-color: var(--feedback-success-border);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+}
+
+.status-dot.active {
+  background-color: var(--success);
+  box-shadow: 0 0 6px var(--success);
+}
+
+/* The account warning sits at the panel's foot, like the account status. */
+.studio-mode-panel > .account-warning {
+  margin-top: auto;
+}
+
+/* Prompt bar pinned under a studio workspace */
+.studio-prompt-bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-6);
+  background-color: var(--bg-secondary);
+  border-top: var(--border-width) solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.studio-prompt-hint {
+  margin: 0;
+  font-size: var(--font-size-caption);
+  color: var(--text-muted);
+}
+
+.studio-prompt-input-row {
+  display: flex;
+  gap: var(--space-4);
+  align-items: flex-end;
+}
+
+.studio-prompt-textarea {
+  flex: 1;
+  min-height: 48px;
+  max-height: 120px;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-6);
+  font-family: inherit;
+  font-size: var(--font-size-body);
+  line-height: 1.4;
+  resize: vertical;
+  transition: border-color var(--transition-fast);
+}
+
+.studio-prompt-textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.studio-prompt-textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.studio-generate-btn {
+  height: 48px;
+  padding: 0 var(--space-8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  background-color: var(--primary);
+  color: var(--text-on-primary);
+  border: none;
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color var(--transition-fast),
+    opacity var(--transition-fast);
+}
+
+.studio-generate-btn:hover:not(:disabled) {
+  background-color: var(--primary-hover);
+}
+
+.studio-generate-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Labelled fields of a tools panel */
+.studio-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-label);
+}
+
+.studio-field-label {
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.studio-field-hint {
+  font-size: var(--font-size-caption);
+  color: var(--text-secondary);
+}
+
+.studio-field-badge {
+  font-size: var(--font-size-caption);
+  color: var(--primary);
+  font-weight: var(--font-weight-regular);
+}
+
+/* Quantity Grid (x1 to x4) */
+.quantity-grid {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: var(--space-2);
+  background-color: var(--bg-primary);
+  padding: 3px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.quantity-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.quantity-btn:hover {
+  color: var(--text-primary);
+}
+
+.quantity-btn.active {
+  background-color: var(--bg-secondary);
+  color: var(--primary);
+  font-weight: var(--font-weight-semibold);
+  box-shadow: var(--shadow-sm);
+}
+
+/* A mode panel whose fields scroll above a fixed action bar (Hàng loạt) */
+.studio-mode-panel.is-docked {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.studio-panel-scroll {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--gap-related);
+  padding: var(--space-6);
+  overflow-y: auto;
+}
+
+/* Groups keep their height; the column scrolls instead of squeezing them. */
+.studio-panel-scroll > * {
+  flex-shrink: 0;
+}
+
+/*
+ * The prompt box takes the space left, so its bottom sits the column's
+ * padding (--space-6) above the run dock; it never shrinks below its rows.
+ */
+.studio-panel-scroll > .batch-form,
+.studio-panel-scroll > .batch-form > .batch-group,
+.studio-panel-scroll .batch-textarea {
+  flex: 1 0 auto;
+}
+
+.studio-panel-scroll .batch-textarea {
+  resize: none;
+}
+
+.studio-action-dock {
+  display: grid;
+  min-height: var(--flow-bottom-bar-height);
+  flex: 0 0 auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
+  gap: var(--gap-related);
+  padding: var(--space-4) var(--space-6);
+  border-top: var(--border-width) solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.studio-action-dock > button {
+  min-width: 0;
+}

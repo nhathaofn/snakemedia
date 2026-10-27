@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { FlowImageTaskStatus } from '../../../../types';
 import type { FlowImageTask } from '../../../../types';
-import { countTasks, mergeTasks, upsertTask } from './queueStore';
+import { countTasks, matchesTaskFilter, mergeTasks, upsertTask } from './queueStore';
 
 const task = (id: string, status: FlowImageTaskStatus, extra: Partial<FlowImageTask> = {}) =>
   ({ id, status, prompt: id, ...extra }) as FlowImageTask;
@@ -44,5 +44,15 @@ describe('image queue store helpers', () => {
         task('f', FlowImageTaskStatus.Cancelled),
       ]),
     ).toEqual({ running: 1, queued: 1, held: 1, succeeded: 1, failed: 2 });
+  });
+
+  it('filters held tasks apart from the ones waiting to run', () => {
+    const held = task('h', FlowImageTaskStatus.Queued, { held: true });
+    const waiting = task('w', FlowImageTaskStatus.Queued);
+    expect(matchesTaskFilter(held, 'held')).toBe(true);
+    expect(matchesTaskFilter(held, FlowImageTaskStatus.Queued)).toBe(false);
+    expect(matchesTaskFilter(waiting, FlowImageTaskStatus.Queued)).toBe(true);
+    expect(matchesTaskFilter(waiting, 'held')).toBe(false);
+    expect(matchesTaskFilter(task('f', FlowImageTaskStatus.Failed), 'all')).toBe(true);
   });
 });

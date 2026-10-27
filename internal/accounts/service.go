@@ -177,6 +177,7 @@ func (s *Service) goBackground(fn func()) {
 	s.background.Add(1)
 	go func() {
 		defer s.background.Done()
+		defer logger.Recover("tác vụ tài khoản")
 		fn()
 	}()
 }
@@ -584,7 +585,7 @@ func (s *Service) apply(id string, insp Inspection) (Record, error) {
 			r.Message += "."
 			return
 		}
-		r.Status, r.Message = StatusSignedIn, ""
+		r.Status, r.Message = StatusSignedIn, insp.Note
 		if insp.Identity != "" {
 			r.Identity = insp.Identity
 		}
@@ -679,6 +680,12 @@ func (s *Service) watch(b *browser.Browser, id string, site Site) {
 			return
 		}
 		if insp, err := site.Inspect(ctx, b, rec); err == nil && insp.SignedIn {
+			if follow, ok := site.(SignInFollowUp); ok {
+				s.Update(id, func(r *Record) {
+					r.Message = "Đã đăng nhập, đang hoàn tất thiết lập tài khoản…"
+				})
+				insp = follow.AfterSignIn(ctx, b, rec, insp)
+			}
 			s.apply(id, insp)
 			return
 		}

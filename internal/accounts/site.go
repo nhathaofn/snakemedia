@@ -33,4 +33,15 @@ type Inspection struct {
 	Data any
 	// Resume clears a rest the provider set earlier (its quota is back).
 	Resume bool
+	// Note is shown on a signed-in account (a remark, not an error).
+	Note string
+}
+
+// SignInFollowUp is a Site with a step of its own once the user has signed in
+// in the account's window (not on a plain check). The account shows as still
+// signing in meanwhile and is signed in with the inspection it returns; the
+// step reports its own failures (Inspection.Note) instead of failing the
+// sign-in.
+type SignInFollowUp interface {
+	AfterSignIn(ctx context.Context, b *browser.Browser, rec Record, insp Inspection) Inspection
 }

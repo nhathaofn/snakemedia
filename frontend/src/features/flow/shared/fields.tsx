@@ -32,8 +32,8 @@ export function SelectField<T extends string | number>({
   emptyLabel = 'Không có lựa chọn',
 }: SelectFieldProps<T>) {
   return (
-    <div className="flow-field-group">
-      <label htmlFor={id} className="flow-field-label">
+    <div className="studio-field-group">
+      <label htmlFor={id} className="studio-field-label">
         <span>{label}</span>
       </label>
       {loading ? (
@@ -78,40 +78,6 @@ export function SelectField<T extends string | number>({
           <Icon icon={ChevronDown} size="sm" className="flow-select-arrow" />
         </div>
       )}
-    </div>
-  );
-}
-
-/** Output count picker, x1 to the backend's per-request maximum. */
-export function QuantityField({
-  value,
-  max,
-  onChange,
-  ariaLabel,
-}: {
-  value: number;
-  max: number;
-  onChange: (value: number) => void;
-  ariaLabel: string;
-}) {
-  return (
-    <div className="flow-field-group">
-      <label className="flow-field-label">
-        <span>Số lượng</span>
-      </label>
-      <div className="quantity-grid" role="group" aria-label={ariaLabel}>
-        {Array.from({ length: max }, (_, i) => i + 1).map((num) => (
-          <button
-            key={num}
-            type="button"
-            className={`quantity-btn ${value === num ? 'active' : ''}`}
-            onClick={() => onChange(num)}
-            aria-pressed={value === num}
-          >
-            x{num}
-          </button>
-        ))}
-      </div>
     </div>
   );
 }

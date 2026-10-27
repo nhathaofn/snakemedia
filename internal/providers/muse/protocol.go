@@ -4,13 +4,10 @@ import (
 	"context"
 	"errors"
 	"io"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"time"
-
-	"SnakeMedia/internal/logger"
 )
 
 // MuseURL is the page every account browser keeps open. It is a wire protocol
@@ -60,9 +57,6 @@ type AssistantEvent struct {
 	Text   string        `json:"text"`
 	Images []ResultMedia `json:"images"`
 	Videos []ResultMedia `json:"videos"`
-	// Signals are the event's small status-like fields (path → value), such as
-	// a status, an error code or a refusal flag; never message text.
-	Signals map[string]string `json:"signals,omitempty"`
 }
 
 // Page is one account's signed-in muse.ai tab. The Chrome implementation lives
@@ -264,44 +258,28 @@ func (c *MuseCapabilities) extensions() []string {
 	return slices.Compact(out)
 }
 
-// Muse's own replies, matched when it produced no file. Muse's chat history
-// carries no structured reason for a refusal, so its wording is matched; each
-// pattern names the limit or policy itself, never a bare word ("chính sách",
-// "guideline") that an ordinary answer may contain.
-//   - usage replies rest the account and hand the job to another one;
-//   - verification replies need the user to act in the account's Chrome;
-//   - policy replies need a different prompt and are never retried.
-var (
-	usageReply  = regexp.MustCompile(`(?i)hết (lượt|hạn mức|quota)|đã (đạt|chạm) (giới hạn|hạn mức)|vượt (quá )?hạn mức|quá nhiều (yêu cầu|lượt)|giới hạn (sử dụng|tạo|hằng ngày|hàng ngày|hằng tuần|hàng tuần)|usage limit|rate limit|reached (your|the|a) (daily |weekly |usage )?limit|limit reached|out of (credits|generations|quota|tokens)|too many requests`)
-	verifyReply = regexp.MustCompile(`(?i)xác minh (tài khoản|danh tính|số điện thoại)|verify (your )?(account|identity|phone|email)`)
-	policyReply = regexp.MustCompile(`(?i)vi phạm (chính sách|tiêu chuẩn|nguyên tắc)|chính sách (nội dung|an toàn|sử dụng|cộng đồng)|tiêu chuẩn cộng đồng|nội dung không phù hợp|không được phép tạo|(đổi|thay đổi) prompt|(safety|content|usage) polic|(content|community|safety|usage) guidelines?|violates? (our|the|content|safety|usage)|can'?t (help with|create|make|generate) th|cannot (help with|create|make|generate) th|not able to (help with|create|make|generate) th|won'?t (be able to )?(create|make|generate) th`)
-)
-
-// Errors the runner classifies. museError marks an answer from Muse (no file,
-// too slow): retrying in a new chat may help, re-polling the session will not.
+// Errors the runner classifies. museError marks a run Muse stopped without
+// the file for its own reasons (interrupted, too slow): another chat may work.
 type museError struct{ msg string }
 
 func (e *museError) Error() string { return e.msg }
 
+// policyError is a chat Muse finished without the file while the account
+// still had usage: Muse declined the prompt, so it is never retried as is.
 type policyError struct{ reply string }
 
 func (e *policyError) Error() string {
-	return "CẦN ĐỔI PROMPT: Muse từ chối tạo vì nội dung prompt. Muse trả lời: \"" + e.reply + "\""
+	if e.reply == "" {
+		return "CẦN ĐỔI PROMPT: Muse không tạo kết quả cho prompt này."
+	}
+	return "CẦN ĐỔI PROMPT: Muse không tạo kết quả cho prompt này. Muse trả lời: \"" + e.reply + "\""
 }
 
-type usageError struct{ reply string }
+// usageError is a chat Muse finished without the file because the account's
+// usage is gone (read from Muse's subscription, never from the reply).
+type usageError struct{}
 
-func (e *usageError) Error() string {
-	return "Tài khoản hết lượt Muse. Muse trả lời: \"" + e.reply + "\""
-}
-
-// verifyError is Muse asking the account to verify itself: nobody but the
-// user can do that, so the account stops taking jobs until it is checked again.
-type verifyError struct{ reply string }
-
-func (e *verifyError) Error() string {
-	return "Muse yêu cầu xác minh tài khoản. Muse trả lời: \"" + e.reply + "\""
-}
+func (e *usageError) Error() string { return "Tài khoản hết lượt Muse." }
 
 // notSentError is a failure before anything reached Muse (the account's
 // browser, proxy or page was not ready): the job goes back to the queue
@@ -319,43 +297,19 @@ var errSendUnknown = errors.New("Không rõ Muse đã nhận lệnh hay chưa (m
 // to the queue without spending an attempt.
 var errNotSignedIn = errors.New("Tài khoản chưa đăng nhập Muse.")
 
-// replyClass is why Muse answered without a file.
-type replyClass string
-
-const (
-	classPolicy    replyClass = "policy"
-	classUsage     replyClass = "usage"
-	classVerify    replyClass = "verify"
-	classTechnical replyClass = "technical"
-)
-
-// replySignals maps the structured fields of an assistant event (see
-// AssistantEvent.Signals) to a class. It is built from field names and values
-// Muse-like clients use; it is not confirmed against muse.ai yet, so every
-// signal it does not know is logged ("muse reply signal") and must be added
-// here from the logs. Rules are tried in order; a rule matches when its key
-// pattern matches the field path and its value pattern matches the value.
-// A sign-in problem counts as verify: the account needs the user, and the job
-// moves on without spending an attempt.
-var replySignals = []struct {
-	key, value *regexp.Regexp
-	class      replyClass
-}{
-	{regexp.MustCompile(`(?i)refus|blocked|moderat`), regexp.MustCompile(`.`), classPolicy},
-	{regexp.MustCompile(`.`), regexp.MustCompile(`(?i)refus|blocked|safety|moderat|content.?(policy|filter)|policy.?violation|nsfw`), classPolicy},
-	{regexp.MustCompile(`.`), regexp.MustCompile(`(?i)rate.?limit|quota|usage.?limit|limit.?(exceeded|reached)|insufficient.?(credit|token|balance)|too.?many`), classUsage},
-	{regexp.MustCompile(`.`), regexp.MustCompile(`(?i)verif|unauthori[sz]ed|unauthenticated|login.?required|session.?expired|forbidden`), classVerify},
-	{regexp.MustCompile(`(?i)error|status|state|reason`), regexp.MustCompile(`(?i)^(error|errored|failed|failure|internal|timeout|timed.?out|aborted)$`), classTechnical},
+// replyText is Muse's answer in a chat, on one line and shortened, for the
+// message of a job that got no file.
+func replyText(events []AssistantEvent) string {
+	var texts []string
+	for _, e := range events {
+		if e.Text != "" {
+			texts = append(texts, e.Text)
+		}
+	}
+	return truncate(strings.Join(strings.Fields(strings.Join(texts, " ")), " "), 300)
 }
 
-// neutralSignal is a value that says nothing about a failure (a flag that is
-// off, a normal finish).
-var neutralSignal = regexp.MustCompile(`(?i)^(|false|0|null|none|nil|ok|success|succeeded|complete|completed|done|idle|stop|stopped|end_turn|assistant|running|finished)$`)
-
-// signalLog remembers which signals were logged, so each distinct one appears
-// once per run.
-var signalLog = onceSet{seen: map[string]bool{}}
-
+// onceSet remembers keys already seen, so each distinct value is logged once.
 type onceSet struct {
 	mu   sync.Mutex
 	seen map[string]bool
@@ -370,130 +324,6 @@ func (s *onceSet) first(key string) bool {
 	}
 	s.seen[key] = true
 	return true
-}
-
-// signalClass classifies an event's structured fields; unknown lists the
-// non-neutral signals the table does not recognise.
-func signalClass(signals map[string]string) (class replyClass, unknown []string) {
-	keys := make([]string, 0, len(signals))
-	for k := range signals {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	for _, k := range keys {
-		v := strings.TrimSpace(signals[k])
-		if neutralSignal.MatchString(v) {
-			continue
-		}
-		matched := false
-		for _, rule := range replySignals {
-			if rule.key.MatchString(k) && rule.value.MatchString(v) {
-				matched = true
-				if class == "" || rank[rule.class] > rank[class] {
-					class = rule.class
-				}
-				break
-			}
-		}
-		if !matched {
-			unknown = append(unknown, k+"="+v)
-		}
-	}
-	return class, unknown
-}
-
-// rank orders classes when several signals disagree: the one that needs the
-// user most wins, and a technical error never hides a refusal.
-var rank = map[replyClass]int{classTechnical: 1, classUsage: 2, classVerify: 3, classPolicy: 4}
-
-// classifyEvents turns a chat that produced no file into an error: from the
-// events' structured signals when they name a reason, else from the reply's
-// wording (classifyReply).
-func classifyEvents(events []AssistantEvent, what string) error {
-	var texts []string
-	signals := map[string]string{}
-	for _, e := range events {
-		if e.Text != "" {
-			texts = append(texts, e.Text)
-		}
-		for k, v := range e.Signals {
-			signals[k] = v
-		}
-	}
-	reply := truncate(strings.Join(strings.Fields(strings.Join(texts, "\n")), " "), 300)
-	class, unknown := signalClass(signals)
-	for _, s := range unknown {
-		if signalLog.first("unknown:" + s) {
-			logger.Get().Info("muse reply signal", "signal", s, "known", false)
-		}
-	}
-	if class == "" {
-		err := classifyReply(reply, what)
-		if signalLog.first("regex:" + string(errorClass(err))) {
-			logger.Get().Info("muse reply signal", "source", "wording", "class", errorClass(err), "signals", len(signals))
-		}
-		return err
-	}
-	if reply == "" {
-		reply = strings.Join(signalList(signals), ", ")
-	}
-	switch class {
-	case classPolicy:
-		return &policyError{reply: reply}
-	case classUsage:
-		return &usageError{reply: reply}
-	case classVerify:
-		return &verifyError{reply: reply}
-	default:
-		return &museError{msg: "Muse không tạo " + what + ". Muse trả lời: \"" + reply + "\""}
-	}
-}
-
-// signalList renders signals as sorted key=value pairs.
-func signalList(signals map[string]string) []string {
-	out := make([]string, 0, len(signals))
-	for k, v := range signals {
-		out = append(out, k+"="+v)
-	}
-	slices.Sort(out)
-	return out
-}
-
-// errorClass names the class classifyReply chose, for the log.
-func errorClass(err error) replyClass {
-	var (
-		policy *policyError
-		usage  *usageError
-		verify *verifyError
-	)
-	switch {
-	case errors.As(err, &policy):
-		return classPolicy
-	case errors.As(err, &usage):
-		return classUsage
-	case errors.As(err, &verify):
-		return classVerify
-	default:
-		return classTechnical
-	}
-}
-
-// classifyReply turns Muse's text answer (when no file came back) into an
-// error. It is the fallback when the chat carries no structured reason.
-func classifyReply(reply, what string) error {
-	reply = truncate(strings.Join(strings.Fields(reply), " "), 300)
-	switch {
-	case reply == "":
-		return &museError{msg: "Muse không trả về " + what + "."}
-	case verifyReply.MatchString(reply):
-		return &verifyError{reply: reply}
-	case usageReply.MatchString(reply):
-		return &usageError{reply: reply}
-	case policyReply.MatchString(reply):
-		return &policyError{reply: reply}
-	default:
-		return &museError{msg: "Muse không tạo " + what + ". Muse trả lời: \"" + reply + "\""}
-	}
 }
 
 // truncate shortens s to at most n runes without splitting a character.

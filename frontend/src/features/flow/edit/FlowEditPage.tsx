@@ -1,5 +1,6 @@
 import React from 'react';
 import { useShallow } from 'zustand/react/shallow';
+import '../../../components/studio/Studio.css';
 import '../shared/FlowStudio.css';
 import './FlowEditPage.css';
 import { api, isTransportFailure } from '../../../services/api';
@@ -7,7 +8,6 @@ import { EditVideoRequest } from '../../../types';
 import {
   FlowModePanel,
   ConversationGallery,
-  PromptBar,
   SelectField,
   VideoCard,
   selectedModelOf,
@@ -21,6 +21,7 @@ import {
 } from '../shared';
 import { SourceVideoPanel } from './SourceVideoPanel';
 import { trimRequest, useFlowEditStore } from './store/flowEditStore';
+import { PromptBar } from '../../../components/studio';
 
 /** Edit results replace a job's earlier items (upsert), unlike the other studios. */
 const editRecoveryStore = {
@@ -36,11 +37,11 @@ const editRecoveryStore = {
  * editor it makes one video whose ratio and quality follow the source.
  */
 export const FlowEditPage: React.FC = () => (
-  <div className="flow-studio-page">
-    <aside className="flow-studio-sidebar" aria-label="Edit video tools">
+  <div className="studio-page">
+    <aside className="studio-sidebar" aria-label="Edit video tools">
       <EditSettings />
     </aside>
-    <section className="flow-studio-content" aria-label="Edit video workspace">
+    <section className="studio-content" aria-label="Edit video workspace">
       <EditWorkspace />
     </section>
   </div>

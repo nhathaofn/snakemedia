@@ -23,6 +23,23 @@ var AllMuseJobKinds = []struct {
 // valid reports whether the kind is one Muse makes.
 func (k MuseJobKind) valid() bool { return k == MuseJobImage || k == MuseJobVideo }
 
+// MuseJobMode is the screen a job was made from: Đơn (one prompt, shown as a
+// gallery) or Hàng loạt (a batch, shown as a queue). Both share one queue.
+type MuseJobMode string
+
+const (
+	MuseJobSingle MuseJobMode = "single"
+	MuseJobBatch  MuseJobMode = "batch"
+)
+
+var AllMuseJobModes = []struct {
+	Value  MuseJobMode
+	TSName string
+}{{MuseJobSingle, "Single"}, {MuseJobBatch, "Batch"}}
+
+// valid reports whether the mode is a known one; empty is not.
+func (m MuseJobMode) valid() bool { return m == MuseJobSingle || m == MuseJobBatch }
+
 // MuseJobStatus is a job's place in its lifecycle.
 type MuseJobStatus string
 
@@ -46,13 +63,28 @@ var AllMuseJobStatuses = []struct {
 // chat. SessionID is that chat: once set, the job is only ever re-checked
 // there, never re-sent, so an interrupted job costs no second Muse generation.
 type MuseJob struct {
-	ID     string      `json:"id"`
-	Kind   MuseJobKind `json:"kind"`
+	ID   string      `json:"id"`
+	Kind MuseJobKind `json:"kind"`
+	// Mode is the screen the job was made from; journals written before it
+	// existed leave it empty, which reads as MuseJobBatch.
+	Mode   MuseJobMode `json:"mode,omitempty"`
 	Prompt string      `json:"prompt"`
 	// Label is a short title for the queue and saved file names; empty uses the prompt.
 	Label string `json:"label,omitempty"`
 	// References are local media URLs of the attached images, in order.
 	References []string `json:"references"`
+	// OutputDir is the batch's own folder (under the folder the user chose,
+	// see batchFolder) a Hàng loạt job's files are saved into, and Index the
+	// prompt's place in that batch (from 1), which numbers them
+	// (media.OutputName). Đơn jobs have no folder: nothing is saved.
+	OutputDir string `json:"outputDir,omitempty"`
+	Index     int    `json:"index,omitempty"`
+	// Ratio ("9:16") and Duration (seconds, video only) are what the message
+	// asks Muse for besides the prompt; empty or 0 leaves it to the prompt.
+	Ratio    string `json:"ratio,omitempty"`
+	Duration int    `json:"duration,omitempty"`
+	// FormatNote says how the made file differs from Ratio or Duration.
+	FormatNote string `json:"formatNote,omitempty"`
 	// Rechecks counts failed attempts to read back a job Muse already accepted.
 	Rechecks int `json:"rechecks,omitempty"`
 	// Held jobs wait in the queue until the user runs them.
@@ -63,10 +95,13 @@ type MuseJob struct {
 	SessionID string        `json:"sessionId,omitempty"`
 	// Sending is set just before a send and cleared once Muse answers; still set
 	// after a restart means the outcome is unknown.
-	Sending  bool     `json:"sending,omitempty"`
-	Attempts int      `json:"attempts"`
-	Error    string   `json:"error,omitempty"`
-	Files    []string `json:"files"`
+	Sending bool `json:"sending,omitempty"`
+	// SendUnknown marks a job failed because its send's answer was lost: Muse
+	// may have made it, so sending it again may pay twice.
+	SendUnknown bool     `json:"sendUnknown,omitempty"`
+	Attempts    int      `json:"attempts"`
+	Error       string   `json:"error,omitempty"`
+	Files       []string `json:"files"`
 	// SavedFiles are the copies written to the output folder.
 	SavedFiles []string `json:"savedFiles,omitempty"`
 	CreatedAt  string   `json:"createdAt"`
@@ -95,10 +130,17 @@ func resetForRetry(j *MuseJob) {
 // resetForQueue clears everything a previous run left behind, so a job sent
 // again starts a fresh chat from its first turn.
 func resetForQueue(j *MuseJob) {
-	j.Status, j.Step, j.Error = MuseJobQueued, "", ""
-	j.AccountID, j.SessionID, j.Sending, j.Rechecks = "", "", false, 0
+	j.Status, j.Step, j.Error, j.FormatNote = MuseJobQueued, "", "", ""
+	j.AccountID, j.SessionID, j.Sending, j.SendUnknown, j.Rechecks = "", "", false, false, 0
 	j.Files, j.SavedFiles = []string{}, []string{}
 	j.StartedAt, j.SentAt, j.FinishedAt = "", "", ""
+}
+
+// mayBePaid reports whether Muse accepted (has a chat) or may have accepted
+// (the send's answer was lost) the job's last send. Journals written before
+// SendUnknown existed are recognised by their error.
+func (j MuseJob) mayBePaid() bool {
+	return j.SessionID != "" || j.SendUnknown || j.Error == errSendUnknown.Error()
 }
 
 func (j MuseJob) finished() bool {

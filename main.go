@@ -31,6 +31,8 @@ var manifest []byte
 func main() {
 	if err := run(); err != nil {
 		logger.Get().Error("application exited with error", "error", err)
+		// A GUI build has no console: without this the app would just not open.
+		showFatal(startupFailure(err, logger.FilePath()))
 		_ = logger.Close()
 		os.Exit(1)
 	}
@@ -88,10 +90,21 @@ func run() error {
 			flow.AllImageProjectModes,
 			flow.AllImageTaskStatuses,
 			config.AllMuseModes,
+			config.AllImageFormats,
 			muse.AllMuseJobKinds,
+			muse.AllMuseJobModes,
 			muse.AllMuseJobStatuses,
 		},
 	})
+}
+
+// startupFailure is the title and text shown when the app cannot start.
+func startupFailure(err error, logFile string) (title, message string) {
+	message = "Ứng dụng không khởi động được:\n\n" + err.Error()
+	if logFile != "" {
+		message += "\n\nChi tiết trong file log:\n" + logFile
+	}
+	return "Không mở được ứng dụng", message
 }
 
 // windowBackground is painted before the webview loads, avoiding a flash of the

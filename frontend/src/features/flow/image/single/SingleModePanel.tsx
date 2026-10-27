@@ -3,7 +3,6 @@ import { useShallow } from 'zustand/react/shallow';
 import { api } from '../../../../services/api';
 import {
   FlowModePanel,
-  QuantityField,
   ReferencePicker,
   SelectField,
   ratioLabel,
@@ -12,6 +11,7 @@ import {
   useStudioConfig,
 } from '../../shared';
 import { useFlowImageStore } from '../store/flowImageStore';
+import { QuantityField } from '../../../../components/studio';
 
 /** SingleModePanel - Image settings; every choice and limit comes from the backend. */
 export const SingleModePanel: React.FC = () => {

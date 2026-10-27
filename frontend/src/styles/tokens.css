@@ -86,6 +86,16 @@
   --space-9: 20px;
   --space-10: 24px;
   --space-11: 48px;
+
+  /*
+   * Spacing hierarchy: the closer two things belong together, the smaller the gap.
+   * Use these in forms and panels instead of picking a --space-N by eye.
+   */
+  --gap-inline: var(--space-3); /* items on one row: icon + text, button + button */
+  --gap-label: var(--space-2); /* a label and the control it names */
+  --gap-related: var(--space-4); /* a control and its meta, hint or sibling controls */
+  --gap-field: var(--space-8); /* one field (label + control + hint) and the next */
+  --gap-group: var(--space-10); /* groups of fields, sections, a form and its actions */
   --border-width: 1px;
   --font-size-caption: 0.75rem;
   --font-size-small: 0.8125rem;
@@ -100,8 +110,9 @@
   --proxy-editor-min-height: 280px;
   --settings-number-width: 96px;
   --settings-text-width: 320px;
-  --flow-studio-panel-width: 340px;
-  --flow-studio-panel-width-compact: 280px;
+  --studio-panel-width: 340px;
+  --studio-panel-width-compact: 280px;
+  --flow-bottom-bar-height: 52px;
   --flow-chat-thread-max-width: 1120px;
   --flow-chat-bubble-max-width: min(78%, 760px);
   --flow-chat-result-min-width: 220px;
@@ -117,13 +128,13 @@
   --account-avatar-size: 40px;
   --muse-thumb-size: 64px;
   --muse-result-width: 240px;
-  --muse-result-max-height: 320px;
   /* Placeholder heights for off-screen list items (content-visibility). */
-  --muse-job-placeholder-height: 160px;
+  --muse-tile-placeholder-height: 300px;
   --muse-lib-item-placeholder-height: 220px;
-  --flow-task-placeholder-height: 72px;
-  --flow-task-table-min-width: 620px;
-  --flow-task-table-min-width-compact: 480px;
+  --queue-row-placeholder-height: 72px;
+  --queue-table-min-width: 620px;
+  --queue-progress-width: 150px;
+  --queue-table-min-width-compact: 480px;
   --account-email-max-width: 170px;
   --account-detail-max-width: 220px;
   --empty-state-min-height: 160px;
@@ -162,9 +173,9 @@
 
 /* Narrow windows: the studio tools panel shrinks (set by useCompactLayout). */
 :root[data-layout='compact'] {
-  --flow-studio-panel-width: var(--flow-studio-panel-width-compact);
+  --studio-panel-width: var(--studio-panel-width-compact);
   --content-padding: var(--space-8);
-  --flow-task-table-min-width: var(--flow-task-table-min-width-compact);
+  --queue-table-min-width: var(--queue-table-min-width-compact);
 }
 
 [data-theme='light'] {

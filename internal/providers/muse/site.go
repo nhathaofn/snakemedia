@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"SnakeMedia/internal/accounts"
 	"SnakeMedia/internal/browser"
 	"SnakeMedia/internal/config"
+	"SnakeMedia/internal/logger"
 )
 
 // museData is what a Muse account keeps beside the shared fields.
@@ -20,7 +22,17 @@ type museData struct {
 	// RestReason is why the account rests (restQuota or restLimit); empty
 	// for a rest set before the reason was kept, treated as restQuota.
 	RestReason string `json:"restReason,omitempty"`
+	// SetupSentAt is when Muse took the setup message (config
+	// Muse.SetupMessage), sent once per account after its first sign-in;
+	// SetupDoneAt is when Muse replied, and SetupReply that reply, trimmed.
+	SetupSentAt string `json:"setupSentAt,omitempty"`
+	SetupDoneAt string `json:"setupDoneAt,omitempty"`
+	SetupReply  string `json:"setupReply,omitempty"`
 }
+
+// setupSent reports whether Muse has taken the account's setup message, so it
+// is never sent again.
+func (d museData) setupSent() bool { return d.SetupSentAt != "" || d.SetupDoneAt != "" }
 
 // MuseAccount is what the queue knows about one account.
 type MuseAccount struct {
@@ -77,12 +89,7 @@ func (*Site) AcceptsCookie(domain string) bool {
 // one read. A quota with room left ends a rest set because the weekly quota
 // ran out; a rest for another limit Muse named runs its time.
 func (s *Site) Inspect(ctx context.Context, b *browser.Browser, rec accounts.Record) (accounts.Inspection, error) {
-	cfg := s.cfg.Get()
-	page := &chromePage{
-		port: b.Port, policy: cfg.Accounts,
-		callTimeout: time.Duration(cfg.Accounts.RequestTimeoutSeconds) * time.Second,
-		sendTimeout: time.Duration(cfg.Muse.SendTimeoutSeconds) * time.Second,
-	}
+	page := s.page(b)
 	state, err := page.Login(ctx)
 	if err == nil && state.HTTP == 200 && !state.Chat {
 		// Signed in but on a page without the chat (settings, a shared
@@ -98,18 +105,93 @@ func (s *Site) Inspect(ctx context.Context, b *browser.Browser, rec accounts.Rec
 	if err := accounts.DecodeData(rec, &data); err != nil {
 		return accounts.Inspection{}, err
 	}
+	// The quota and the limits are read side by side; limits read recently
+	// are kept, since reading them may mean scanning Muse's scripts.
+	var caps *MuseCapabilities
+	var wg sync.WaitGroup
+	if !capabilitiesFresh(data.Capabilities, time.Now()) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer logger.Recover("đọc giới hạn Muse")
+			caps, _ = page.Capabilities(ctx)
+		}()
+	}
 	quota, _ := page.Quota(ctx)
+	wg.Wait()
 	if quota != nil {
 		data.Quota = quota
 	}
-	if caps, _ := page.Capabilities(ctx); caps != nil {
+	if caps != nil {
 		data.Capabilities = caps
 	}
 	resume := quotaResumes(data, quota)
 	if resume {
 		data.RestReason = ""
 	}
-	return accounts.Inspection{SignedIn: true, Usage: quotaUsage(data.Quota), Data: data, Resume: resume}, nil
+	return accounts.Inspection{SignedIn: true, Usage: accountUsage(data), Data: data, Resume: resume}, nil
+}
+
+// AfterSignIn sends the setup message in a chat of its own once the user has
+// signed in in the window and the quota was read, once per account: an
+// account Muse took it from never sends it again (a send Muse did not take is
+// tried at the next sign-in). Muse replying is all it takes; the chat is left
+// as it is. A failure is only noted on the account: it is signed in either way.
+func (s *Site) AfterSignIn(ctx context.Context, b *browser.Browser, rec accounts.Record, insp accounts.Inspection) accounts.Inspection {
+	cfg := s.cfg.Get()
+	if strings.TrimSpace(cfg.Muse.SetupMessage) == "" {
+		return insp
+	}
+	data, ok := insp.Data.(museData)
+	if !ok || data.setupSent() {
+		return insp
+	}
+	// Muse may take a while to reply; the sign-in window's own deadline must
+	// not cut the wait short.
+	limit := time.Duration(cfg.Muse.SendTimeoutSeconds)*time.Second + time.Duration(cfg.Muse.ImageTimeoutMinutes)*time.Minute
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), limit)
+	defer cancel()
+	reply, sent, err := sendSetup(ctx, s.page(b), cfg.Muse, sleepContext, time.Now)
+	if sent {
+		// A send like a job's: the next job on the account keeps its send gap.
+		data.LastSentAt = time.Now().UTC().Format(time.RFC3339Nano)
+		data.SetupSentAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	if err != nil {
+		logger.Get().Warn("muse setup message failed", "account", rec.ID, "sent", sent, "error", err)
+		insp.Note = "Chưa gửi được tin nhắn thiết lập cho Muse: " + err.Error() + "."
+		if sent {
+			insp.Note = "Muse đã nhận tin nhắn thiết lập nhưng chưa trả lời (" + err.Error() + "); app không gửi lại."
+		}
+	} else {
+		data.SetupDoneAt, data.SetupReply = time.Now().UTC().Format(time.RFC3339), reply
+		logger.Get().Info("muse setup message answered", "account", rec.ID)
+	}
+	insp.Data, insp.Usage = data, accountUsage(data)
+	return insp
+}
+
+// page is the account's muse.ai tab for a check or a sign-in.
+func (s *Site) page(b *browser.Browser) *chromePage {
+	cfg := s.cfg.Get()
+	return &chromePage{
+		port: b.Port, policy: cfg.Accounts,
+		callTimeout: time.Duration(cfg.Accounts.RequestTimeoutSeconds) * time.Second,
+		sendTimeout: time.Duration(cfg.Muse.SendTimeoutSeconds) * time.Second,
+	}
+}
+
+// accountUsage is the account card: the quota, then the setup reply's time.
+func accountUsage(data museData) []accounts.UsageItem {
+	items := quotaUsage(data.Quota)
+	if data.SetupDoneAt != "" {
+		value := "Muse đã trả lời"
+		if t, err := time.Parse(time.RFC3339, data.SetupDoneAt); err == nil {
+			value += " " + t.Local().Format("15:04 02/01")
+		}
+		items = append(items, accounts.UsageItem{Label: "Tin nhắn thiết lập", Value: value})
+	}
+	return items
 }
 
 // quotaResumes reports whether a freshly read quota ends the account's rest:

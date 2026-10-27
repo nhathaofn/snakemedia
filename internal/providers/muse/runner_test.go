@@ -14,7 +14,7 @@ import (
 
 func TestRunJobSendsPollsAndDownloads(t *testing.T) {
 	events, files := videoResult("/out/a.mp4", []byte("video-bytes"))
-	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "idle"}, events: events, files: files}
+	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "completed"}, events: events, files: files}
 	p := testProvider(t, page)
 	acc := addSignedIn(t, p, "A")
 	job := submit(t, p, MuseJobVideo, "một con mèo")[0]
@@ -25,7 +25,7 @@ func TestRunJobSendsPollsAndDownloads(t *testing.T) {
 	if got.Status != MuseJobSucceeded || got.SessionID != "s1" || got.Attempts != 1 || len(got.Files) != 1 {
 		t.Fatalf("job = %+v", got)
 	}
-	if len(page.sends) != 1 || page.sends[0] != "Tạo video\nmột con mèo" {
+	if len(page.sends) != 1 || page.sends[0] != "Task: Create a new video.\nPrompt:\nmột con mèo" {
 		t.Fatalf("sent %q", page.sends)
 	}
 	path, err := p.media.Path(got.Files[0])
@@ -42,7 +42,7 @@ func TestRunJobSendsPollsAndDownloads(t *testing.T) {
 
 func TestResumedJobIsNeverSentAgain(t *testing.T) {
 	events, files := videoResult("/out/b.mp4", []byte("v"))
-	page := &fakePage{loggedIn: true, statuses: []string{"idle"}, history: events, files: files} // Muse finished while the app was closed
+	page := &fakePage{loggedIn: true, statuses: []string{"completed"}, history: events, files: files} // Muse finished while the app was closed
 	p := testProvider(t, page)
 	acc := addSignedIn(t, p, "A")
 	job := submit(t, p, MuseJobVideo, "x")[0]
@@ -93,8 +93,10 @@ func TestUnknownSendOutcomeFailsWithoutRetry(t *testing.T) {
 	}
 }
 
+// A run Muse completed without the file, on an account with usage left, is
+// Muse declining the prompt, whatever its reply says.
 func TestPolicyReplyFailsAtOnce(t *testing.T) {
-	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "idle"},
+	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "completed"},
 		events: []AssistantEvent{{Text: "Mình không thể hỗ trợ yêu cầu này vì vi phạm chính sách."}}}
 	p := testProvider(t, page)
 	acc := addSignedIn(t, p, "A")
@@ -108,8 +110,8 @@ func TestPolicyReplyFailsAtOnce(t *testing.T) {
 }
 
 func TestUsageReplyRequeuesAndRestsAccount(t *testing.T) {
-	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "idle"},
-		events: []AssistantEvent{{Text: "You have reached your weekly limit."}}}
+	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "completed"},
+		events: []AssistantEvent{{Text: "Bạn đã dùng hết lượt."}}, quota: &MuseQuota{PercentUsed: 100}}
 	p := testProvider(t, page)
 	acc := addSignedIn(t, p, "A")
 	job := submit(t, p, MuseJobVideo, "x")[0]
@@ -126,8 +128,8 @@ func TestUsageReplyRequeuesAndRestsAccount(t *testing.T) {
 	}
 }
 
-func TestNoFileRetriesInNewChatUntilAttemptsRunOut(t *testing.T) {
-	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "idle"},
+func TestInterruptedRunRetriesInNewChatUntilAttemptsRunOut(t *testing.T) {
+	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "interrupted"},
 		events: []AssistantEvent{{Text: "Đã có lỗi kỹ thuật."}}}
 	p := testProvider(t, page)
 	acc := addSignedIn(t, p, "A")
@@ -137,7 +139,7 @@ func TestNoFileRetriesInNewChatUntilAttemptsRunOut(t *testing.T) {
 	if got := mustJob(t, p, job.ID); got.Status != MuseJobQueued || got.SessionID != "" || got.Attempts != 1 {
 		t.Fatalf("after first try: %+v", got)
 	}
-	page.statuses = []string{"running", "idle"}
+	page.statuses = []string{"running", "interrupted"}
 	p.runOne(context.Background(), job.ID, acc.ID)
 	if got := mustJob(t, p, job.ID); got.Status != MuseJobFailed || got.Attempts != 2 {
 		t.Fatalf("after second try: %+v", got)
@@ -164,7 +166,7 @@ func TestSignedOutAccountReturnsJobWithoutSpendingAttempt(t *testing.T) {
 }
 
 func TestImageJobCollectsEveryImage(t *testing.T) {
-	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "idle"},
+	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "completed"},
 		events: []AssistantEvent{{Images: []ResultMedia{
 			{Path: "/1.png", Mime: "image/png", ByteLen: 1}, {Path: "/2.png", Mime: "image/png", ByteLen: 1},
 		}, Videos: []ResultMedia{{Path: "/x.mp4", Mime: "video/mp4", ByteLen: 1}}}},
@@ -178,13 +180,13 @@ func TestImageJobCollectsEveryImage(t *testing.T) {
 	if got := mustJob(t, p, job.ID); got.Status != MuseJobSucceeded || len(got.Files) != 2 {
 		t.Fatalf("job = %+v", got)
 	}
-	if page.sends[0] != "Tạo ảnh\nx" {
+	if page.sends[0] != "Task: Create a new image.\nPrompt:\nx" {
 		t.Fatalf("sent %q", page.sends[0])
 	}
 }
 
 func TestDownloadRejectsWrongSize(t *testing.T) {
-	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "idle"},
+	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "completed"},
 		events: []AssistantEvent{{Videos: []ResultMedia{{Path: "/v.mp4", Mime: "video/mp4", ByteLen: 10}}}},
 		files:  map[string][]byte{"/v.mp4": []byte("short")}}
 	p := testProvider(t, page)
@@ -201,7 +203,7 @@ func TestDownloadRejectsWrongSize(t *testing.T) {
 // Reference images are checked against the limits Muse's composer has for
 // the account, read from the page when the account has none stored.
 func TestAttachmentsFollowMuseLimits(t *testing.T) {
-	page := &fakePage{loggedIn: true, caps: testCaps(), sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "idle"}}
+	page := &fakePage{loggedIn: true, caps: testCaps(), sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "completed"}}
 	page.events, page.files = videoResult("/v.mp4", []byte("v"))
 	p := testProvider(t, page)
 	acc := addSignedIn(t, p, "A")
@@ -217,7 +219,7 @@ func TestAttachmentsFollowMuseLimits(t *testing.T) {
 	if got := mustJob(t, p, job.ID); got.Status != MuseJobSucceeded {
 		t.Fatalf("job = %+v", got)
 	}
-	if atts := page.attachments[0]; len(atts) != 1 || atts[0].MimeType != "image/png" || atts[0].Filename != "anh_1.png" {
+	if atts := page.attachments[0]; len(atts) != 1 || atts[0].MimeType != "image/png" || atts[0].Filename != "image_1.png" {
 		t.Fatalf("attachments = %+v", atts)
 	}
 	if a, _ := p.accounts.Record(acc.ID); func() bool {

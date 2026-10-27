@@ -8,7 +8,6 @@ import { useAppStore } from '../../../../stores';
 import { FlowImageProjectMode, GenerateImageRequest } from '../../../../types';
 import {
   ConversationGallery,
-  PromptBar,
   cssAspectRatio,
   selectedModelOf,
   useRestoreJobs,
@@ -18,6 +17,7 @@ import {
   useStudioSubmit,
 } from '../../shared';
 import { useFlowImageStore } from '../store/flowImageStore';
+import { PromptBar } from '../../../../components/studio';
 
 /** Single studio's saved jobs; All-mode jobs belong to the queue, not this conversation. */
 const listPendingSingleImages = () => api.listPendingImageGenerations(FlowImageProjectMode.Single);

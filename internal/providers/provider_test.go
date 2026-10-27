@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"SnakeMedia/internal/accounts"
 	"SnakeMedia/internal/browser"
@@ -89,5 +90,29 @@ func TestUnresolvedOptionSourceIsAWiringError(t *testing.T) {
 	set.Build(Deps{})
 	if err := set.Register(engine.NewRegistry()); err == nil {
 		t.Fatal("a setting whose options nobody provides must stop the app at start")
+	}
+}
+
+type stuckProvider struct {
+	stubProvider
+	release chan struct{}
+}
+
+func (p *stuckProvider) Close() { <-p.release }
+
+func TestCloseDoesNotWaitForeverOnAStuckProvider(t *testing.T) {
+	var log []string
+	stuck := &stuckProvider{stubProvider: stubProvider{id: "stuck", log: &log}, release: make(chan struct{})}
+	defer close(stuck.release)
+	set := &Set{built: []Provider{stuck}, closeWait: 50 * time.Millisecond}
+	done := make(chan struct{})
+	go func() {
+		set.Close()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close kept waiting on a provider that never closes")
 	}
 }

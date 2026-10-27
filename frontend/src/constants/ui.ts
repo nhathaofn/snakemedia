@@ -47,5 +47,5 @@ export const LIST_REVEAL_STEP = 40;
 /** Accounts checked at once by "Kiểm tra tất cả"; each check may start a browser. */
 export const ACCOUNT_CHECK_CONCURRENCY = 3;
 
-/** Largest "repeat each prompt" a batch form accepts, so a typo cannot queue hundreds of paid jobs. */
-export const BATCH_MAX_REPEAT = 20;
+/** Most variants one Muse Đơn prompt can ask for; each is its own paid Muse chat. */
+export const MUSE_SINGLE_MAX_VARIANTS = 4;

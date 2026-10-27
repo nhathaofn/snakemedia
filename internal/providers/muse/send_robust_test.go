@@ -12,69 +12,34 @@ import (
 	"SnakeMedia/internal/accounts"
 )
 
-// Muse answering "out of usage" moves a job on, but only a few times: each
-// answer was a chat turn on some account.
+// A chat ending without a file on a used-up account moves the job on, but
+// only a few times: each was a chat turn on some account.
 func TestLimitRepliesAreCapped(t *testing.T) {
 	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"},
-		events: []AssistantEvent{{Text: "Bạn đã hết lượt tạo video hôm nay"}}}
+		events: []AssistantEvent{{Text: "Bạn đã hết lượt tạo video hôm nay"}}, quota: &MuseQuota{PercentUsed: 100}}
 	p := testProvider(t, page)
 	acc := addSignedIn(t, p, "A")
 	job := submit(t, p, MuseJobVideo, "x")[0]
 
+	// Each run stands for another account that still looked usable.
+	fresh := func() {
+		p.updateAccount(acc.ID, func(r *accounts.Record, d *museData) { r.PausedUntil, d.Quota = "", nil })
+	}
 	for i := 1; i < maxLimitReplies; i++ {
+		fresh()
 		p.runOne(context.Background(), job.ID, acc.ID)
 		if got := mustJob(t, p, job.ID); got.Status != MuseJobQueued || got.Attempts != 0 {
 			t.Fatalf("after %d limit replies: %+v", i, got)
 		}
 	}
+	fresh()
 	p.runOne(context.Background(), job.ID, acc.ID)
 	got := mustJob(t, p, job.ID)
-	if got.Status != MuseJobFailed || !strings.Contains(got.Error, "hết lượt hoặc cần xác minh") {
+	if got.Status != MuseJobFailed || !strings.Contains(got.Error, "hết lượt") {
 		t.Fatalf("job = %+v", got)
 	}
 	if len(page.sends) != maxLimitReplies {
 		t.Fatalf("sends = %d", len(page.sends))
-	}
-}
-
-// A verification request stops the account for the user, and the job waits
-// for another account without spending an attempt.
-func TestVerifyReplyStopsAccount(t *testing.T) {
-	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"},
-		events: []AssistantEvent{{Text: "Vui lòng xác minh tài khoản của bạn để tiếp tục."}}}
-	p := testProvider(t, page)
-	acc := addSignedIn(t, p, "A")
-	job := submit(t, p, MuseJobVideo, "x")[0]
-
-	p.runOne(context.Background(), job.ID, acc.ID)
-
-	if got := mustJob(t, p, job.ID); got.Status != MuseJobQueued || got.Attempts != 0 {
-		t.Fatalf("job = %+v", got)
-	}
-	if a, _ := p.accounts.Record(acc.ID); a.Status != accounts.StatusError || !strings.Contains(a.Message, "xác minh") {
-		t.Fatalf("account = %+v", a.Account)
-	}
-}
-
-func TestOrdinaryRepliesAreNotPolicyOrUsage(t *testing.T) {
-	var muse *museError
-	for _, reply := range []string{
-		"Theo chính sách giá mới, video dài hơn sẽ đẹp hơn.",
-		"Here are some guidelines for a better prompt.",
-		"Kích thước này không phù hợp lắm, tôi đã chỉnh lại.",
-		"Ảnh vượt quá giới hạn ký tự mô tả.",
-	} {
-		if err := classifyReply(reply, "ảnh"); !errors.As(err, &muse) {
-			t.Errorf("%q classified as %T", reply, err)
-		}
-	}
-	var policy *policyError
-	if !errors.As(classifyReply("Yêu cầu này vi phạm chính sách nội dung.", "ảnh"), &policy) {
-		t.Error("policy reply not recognised")
-	}
-	var verify *verifyError
-	if !errors.As(classifyReply("Please verify your account to continue.", "ảnh"), &verify) {
-		t.Error("verify reply not recognised")
 	}
 }
 
@@ -202,18 +167,6 @@ func TestOnlyQuotaRestsEndWithTheQuota(t *testing.T) {
 		t.Error("a used-up quota ended a rest")
 	}
 
-	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"},
-		events: []AssistantEvent{{Text: "Too many requests, rate limit reached."}}, quota: room}
-	p := testProvider(t, page)
-	acc := addSignedIn(t, p, "A")
-	job := submit(t, p, MuseJobVideo, "x")[0]
-	p.runOne(context.Background(), job.ID, acc.ID)
-	a, _ := p.accounts.Record(acc.ID)
-	var data museData
-	_ = accounts.DecodeData(a, &data)
-	if data.RestReason != restLimit || a.PausedUntil == "" {
-		t.Fatalf("rest = %q until %q", data.RestReason, a.PausedUntil)
-	}
 }
 
 func TestWaitingSentJobSaysWhy(t *testing.T) {

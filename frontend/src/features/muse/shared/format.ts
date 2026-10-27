@@ -1,5 +1,5 @@
-import { MuseJobStatus } from '../../../types';
-import type { MuseJob } from '../../../types';
+import { MuseJobMode, MuseJobStatus } from '../../../types';
+import type { MuseJob, MuseJobKind } from '../../../types';
 
 export const jobStatusLabels: Record<MuseJobStatus, string> = {
   [MuseJobStatus.Queued]: 'Chờ chạy',
@@ -42,4 +42,42 @@ export function mergeSnapshot(
  */
 export function selectedShown(shown: readonly MuseJob[], selected: ReadonlySet<string>): string[] {
   return shown.filter((job) => selected.has(job.id)).map((job) => job.id);
+}
+
+/** The screen a job belongs to; jobs saved before modes existed are Hàng loạt. */
+export function jobMode(job: MuseJob): MuseJobMode {
+  return job.mode || MuseJobMode.Batch;
+}
+
+/** The jobs of one studio screen (kind and mode), in the store's order. */
+export function jobsOf(jobs: readonly MuseJob[], kind: MuseJobKind, mode: MuseJobMode): MuseJob[] {
+  return jobs.filter((job) => job.kind === kind && jobMode(job) === mode);
+}
+
+/** Queue filter: every job, one status, or the jobs on hold. */
+export type QueueFilter = 'all' | MuseJobStatus | 'held';
+
+/** Whether job shows under filter. */
+export function matchesFilter(job: MuseJob, filter: QueueFilter): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'held') return !!job.held;
+  return job.status === filter;
+}
+
+/** Whether the job is waiting for or running on Muse. */
+export function isActive(job: MuseJob): boolean {
+  return job.status === MuseJobStatus.Queued || job.status === MuseJobStatus.Processing;
+}
+
+/**
+ * Whether Muse took (or may have taken) the job's last send, so running it
+ * again costs another turn. Mirrors the backend's mayBePaid.
+ */
+export function mayBePaid(job: MuseJob): boolean {
+  return !!job.sessionId || !!job.sendUnknown;
+}
+
+/** Whether the job ended without files (failed or cancelled). */
+export function isEnded(job: MuseJob): boolean {
+  return job.status === MuseJobStatus.Failed || job.status === MuseJobStatus.Cancelled;
 }
