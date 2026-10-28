@@ -73,6 +73,23 @@ type MuseJob struct {
 	Label string `json:"label,omitempty"`
 	// References are local media URLs of the attached images, in order.
 	References []string `json:"references"`
+	// RefInfo gives References their tag, role and lock (assets.go), in the
+	// same order; empty for jobs whose images carry no role, which keep the
+	// plain Reference lines.
+	RefInfo []MuseRefInfo `json:"refInfo,omitempty"`
+	// BoardFrames on an image job asks for that many storyboard frames
+	// (storyboard.go). On a video job it is how many Frames open its scenes.
+	BoardFrames int `json:"boardFrames,omitempty"`
+	// After is the storyboard image job a video job waits for; Frames are
+	// that job's images, attached before References once it succeeded.
+	After  string   `json:"after,omitempty"`
+	Frames []string `json:"frames,omitempty"`
+	// Review holds the video once its frames arrive, whatever ran it before,
+	// so the user sees the storyboard and runs the video themselves.
+	Review bool `json:"review,omitempty"`
+	// SourceVideo is a local media URL of a video whose camera, timing and
+	// motion the job recreates (v2v), attached before every image.
+	SourceVideo string `json:"sourceVideo,omitempty"`
 	// OutputDir is the batch's own folder (under the folder the user chose,
 	// see batchFolder) a Hàng loạt job's files are saved into, and Index the
 	// prompt's place in that batch (from 1), which numbers them
@@ -85,6 +102,15 @@ type MuseJob struct {
 	Duration int    `json:"duration,omitempty"`
 	// FormatNote says how the made file differs from Ratio or Duration.
 	FormatNote string `json:"formatNote,omitempty"`
+	// ChangeNote is what Muse changed from the prompt to get a long video past
+	// its video tool (the reply's CHANGED line).
+	ChangeNote string `json:"changeNote,omitempty"`
+	// Continues counts the continue messages sent into a long video's chat
+	// (longvideo.go); RepliesSeen is how many chat events were read before the
+	// last one, so only a newer reply ends its turn. Both are written before
+	// the message leaves the app.
+	Continues   int `json:"continues,omitempty"`
+	RepliesSeen int `json:"repliesSeen,omitempty"`
 	// Rechecks counts failed attempts to read back a job Muse already accepted.
 	Rechecks int `json:"rechecks,omitempty"`
 	// Held jobs wait in the queue until the user runs them.
@@ -130,7 +156,8 @@ func resetForRetry(j *MuseJob) {
 // resetForQueue clears everything a previous run left behind, so a job sent
 // again starts a fresh chat from its first turn.
 func resetForQueue(j *MuseJob) {
-	j.Status, j.Step, j.Error, j.FormatNote = MuseJobQueued, "", "", ""
+	j.Status, j.Step, j.Error, j.FormatNote, j.ChangeNote = MuseJobQueued, "", "", "", ""
+	j.Continues, j.RepliesSeen = 0, 0
 	j.AccountID, j.SessionID, j.Sending, j.SendUnknown, j.Rechecks = "", "", false, false, 0
 	j.Files, j.SavedFiles = []string{}, []string{}
 	j.StartedAt, j.SentAt, j.FinishedAt = "", "", ""
@@ -141,6 +168,15 @@ func resetForQueue(j *MuseJob) {
 // SendUnknown existed are recognised by their error.
 func (j MuseJob) mayBePaid() bool {
 	return j.SessionID != "" || j.SendUnknown || j.Error == errSendUnknown.Error()
+}
+
+// screenKind is the screen a job belongs to: a storyboard's image job is
+// part of the video it opens.
+func (j MuseJob) screenKind() MuseJobKind {
+	if j.Kind == MuseJobImage && j.BoardFrames > 0 {
+		return MuseJobVideo
+	}
+	return j.Kind
 }
 
 func (j MuseJob) finished() bool {

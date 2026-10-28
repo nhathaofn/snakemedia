@@ -1,4 +1,5 @@
 import { Clapperboard, Image, Scissors, Settings, Workflow } from 'lucide-react';
+import { FlowPreviousRunReport } from './shared/PreviousRunReport';
 import type { AppSection } from '../../types';
 import { FlowEditPage } from './edit/FlowEditPage';
 import { FlowImagePage } from './image/FlowImagePage';
@@ -11,6 +12,8 @@ export const flowSection = {
   path: '/flow',
   label: 'Flow',
   icon: Workflow,
+  // Tells the start question what the earlier run left in Chỉnh sửa video.
+  startup: <FlowPreviousRunReport />,
   features: [
     {
       id: 'image',

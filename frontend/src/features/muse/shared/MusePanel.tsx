@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { ImagePlus, X } from 'lucide-react';
 import { AccountWarning } from '../../../components/accounts';
@@ -143,6 +144,13 @@ export function FormatFields({
 }) {
   const ratios = (options?.ratios ?? []).filter((r) => r.kinds.includes(kind));
   const video = kind === MuseJobKind.Video;
+  const durations = options?.durations ?? [];
+  // A length kept from an older build that Muse no longer offers falls back
+  // to "Theo prompt" rather than failing the next submit.
+  const stale = video && duration !== 0 && durations.length > 0 && !durations.includes(duration);
+  useEffect(() => {
+    if (stale) onChange({ duration: 0 });
+  }, [stale, onChange]);
   return (
     <div className="muse-format-fields">
       <label className="studio-field-group">
@@ -169,9 +177,9 @@ export function FormatFields({
             onChange={(e) => onChange({ duration: Number(e.target.value) })}
           >
             <option value={0}>Theo prompt</option>
-            {(options?.durations ?? []).map((d) => (
+            {durations.map((d) => (
               <option key={d} value={d}>
-                {d} giây
+                {durationLabel(d, options?.clipSeconds ?? 0)}
               </option>
             ))}
           </select>
@@ -179,4 +187,13 @@ export function FormatFields({
       )}
     </div>
   );
+}
+
+/**
+ * A video length as the select shows it: one clip, or a long video Muse makes
+ * as several clips joined in one chat, each a next moment of the prompt.
+ */
+function durationLabel(seconds: number, clipSeconds: number): string {
+  if (clipSeconds <= 0 || seconds <= clipSeconds) return `${seconds} giây`;
+  return `${seconds} giây · ghép ${Math.ceil(seconds / clipSeconds)} cảnh`;
 }

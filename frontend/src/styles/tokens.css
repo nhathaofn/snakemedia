@@ -128,6 +128,12 @@
   --flow-edit-trim-label-width: 56px;
   --account-avatar-size: 40px;
   --muse-thumb-size: 64px;
+  --muse-asset-card-min: 260px;
+  --muse-asset-card-min: 180px;
+  --muse-template-card-min: 300px;
+  --muse-asset-dialog-width: 620px;
+  --muse-asset-image-size: 120px;
+  --muse-lead-max: 640px;
   --muse-result-width: 240px;
   /* Placeholder heights for off-screen list items (content-visibility). */
   --muse-tile-placeholder-height: 300px;

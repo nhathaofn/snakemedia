@@ -1,11 +1,12 @@
 import { useCallback, useMemo } from 'react';
 import { api, unwrap } from '../../../services';
 import { useAppStore } from '../../../stores';
-import { MuseJobRequest } from '../../../types';
+import { MuseJobKind as Kind, MuseJobRequest, MuseStoryboard } from '../../../types';
 import type { MuseJob, MuseJobKind, MuseJobMode } from '../../../types';
 import { mayBePaid } from './format';
 import type { MuseDraft } from './museDraft';
 import { useMuseStore } from './museStore';
+import { liveAssetIds } from './museStudioStore';
 
 const RETRY_PAID_CONFIRM = 'Muse có thể đã nhận tác vụ này. Chạy lại sẽ tốn thêm 1 lượt?';
 
@@ -89,7 +90,7 @@ export function useMuseSubmit(kind: MuseJobKind, mode: MuseJobMode) {
       prompts: string[],
       repeat: number,
       held: boolean,
-      draft: Pick<MuseDraft, 'references' | 'ratio' | 'duration'>,
+      draft: Pick<MuseDraft, 'references' | 'ratio' | 'duration'> & Partial<MuseDraft>,
       outputDir = '',
     ) => {
       try {
@@ -106,6 +107,16 @@ export function useMuseSubmit(kind: MuseJobKind, mode: MuseJobMode) {
               outputDir,
               ratio: draft.ratio,
               duration: draft.duration,
+              refMode: draft.refMode || undefined,
+              assets: draft.assetIds?.length ? liveAssetIds(draft.assetIds) : undefined,
+              storyboard:
+                kind === Kind.Video && (draft.boardFrames ?? 0) > 0
+                  ? MuseStoryboard.createFrom({
+                      frames: draft.boardFrames,
+                      review: draft.boardReview ?? false,
+                    })
+                  : undefined,
+              sourceVideo: draft.sourceVideo?.localUrl || undefined,
             }),
           ),
         );

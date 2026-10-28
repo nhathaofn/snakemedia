@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { create } from 'zustand';
-import type { MuseJobKind, MuseJobMode, MuseReference } from '../../../types';
+import type { MuseJobKind, MuseJobMode, MuseRefMode, MuseReference } from '../../../types';
 
 /**
  * What one studio screen holds before it is sent: prompt and variants (Đơn
@@ -13,9 +13,29 @@ export interface MuseDraft {
   references: MuseReference[];
   ratio: string;
   duration: number;
+  /** How a batch's own images go to its prompts; empty shares them. */
+  refMode: MuseRefMode | '';
+  /** Assets attached to every prompt (a fixed model or product). */
+  assetIds: string[];
+  /** Storyboard frames drawn before each video (0: none), and whether the video waits for review. */
+  boardFrames: number;
+  boardReview: boolean;
+  /** A video whose movement every prompt recreates (v2v). */
+  sourceVideo: MuseReference | null;
 }
 
-const EMPTY: MuseDraft = { prompt: '', variants: 1, references: [], ratio: '', duration: 0 };
+const EMPTY: MuseDraft = {
+  prompt: '',
+  variants: 1,
+  references: [],
+  ratio: '',
+  duration: 0,
+  refMode: '',
+  assetIds: [],
+  boardFrames: 0,
+  boardReview: false,
+  sourceVideo: null,
+};
 
 const useDrafts = create<{
   drafts: Record<string, MuseDraft>;

@@ -11,6 +11,8 @@ import (
 )
 
 func TestMessageAsksForRatioAndDuration(t *testing.T) {
+	// A one-clip video carries the one-clip guide before the prompt.
+	oneClip := strings.Join(shortVideoLines(MuseJob{Kind: MuseJobVideo}), "\n")
 	cases := []struct {
 		job  MuseJob
 		want string
@@ -18,21 +20,21 @@ func TestMessageAsksForRatioAndDuration(t *testing.T) {
 		{MuseJob{Kind: MuseJobImage, Prompt: "p"}, "Task: Create a new image.\nPrompt:\np"},
 		{MuseJob{Kind: MuseJobImage, Prompt: "p", Ratio: "3:4"},
 			"Task: Create a new image.\nAspect ratio: 3:4 (portrait)\nPrompt:\np"},
-		{MuseJob{Kind: MuseJobVideo, Prompt: "p", Ratio: "16:9", Duration: 8},
-			"Task: Create a new video.\nAspect ratio: 16:9 (landscape)\nDuration: 8 seconds\nPrompt:\np"},
-		{MuseJob{Kind: MuseJobVideo, Prompt: "p", Duration: 5}, "Task: Create a new video.\nDuration: 5 seconds\nPrompt:\np"},
+		{MuseJob{Kind: MuseJobVideo, Prompt: "p", Ratio: "16:9", Duration: 10},
+			"Task: Create a new video.\nAspect ratio: 16:9 (landscape)\nDuration: 10 seconds\n" + oneClip + "\nPrompt:\np"},
+		{MuseJob{Kind: MuseJobVideo, Prompt: "p", Duration: 10}, "Task: Create a new video.\nDuration: 10 seconds\n" + oneClip + "\nPrompt:\np"},
 		// An image never asks for a length, nor for a ratio it is not offered.
 		{MuseJob{Kind: MuseJobImage, Prompt: "p", Duration: 5}, "Task: Create a new image.\nPrompt:\np"},
 		// One attached image is the subject, kept as drawn; its role is the
 		// prompt's to change, and the ratio asked wins over the image's shape.
-		{MuseJob{Kind: MuseJobVideo, Prompt: "p", References: []string{"r"}, Ratio: "1:1", Duration: 5},
+		{MuseJob{Kind: MuseJobVideo, Prompt: "p", References: []string{"r"}, Ratio: "1:1", Duration: 10},
 			"Task: Create a new video.\n" +
 				"Reference: The attached image (image 1) shows the subject of this video; " +
 				"keep its design, colors, details and art style exactly, consistent in every frame. " +
 				"Do not copy the image's background, framing or pose; take those from the prompt. " +
 				"If the prompt gives the image another role (for example the style only, or the opening frame), follow the prompt instead.\n" +
 				"Aspect ratio: 1:1 (square). Frame the video in this ratio, not in the shape of the attached images.\n" +
-				"Duration: 5 seconds\nPrompt:\np"},
+				"Duration: 10 seconds\n" + oneClip + "\nPrompt:\np"},
 	}
 	for _, c := range cases {
 		if got := buildMessage(c.job); got != c.want {

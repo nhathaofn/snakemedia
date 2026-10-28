@@ -37,8 +37,13 @@ var museRatios = []MuseRatio{
 	{Value: "9:16", Label: "dọc", Kinds: []MuseJobKind{MuseJobImage, MuseJobVideo}},
 }
 
-// museDurations are the video lengths (seconds) Muse makes exactly.
-var museDurations = []int{2, 3, 4, 5, 6, 7, 8, 9, 10}
+// museDurations are the video lengths (seconds) the screens offer: one clip
+// (10 seconds, Muse's longest), or a long video Muse makes as several clips
+// joined in one chat (longvideo.go), up to museVideosPerMessage clips, one
+// message's worth. Read live on 2026-10-28: with the long video guide, 20,
+// 30, 40 and 60 seconds came out exact, one cast and the prompt followed in
+// order; without it Muse joined near copies of one clip.
+var museDurations = []int{10, 20, 30, 40, 50, 60}
 
 // Result checks: a file whose shape is off by more than ratioTolerance (or
 // turned the other way), or whose length is off by more than

@@ -107,7 +107,7 @@ func plan(jobs []MuseJob, accs []MuseAccount, cfg config.MuseConfig, running map
 
 	queued := make([]MuseJob, 0)
 	for _, job := range jobs {
-		if _, ok := running[job.ID]; !ok && job.Status == MuseJobQueued && !job.Held {
+		if _, ok := running[job.ID]; !ok && job.Status == MuseJobQueued && !job.Held && !waitsForBoard(job) {
 			queued = append(queued, job)
 		}
 	}

@@ -2,6 +2,7 @@ import { flowSection } from '../features/flow/section';
 import { homeSection } from '../features/home/section';
 import { museSection } from '../features/muse/section';
 import { settingsSection } from '../features/settings/section';
+import type { ReactNode } from 'react';
 import type { AppSection, FeatureRoute, NavigationItem, SectionPlacement } from '../types';
 
 /**
@@ -17,6 +18,11 @@ import type { AppSection, FeatureRoute, NavigationItem, SectionPlacement } from 
 const SECTIONS = [homeSection, flowSection, museSection, settingsSection] as const;
 
 export const APP_SECTIONS: readonly AppSection[] = SECTIONS;
+
+/** What the sections mount for the whole run (AppSection.startup), in section order. */
+export const STARTUP_ELEMENTS: readonly { id: string; element: ReactNode }[] = APP_SECTIONS.filter(
+  (s) => s.startup,
+).map((s) => ({ id: s.id, element: s.startup }));
 
 /** Absolute URL of a feature, e.g. '/home/accounts'. */
 export const featurePath = (section: AppSection, feature: FeatureRoute): string =>

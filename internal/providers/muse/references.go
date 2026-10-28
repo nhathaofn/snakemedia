@@ -22,22 +22,31 @@ const referenceRetention = 7 * 24 * time.Hour
 // journal uses and that are older than referenceRetention. It returns how
 // many files went.
 func (p *Provider) sweepReferences() int {
+	used := map[string]bool{}
+	for _, job := range p.jobs.list() {
+		for _, ref := range job.References {
+			used[ref] = true
+		}
+		if job.SourceVideo != "" {
+			used[job.SourceVideo] = true
+		}
+	}
+	return p.sweepMedia(referencePrefix, used)
+}
+
+// sweepMedia deletes the media files named with prefix whose local URL is not
+// in used and that are older than referenceRetention.
+func (p *Provider) sweepMedia(prefix string, used map[string]bool) int {
 	dir := p.media.Dir()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return 0
 	}
-	used := map[string]bool{}
-	for _, job := range p.jobs.list() {
-		for _, ref := range job.References {
-			used[strings.TrimPrefix(ref, media.Route)] = true
-		}
-	}
 	cutoff := p.now().Add(-referenceRetention)
 	removed := 0
 	for _, e := range entries {
 		name := e.Name()
-		if !e.Type().IsRegular() || !strings.HasPrefix(name, referencePrefix) || used[name] {
+		if !e.Type().IsRegular() || !strings.HasPrefix(name, prefix) || used[media.Route+name] {
 			continue
 		}
 		info, err := e.Info()
@@ -45,13 +54,13 @@ func (p *Provider) sweepReferences() int {
 			continue
 		}
 		if err := os.Remove(filepath.Join(dir, name)); err != nil {
-			logger.Get().Warn("muse reference not removed", "file", name, "error", err)
+			logger.Get().Warn("muse media not removed", "file", name, "error", err)
 			continue
 		}
 		removed++
 	}
 	if removed > 0 {
-		logger.Get().Info("muse unused references removed", "count", removed)
+		logger.Get().Info("muse unused media removed", "prefix", prefix, "count", removed)
 	}
 	return removed
 }

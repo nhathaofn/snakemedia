@@ -30,6 +30,10 @@ export function CheckForUpdate() {
   return window['go']['main']['App']['CheckForUpdate']();
 }
 
+export function CheckMusePrompt(arg1, arg2) {
+  return window['go']['main']['App']['CheckMusePrompt'](arg1, arg2);
+}
+
 export function CheckProxies() {
   return window['go']['main']['App']['CheckProxies']();
 }
@@ -154,12 +158,20 @@ export function ListFlowProjectImages(arg1, arg2, arg3) {
   return window['go']['main']['App']['ListFlowProjectImages'](arg1, arg2, arg3);
 }
 
+export function ListMuseAssets() {
+  return window['go']['main']['App']['ListMuseAssets']();
+}
+
 export function ListMuseJobs() {
   return window['go']['main']['App']['ListMuseJobs']();
 }
 
 export function ListMuseLibrary() {
   return window['go']['main']['App']['ListMuseLibrary']();
+}
+
+export function ListMuseTemplates() {
+  return window['go']['main']['App']['ListMuseTemplates']();
 }
 
 export function ListNodes() {
@@ -194,8 +206,16 @@ export function PickFlowImageReferences() {
   return window['go']['main']['App']['PickFlowImageReferences']();
 }
 
+export function PickMuseAssetImages() {
+  return window['go']['main']['App']['PickMuseAssetImages']();
+}
+
 export function PickMuseReferences() {
   return window['go']['main']['App']['PickMuseReferences']();
+}
+
+export function PickMuseSourceVideo() {
+  return window['go']['main']['App']['PickMuseSourceVideo']();
 }
 
 export function PickVideo() {
@@ -210,6 +230,10 @@ export function RemoveFlowImageTasks(arg1) {
   return window['go']['main']['App']['RemoveFlowImageTasks'](arg1);
 }
 
+export function RemoveMuseAssets(arg1) {
+  return window['go']['main']['App']['RemoveMuseAssets'](arg1);
+}
+
 export function RemoveMuseJob(arg1) {
   return window['go']['main']['App']['RemoveMuseJob'](arg1);
 }
@@ -220,6 +244,10 @@ export function RemoveMuseJobs(arg1) {
 
 export function RemoveMuseLibraryItems(arg1) {
   return window['go']['main']['App']['RemoveMuseLibraryItems'](arg1);
+}
+
+export function RemoveMuseTemplate(arg1) {
+  return window['go']['main']['App']['RemoveMuseTemplate'](arg1);
 }
 
 export function RenameAccount(arg1, arg2) {
@@ -276,6 +304,14 @@ export function RunMuseJobs(arg1) {
 
 export function SaveMedia(arg1) {
   return window['go']['main']['App']['SaveMedia'](arg1);
+}
+
+export function SaveMuseAsset(arg1) {
+  return window['go']['main']['App']['SaveMuseAsset'](arg1);
+}
+
+export function SaveMuseTemplate(arg1) {
+  return window['go']['main']['App']['SaveMuseTemplate'](arg1);
 }
 
 export function SaveProxies(arg1) {

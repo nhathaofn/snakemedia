@@ -25,7 +25,7 @@ func TestRunJobSendsPollsAndDownloads(t *testing.T) {
 	if got.Status != MuseJobSucceeded || got.SessionID != "s1" || got.Attempts != 1 || len(got.Files) != 1 {
 		t.Fatalf("job = %+v", got)
 	}
-	if len(page.sends) != 1 || page.sends[0] != "Task: Create a new video.\nPrompt:\nmột con mèo" {
+	if len(page.sends) != 1 || page.sends[0] != "Task: Create a new video.\n"+strings.Join(shortVideoLines(MuseJob{Kind: MuseJobVideo}), "\n")+"\nPrompt:\nmột con mèo" {
 		t.Fatalf("sent %q", page.sends)
 	}
 	path, err := p.media.Path(got.Files[0])

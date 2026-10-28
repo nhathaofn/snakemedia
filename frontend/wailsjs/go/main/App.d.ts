@@ -21,6 +21,8 @@ export function CheckAccount(arg1:string):Promise<models.Response_SnakeMedia_int
 
 export function CheckForUpdate():Promise<models.Response_SnakeMedia_internal_updater_Release_>;
 
+export function CheckMusePrompt(arg1:string,arg2:Array<string>):Promise<models.Response_SnakeMedia_internal_providers_muse_MusePromptCheck_>;
+
 export function CheckProxies():Promise<models.Response___SnakeMedia_internal_proxy_CheckResult_>;
 
 export function ChooseBatchOutputDirectory(arg1:accounts.Provider):Promise<models.Response_SnakeMedia_internal_media_DirectoryResult_>;
@@ -83,9 +85,13 @@ export function ListFlowImageProjects(arg1:flow.ImageProjectMode):Promise<models
 
 export function ListFlowProjectImages(arg1:string,arg2:string,arg3:flow.ImageProjectMode):Promise<models.Response___SnakeMedia_internal_providers_flow_FlowProjectImage_>;
 
+export function ListMuseAssets():Promise<models.Response___SnakeMedia_internal_providers_muse_MuseAsset_>;
+
 export function ListMuseJobs():Promise<models.Response___SnakeMedia_internal_providers_muse_MuseJob_>;
 
 export function ListMuseLibrary():Promise<models.Response___SnakeMedia_internal_providers_muse_MuseLibraryItem_>;
+
+export function ListMuseTemplates():Promise<models.Response___SnakeMedia_internal_providers_muse_MusePromptTemplate_>;
 
 export function ListNodes():Promise<models.Response___SnakeMedia_internal_engine_Spec_>;
 
@@ -103,7 +109,11 @@ export function OpenMuseOutputFolder():Promise<models.Response_bool_>;
 
 export function PickFlowImageReferences():Promise<models.Response___SnakeMedia_internal_providers_flow_ImageTaskReference_>;
 
+export function PickMuseAssetImages():Promise<models.Response___SnakeMedia_internal_providers_muse_MuseReference_>;
+
 export function PickMuseReferences():Promise<models.Response___SnakeMedia_internal_providers_muse_MuseReference_>;
+
+export function PickMuseSourceVideo():Promise<models.Response_SnakeMedia_internal_providers_muse_MuseReference_>;
 
 export function PickVideo():Promise<models.Response_SnakeMedia_internal_media_ImportResult_>;
 
@@ -111,11 +121,15 @@ export function RemoveAccount(arg1:string):Promise<models.Response_bool_>;
 
 export function RemoveFlowImageTasks(arg1:Array<string>):Promise<models.Response_int_>;
 
+export function RemoveMuseAssets(arg1:Array<string>):Promise<models.Response_int_>;
+
 export function RemoveMuseJob(arg1:string):Promise<models.Response_bool_>;
 
 export function RemoveMuseJobs(arg1:Array<string>):Promise<models.Response_int_>;
 
 export function RemoveMuseLibraryItems(arg1:Array<string>):Promise<models.Response_int_>;
+
+export function RemoveMuseTemplate(arg1:string):Promise<models.Response_bool_>;
 
 export function RenameAccount(arg1:string,arg2:string):Promise<models.Response_SnakeMedia_internal_accounts_Account_>;
 
@@ -144,6 +158,10 @@ export function RunGraph(arg1:engine.Graph):Promise<models.Response_SnakeMedia_i
 export function RunMuseJobs(arg1:Array<string>):Promise<models.Response_int_>;
 
 export function SaveMedia(arg1:string):Promise<models.Response_SnakeMedia_internal_media_SaveResult_>;
+
+export function SaveMuseAsset(arg1:muse.MuseAsset):Promise<models.Response_SnakeMedia_internal_providers_muse_MuseAsset_>;
+
+export function SaveMuseTemplate(arg1:muse.MusePromptTemplate):Promise<models.Response_SnakeMedia_internal_providers_muse_MusePromptTemplate_>;
 
 export function SaveProxies(arg1:string):Promise<models.Response_bool_>;
 

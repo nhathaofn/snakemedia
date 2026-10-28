@@ -90,6 +90,7 @@ func (*Site) AcceptsCookie(domain string) bool {
 // ran out; a rest for another limit Muse named runs its time.
 func (s *Site) Inspect(ctx context.Context, b *browser.Browser, rec accounts.Record) (accounts.Inspection, error) {
 	page := s.page(b)
+	defer page.Close()
 	state, err := page.Login(ctx)
 	if err == nil && state.HTTP == 200 && !state.Chat {
 		// Signed in but on a page without the chat (settings, a shared
@@ -151,7 +152,9 @@ func (s *Site) AfterSignIn(ctx context.Context, b *browser.Browser, rec accounts
 	limit := time.Duration(cfg.Muse.SendTimeoutSeconds)*time.Second + time.Duration(cfg.Muse.ImageTimeoutMinutes)*time.Minute
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), limit)
 	defer cancel()
-	reply, sent, err := sendSetup(ctx, s.page(b), cfg.Muse, sleepContext, time.Now)
+	page := s.page(b)
+	defer page.Close()
+	reply, sent, err := sendSetup(ctx, page, cfg.Muse, sleepContext, time.Now)
 	if sent {
 		// A send like a job's: the next job on the account keeps its send gap.
 		data.LastSentAt = time.Now().UTC().Format(time.RFC3339Nano)

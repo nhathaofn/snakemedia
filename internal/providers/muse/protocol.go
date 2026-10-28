@@ -65,6 +65,9 @@ type Page interface {
 	Login(ctx context.Context) (LoginState, error)
 	// Send posts text and attachments into a new chat.
 	Send(ctx context.Context, text string, atts []Attachment) (SendResult, error)
+	// SendTo posts text into the existing chat sessionID (a long video's
+	// continue message).
+	SendTo(ctx context.Context, sessionID, text string) (SendResult, error)
 	// Status returns the session status; "running" while Muse works.
 	Status(ctx context.Context, sessionID string) (string, error)
 	Result(ctx context.Context, sessionID string) ([]AssistantEvent, error)
@@ -177,9 +180,12 @@ type MuseCapabilities struct {
 	MaxFileBytes int64          `json:"maxFileBytes"`
 	MaxFiles     int            `json:"maxFiles"`
 	ImageTypes   []MuseFileType `json:"imageTypes"`
-	Models       []MuseModel    `json:"models"`
-	Model        string         `json:"model"`
-	CheckedAt    string         `json:"checkedAt"`
+	// VideoTypes are the videos the composer takes (a v2v source video);
+	// limits read before they were kept have none.
+	VideoTypes []MuseFileType `json:"videoTypes,omitempty"`
+	Models     []MuseModel    `json:"models"`
+	Model      string         `json:"model"`
+	CheckedAt  string         `json:"checkedAt"`
 }
 
 // rawCapabilities is what the page script returns.
@@ -214,12 +220,16 @@ func parseCapabilities(raw rawCapabilities, now time.Time) *MuseCapabilities {
 		CheckedAt: now.UTC().Format(time.RFC3339),
 	}
 	for _, t := range raw.Upload.SupportedMimeTypes {
-		if t.Category == "image" && len(t.Extensions) > 0 {
+		if (t.Category == "image" || t.Category == "video") && len(t.Extensions) > 0 {
 			exts := make([]string, len(t.Extensions))
 			for i, e := range t.Extensions {
 				exts[i] = strings.ToLower(e)
 			}
-			c.ImageTypes = append(c.ImageTypes, MuseFileType{Mime: t.MimeType, Extensions: exts})
+			if t.Category == "image" {
+				c.ImageTypes = append(c.ImageTypes, MuseFileType{Mime: t.MimeType, Extensions: exts})
+			} else {
+				c.VideoTypes = append(c.VideoTypes, MuseFileType{Mime: t.MimeType, Extensions: exts})
+			}
 		}
 	}
 	if raw.Models != nil {
@@ -243,6 +253,33 @@ func (c *MuseCapabilities) imageMime(ext string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// videoMime returns the MIME type Muse lists for a video file extension.
+func (c *MuseCapabilities) videoMime(ext string) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	ext = strings.ToLower(ext)
+	for _, t := range c.VideoTypes {
+		if slices.Contains(t.Extensions, ext) {
+			return t.Mime, true
+		}
+	}
+	return "", false
+}
+
+// videoExtensions lists every accepted video extension, sorted.
+func (c *MuseCapabilities) videoExtensions() []string {
+	var out []string
+	if c == nil {
+		return out
+	}
+	for _, t := range c.VideoTypes {
+		out = append(out, t.Extensions...)
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // extensions lists every accepted image extension, sorted.
