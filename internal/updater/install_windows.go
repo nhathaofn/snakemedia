@@ -13,9 +13,11 @@ import (
 	"unicode/utf16"
 )
 
-// detachedProcess runs the helper without a console and outside the app's
-// process group, so it outlives the app.
-const detachedProcess = 0x00000008
+// createNoWindow gives the helper a console of its own that is never shown.
+// PowerShell needs a console: started with DETACHED_PROCESS it exits at once,
+// so the app closed and the update never ran. With its own process group the
+// helper outlives the app.
+const createNoWindow = 0x08000000
 
 // Install starts a hidden helper that waits for this process to exit, runs
 // installer silently into the running app's folder and starts the app again.
@@ -37,7 +39,7 @@ func (u *Updater) Install(installer string) error {
 		"-WindowStyle", "Hidden", "-EncodedCommand", encodeCommand(script))
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
-		CreationFlags: detachedProcess | syscall.CREATE_NEW_PROCESS_GROUP,
+		CreationFlags: createNoWindow | syscall.CREATE_NEW_PROCESS_GROUP,
 	}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("Không chạy được trình cài đặt: %w", err)
