@@ -87,7 +87,10 @@ func (s *Store) within(path string, mediaDir bool) bool {
 }
 
 // cleanDir makes path absolute and resolves links of the part that exists, so
-// a link inside a root cannot lead outside it.
+// a link inside a root cannot lead outside it. The deepest existing folder is
+// resolved and the rest kept as written: a folder not made yet then compares
+// in the same form as its root (Windows also expands 8.3 names such as
+// RUNNER~1 here, and only for paths that exist).
 func cleanDir(path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", errors.New("empty path")
@@ -96,12 +99,22 @@ func cleanDir(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		return resolved, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", err
+	existing, rest := abs, ""
+	for {
+		resolved, err := filepath.EvalSymlinks(existing)
+		if err == nil {
+			return filepath.Join(resolved, rest), nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			return abs, nil
+		}
+		rest = filepath.Join(filepath.Base(existing), rest)
+		existing = parent
 	}
-	return abs, nil
 }
 
 // inside reports whether path is root or below it (filepath.Rel ignores case

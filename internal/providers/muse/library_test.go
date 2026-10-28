@@ -105,7 +105,7 @@ func TestBatchSavesNumberedFilesSingleSavesNothing(t *testing.T) {
 		events: []AssistantEvent{{Videos: []ResultMedia{{Path: "/out/a.mp4", Mime: "video/mp4", ByteLen: 5}}}}, files: files}
 	p := testProvider(t, page)
 	acc := addSignedIn(t, p, "A")
-	dir := t.TempDir()
+	dir := resolvedTempDir(t)
 	if res := p.SubmitJobs(MuseJobRequest{Kind: MuseJobVideo, Mode: MuseJobBatch, Prompts: []string{"a", "b"}}); res.Success {
 		t.Fatal("a batch without a folder was queued")
 	}
@@ -138,7 +138,7 @@ func TestBatchSavesNumberedFilesSingleSavesNothing(t *testing.T) {
 // and continue its numbers; once it is done the next prompts open a new folder.
 func TestBatchFolderJoinsOpenBatch(t *testing.T) {
 	p := testProvider(t, &fakePage{loggedIn: true})
-	dir := t.TempDir()
+	dir := resolvedTempDir(t)
 	p.media.AllowRoot(dir)
 	submit := func(kind MuseJobKind, prompts ...string) []MuseJob {
 		t.Helper()
@@ -168,4 +168,15 @@ func TestBatchFolderJoinsOpenBatch(t *testing.T) {
 	if next[0].OutputDir == first[0].OutputDir || filepath.Dir(next[0].OutputDir) != dir || next[0].Index != 1 {
 		t.Fatalf("after the batch ended: %q #%d", next[0].OutputDir, next[0].Index)
 	}
+}
+
+// resolvedTempDir is t.TempDir in the form saved paths take: links and
+// Windows 8.3 names (RUNNER~1 on CI) resolved, as media roots resolve them.
+func resolvedTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }

@@ -37,7 +37,7 @@ type queueHarness struct {
 func newQueueHarness(t *testing.T) *queueHarness {
 	t.Helper()
 	s := testFlowService(testAccountService(t))
-	h := &queueHarness{t: t, s: s, q: s.queue, dir: t.TempDir(), clock: time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC), phases: map[string]string{}}
+	h := &queueHarness{t: t, s: s, q: s.queue, dir: resolvedTempDir(t), clock: time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC), phases: map[string]string{}}
 	s.media.AllowRoot(h.dir)
 	cfg := config.DefaultFlowConfig()
 	cfg.QueueThreads, cfg.QueueGapMinSeconds, cfg.QueueGapMaxSeconds = 2, 0, 0
@@ -447,4 +447,15 @@ func TestEditImageTask(t *testing.T) {
 	if res := h.s.EditImageTask(task.ID, "x"); res.Success {
 		t.Fatal("a running task was edited")
 	}
+}
+
+// resolvedTempDir is t.TempDir in the form saved paths take: links and
+// Windows 8.3 names (RUNNER~1 on CI) resolved, as media roots resolve them.
+func resolvedTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
