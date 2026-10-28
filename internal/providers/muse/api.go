@@ -340,6 +340,7 @@ func (p *Provider) CancelJob(id string) models.Response[MuseJob] {
 				defer done()
 				if page, err := p.pageFor(ctx, acc); err == nil {
 					_ = page.Cancel(ctx, job.SessionID)
+					closePage(page)
 				}
 			}()
 		}

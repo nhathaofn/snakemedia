@@ -44,6 +44,22 @@ function pageMain(CHUNK) {
     }
     return null;
   };
+  // sessions.list lists every chat of the account, and every job opens one:
+  // jobs polling the same tab side by side share one listing for a moment.
+  // Shorter than the shortest poll interval the settings allow (1 s), so one
+  // job never reads its own stale listing; a failed listing is not shared.
+  const LIST_SHARE_MS = 800;
+  let listed = null;
+  const sessionList = () => {
+    if (listed && Date.now() - listed.at < LIST_SHARE_MS) return listed.p;
+    const p = rt().sendRequest("sessions.list", {});
+    const entry = { at: Date.now(), p };
+    listed = entry;
+    p.catch(() => {
+      if (listed === entry) listed = null;
+    });
+    return p;
+  };
   const files = new Map();
   let fileSeq = 0;
   const b64 = (u8) => {
@@ -261,7 +277,7 @@ function pageMain(CHUNK) {
       };
     },
     async status(sid) {
-      const { sessions = [] } = await rt().sendRequest("sessions.list", {});
+      const { sessions = [] } = await sessionList();
       return sessions.find((s) => s.session_id === sid)?.status || "";
     },
     async result(sid) {

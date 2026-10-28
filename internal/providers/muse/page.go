@@ -49,9 +49,9 @@ const visibleShim = `(() => {
 // errTabMissing means the account's browser has no muse.ai tab.
 var errTabMissing = errors.New("Chrome của tài khoản không có tab Muse.")
 
-// chromePage drives the muse.ai tab of one account's Chrome over CDP. Each call
-// opens its own short connection; the script injected under pageKey keeps page
-// state (open files) between calls.
+// chromePage drives the muse.ai tab of one account's Chrome over CDP. Calls
+// share one kept connection until Close; the script injected under pageKey
+// keeps page state (open files) between calls.
 type chromePage struct {
 	port        int
 	policy      config.AccountConfig
@@ -62,6 +62,81 @@ type chromePage struct {
 	// a navigation never cuts another job's send or status read short. Nil
 	// for a one-off page (an account check).
 	nav *sync.RWMutex
+
+	// mu guards the kept connection. One call uses it at a time (busy); a
+	// call that finds it busy (two reads side by side) dials its own, and so
+	// does every call once the page is closed.
+	mu     sync.Mutex
+	conn   *browser.Conn
+	busy   bool
+	closed bool
+}
+
+// Close ends the kept connection; a call still using it ends it when done.
+// The page stays usable, each later call on a connection of its own.
+func (p *chromePage) Close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	if !p.busy && p.conn != nil {
+		_ = p.conn.Close()
+		p.conn = nil
+	}
+}
+
+// closePage ends a page's kept connection, for pages that keep one.
+func closePage(page Page) {
+	if c, ok := page.(interface{ Close() }); ok {
+		c.Close()
+	}
+}
+
+// dial connects to the account's muse.ai tab.
+func (p *chromePage) dial(ctx context.Context) (*browser.Conn, error) {
+	t, err := p.tab(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// One file chunk is chunkSize bytes base64-encoded inside a JSON string.
+	return browser.Dial(ctx, t, p.port, 4*chunkSize)
+}
+
+// connect returns a connection for one call, whether it is the kept one
+// from an earlier call (reused), and done, which gives it back: a failed call
+// drops the kept connection, so the next call finds the tab again. keep false
+// always dials a connection of its own.
+func (p *chromePage) connect(ctx context.Context, keep bool) (conn *browser.Conn, reused bool, done func(failed bool), err error) {
+	p.mu.Lock()
+	if !keep || p.closed || p.busy {
+		p.mu.Unlock()
+		conn, err := p.dial(ctx)
+		if err != nil {
+			return nil, false, nil, err
+		}
+		return conn, false, func(bool) { _ = conn.Close() }, nil
+	}
+	p.busy = true
+	conn, reused = p.conn, p.conn != nil
+	p.conn = nil
+	p.mu.Unlock()
+	if conn == nil {
+		if conn, err = p.dial(ctx); err != nil {
+			p.mu.Lock()
+			p.busy = false
+			p.mu.Unlock()
+			return nil, false, nil, err
+		}
+	}
+	return conn, reused, func(failed bool) {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		p.busy = false
+		if failed || p.closed {
+			_ = conn.Close()
+			return
+		}
+		p.conn = conn
+	}, nil
 }
 
 func (p *chromePage) tab(ctx context.Context) (browser.Target, error) {
@@ -75,8 +150,40 @@ func (p *chromePage) tab(ctx context.Context) (browser.Target, error) {
 	return t, nil
 }
 
-// invoke calls window[pageKey][name](...args), injecting the page script
-// first when the tab does not have it yet (a fresh load or a navigation).
+// pageReply is what a call expression resolves to: the method's answer (v),
+// or that the tab has no page script yet (missing) or has left muse.ai
+// (away), in which case nothing ran.
+type pageReply struct {
+	Away    bool            `json:"away"`
+	Missing bool            `json:"missing"`
+	Value   json.RawMessage `json:"v"`
+}
+
+// callExpressions are the two forms of a call to window[pageKey][name]: short
+// runs it only when the tab already has the page script, full injects the
+// script first (a fresh load or a navigation). Both run only on muse.ai: a
+// kept connection follows its tab wherever it goes.
+func callExpressions(name string, args []any) (short, full string, err error) {
+	if args == nil {
+		args = []any{}
+	}
+	encodedArgs, err := json.Marshal(args)
+	if err != nil {
+		return "", "", err
+	}
+	encodedName, _ := json.Marshal(name)
+	key, _ := json.Marshal(pageKey)
+	const form = `(async()=>{if(!(location.protocol==="https:"&&/^(www\.)?muse\.ai$/.test(location.host)))return '{"away":true}';const o=%s;if(!o)return '{"missing":true}';return JSON.stringify({v:await o[%s](...%s)})})()`
+	short = fmt.Sprintf(form, fmt.Sprintf("window[%s]", key), encodedName, encodedArgs)
+	full = fmt.Sprintf(form, fmt.Sprintf("(window[%s]||(window[%s]=(%s)(%d)))", key, key, pageSource, chunkSize), encodedName, encodedArgs)
+	return short, full, nil
+}
+
+// invoke calls window[pageKey][name](...args) on the kept connection,
+// sending the page script only when the tab does not have it yet. A read that
+// fails on a kept connection (its tab may have been replaced) is asked once
+// more on a new one. A send never uses the kept connection and is never asked
+// twice: Muse may have taken it.
 func (p *chromePage) invoke(ctx context.Context, timeout time.Duration, name string, out any, args ...any) error {
 	if p.nav != nil {
 		p.nav.RLock()
@@ -84,27 +191,48 @@ func (p *chromePage) invoke(ctx context.Context, timeout time.Duration, name str
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	t, err := p.tab(ctx)
+	short, full, err := callExpressions(name, args)
 	if err != nil {
 		return err
 	}
-	// One file chunk is chunkSize bytes base64-encoded inside a JSON string.
-	conn, err := browser.Dial(ctx, t, p.port, 4*chunkSize)
+	keep := name != "send"
+	conn, reused, done, err := p.connect(ctx, keep)
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
-	if args == nil {
-		args = []any{}
+	err = evaluateCall(ctx, conn, short, full, out)
+	var page *browser.EvalError
+	if err != nil && reused && ctx.Err() == nil && !errors.As(err, &page) {
+		done(true)
+		if conn, _, done, err = p.connect(ctx, keep); err != nil {
+			return err
+		}
+		err = evaluateCall(ctx, conn, short, full, out)
 	}
-	encodedArgs, err := json.Marshal(args)
-	if err != nil {
+	done(err != nil)
+	return err
+}
+
+// evaluateCall runs the short form of a call, then the full one when the tab
+// has no page script, and decodes the method's answer into out.
+func evaluateCall(ctx context.Context, conn *browser.Conn, short, full string, out any) error {
+	var reply pageReply
+	if err := conn.Evaluate(ctx, short, &reply); err != nil {
 		return err
 	}
-	encodedName, _ := json.Marshal(name)
-	key, _ := json.Marshal(pageKey)
-	expr := fmt.Sprintf("(async()=>JSON.stringify(await (window[%s] || (window[%s] = (%s)(%d)))[%s](...%s)))()", key, key, pageSource, chunkSize, encodedName, encodedArgs)
-	return conn.Evaluate(ctx, expr, out)
+	if reply.Missing {
+		reply = pageReply{}
+		if err := conn.Evaluate(ctx, full, &reply); err != nil {
+			return err
+		}
+	}
+	if reply.Away {
+		return errTabMissing
+	}
+	if out == nil || len(reply.Value) == 0 {
+		return nil
+	}
+	return json.Unmarshal(reply.Value, out)
 }
 
 func (p *chromePage) Login(ctx context.Context) (LoginState, error) {

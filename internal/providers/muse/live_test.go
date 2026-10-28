@@ -10,6 +10,7 @@ import (
 	"SnakeMedia/internal/accounts"
 	"SnakeMedia/internal/config"
 	"SnakeMedia/internal/media"
+	"SnakeMedia/internal/proxy"
 )
 
 // TestLiveAnonymousPage opens muse.ai in a real headless Chrome with a fresh
@@ -25,7 +26,7 @@ func TestLiveAnonymousPage(t *testing.T) {
 	defer accts.Close()
 	p := New(dir, filepath.Join(dir, "out"), cfg, media.NewStore(filepath.Join(dir, "media")), accts)
 	acc := accounts.Record{
-		Account:    accounts.Account{ID: "live", Provider: accounts.ProviderMuse, Name: "live", Enabled: true},
+		Account:    accounts.Account{ID: "live", Provider: accounts.ProviderMuse, Name: "live", Enabled: true, Proxy: proxy.None},
 		ProfileDir: filepath.Join(dir, "accounts", "profiles", "live"),
 	}
 	if err := accts.Seed(acc); err != nil {
@@ -51,5 +52,28 @@ func TestLiveAnonymousPage(t *testing.T) {
 	t.Logf("anonymous muse.ai session: %+v", state)
 	if state.LoggedIn {
 		t.Fatal("a fresh profile cannot be signed in")
+	}
+	// Later calls run on the kept connection with the script already in the
+	// tab; after a reload the script goes in again.
+	for range 3 {
+		if _, err := page.Login(ctx); err != nil {
+			t.Fatalf("login on the kept connection: %v", err)
+		}
+	}
+	if err := page.Home(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if state, err = page.Login(ctx); err == nil && state.HTTP != 0 {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("page never answered after a reload: %v", err)
+		}
+		time.Sleep(2 * time.Second)
+	}
+	closePage(page)
+	if _, err := page.Login(ctx); err != nil {
+		t.Fatalf("login after close: %v", err)
 	}
 }

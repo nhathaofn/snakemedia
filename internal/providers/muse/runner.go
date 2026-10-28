@@ -181,6 +181,7 @@ func (p *Provider) execute(ctx context.Context, jobID, accountID string) error {
 	if err != nil {
 		return &notSentError{err: err}
 	}
+	defer closePage(page)
 	if err := p.waitSignedIn(ctx, page, time.Duration(p.cfg.Get().Accounts.PageReadySeconds)*time.Second); err != nil {
 		return err
 	}

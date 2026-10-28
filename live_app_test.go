@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"SnakeMedia/internal/accounts"
 	"SnakeMedia/internal/buildinfo"
 	"SnakeMedia/internal/events"
 	"SnakeMedia/internal/providers/flow"
@@ -223,6 +224,11 @@ func liveMuse(t *testing.T, a *App, kind muse.MuseJobKind) {
 	req := muse.MuseJobRequest{Kind: kind, Mode: muse.MuseJobSingle, Prompts: []string{prompt}, Repeat: 1, Label: "live test",
 		Ratio: os.Getenv("SNAKEMEDIA_LIVE_MUSE_RATIO")}
 	req.Duration, _ = strconv.Atoi(os.Getenv("SNAKEMEDIA_LIVE_MUSE_DURATION"))
+	// SNAKEMEDIA_LIVE_MUSE_MODE=batch queues it as Hàng loạt, saved into a
+	// batch folder under the default Muse output folder.
+	if os.Getenv("SNAKEMEDIA_LIVE_MUSE_MODE") == "batch" {
+		req.Mode, req.OutputDir = muse.MuseJobBatch, a.batchOutputDefaults[accounts.ProviderMuse]
+	}
 	if env := os.Getenv("SNAKEMEDIA_LIVE_MUSE_REFS"); env != "" {
 		refs := a.muse.ImportReferences(strings.Split(env, "|"))
 		if !refs.Success {
