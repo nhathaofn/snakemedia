@@ -679,6 +679,78 @@ func (a *App) ListMuseLibrary() models.Response[[]muse.MuseLibraryItem] {
 	return logged("ListMuseLibrary", a.muse.ListLibrary())
 }
 
+// ListMuseAssets lists the Muse asset library (characters, products, settings).
+func (a *App) ListMuseAssets() models.Response[[]muse.MuseAsset] {
+	return logged("ListMuseAssets", a.muse.ListAssets())
+}
+
+// SaveMuseAsset adds or replaces an asset of the Muse library.
+func (a *App) SaveMuseAsset(asset muse.MuseAsset) models.Response[muse.MuseAsset] {
+	return logged("SaveMuseAsset", a.muse.SaveAsset(asset))
+}
+
+// RemoveMuseAssets deletes assets from the Muse library.
+func (a *App) RemoveMuseAssets(ids []string) models.Response[int] {
+	return logged("RemoveMuseAssets", a.muse.RemoveAssets(ids))
+}
+
+// PickMuseAssetImages asks the user for an asset's images and imports them.
+func (a *App) PickMuseAssetImages() models.Response[[]muse.MuseReference] {
+	patterns := a.muse.ImageFilePatterns()
+	if len(patterns) == 0 {
+		return a.muse.ImportAssetImages(nil)
+	}
+	paths, err := runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:   "Chọn ảnh tư liệu",
+		Filters: []runtime.FileFilter{{DisplayName: "Ảnh Muse nhận", Pattern: strings.Join(patterns, ";")}},
+	})
+	if err != nil {
+		return models.ErrorResponse[[]muse.MuseReference]("Không mở được hộp thoại chọn ảnh: "+err.Error(), models.CodeInternal)
+	}
+	return logged("PickMuseAssetImages", a.muse.ImportAssetImages(paths))
+}
+
+// PickMuseSourceVideo asks the user for a video to recreate (v2v) and
+// imports it; an empty LocalURL means the dialog was closed.
+func (a *App) PickMuseSourceVideo() models.Response[muse.MuseReference] {
+	patterns := a.muse.VideoFilePatterns()
+	if len(patterns) == 0 {
+		return a.muse.ImportSourceVideo("")
+	}
+	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:   "Chọn video mẫu",
+		Filters: []runtime.FileFilter{{DisplayName: "Video Muse nhận", Pattern: strings.Join(patterns, ";")}},
+	})
+	if err != nil {
+		return models.ErrorResponse[muse.MuseReference]("Không mở được hộp thoại chọn video: "+err.Error(), models.CodeInternal)
+	}
+	if path == "" {
+		return models.SuccessResponse(muse.MuseReference{})
+	}
+	return logged("PickMuseSourceVideo", a.muse.ImportSourceVideo(path))
+}
+
+// CheckMusePrompt says what a prompt attaches from the asset library and
+// what may go wrong.
+func (a *App) CheckMusePrompt(prompt string, assetIDs []string) models.Response[muse.MusePromptCheck] {
+	return a.muse.CheckPrompt(prompt, assetIDs)
+}
+
+// ListMuseTemplates lists the saved Muse prompts.
+func (a *App) ListMuseTemplates() models.Response[[]muse.MusePromptTemplate] {
+	return logged("ListMuseTemplates", a.muse.ListTemplates())
+}
+
+// SaveMuseTemplate adds or replaces a saved Muse prompt.
+func (a *App) SaveMuseTemplate(t muse.MusePromptTemplate) models.Response[muse.MusePromptTemplate] {
+	return logged("SaveMuseTemplate", a.muse.SaveTemplate(t))
+}
+
+// RemoveMuseTemplate deletes a saved Muse prompt.
+func (a *App) RemoveMuseTemplate(id string) models.Response[bool] {
+	return logged("RemoveMuseTemplate", a.muse.RemoveTemplate(id))
+}
+
 // RemoveMuseLibraryItems forgets library items; their files stay on disk.
 func (a *App) RemoveMuseLibraryItems(ids []string) models.Response[int] {
 	return logged("RemoveMuseLibraryItems", a.muse.RemoveLibraryItems(ids))

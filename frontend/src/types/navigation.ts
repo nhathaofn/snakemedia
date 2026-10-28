@@ -43,4 +43,6 @@ export interface AppSection {
   placement?: SectionPlacement;
   /** The first visible feature is where the section opens. */
   features: readonly FeatureRoute[];
+  /** Mounted by the app shell for the whole run, whatever screen is open (e.g. a question asked on start). */
+  startup?: ReactNode;
 }

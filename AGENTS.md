@@ -88,6 +88,7 @@ Production desktop application scaffold built with Go and Wails v2, using Vite +
 - Video metadata for MP4/MOV/M4V is read from the file header (`internal/media/mp4probe.go`); ffprobe is only needed for WebM or unusual files.
 - `wails dev` builds run without the single-instance lock (`instance_lock_dev.go`), so a rebuild never hands off to the stale window.
 - Every Muse video message carries the app's English guide: one clip gets `shortVideoLines` (the prompt is the plan, lines word for word, brisk pace, nothing added). A Muse video longer than one clip (`isLong`) is one chat: the app's English guide (`longVideoLines`, no genre, language or voice fixed in it) goes before the prompt, the prompt is the plan (its scenes, shots, timings and lines followed in order, nothing added or rewritten), clips join as cuts to a new angle (never from the last frame), the pace is brisk, the reply's `STATUS:` line decides done / continue in the same chat (`SendTo`, at most `continueLimit`) / too short / refused, and only a reply newer than `RepliesSeen` ends a turn. A long video is never sent again in a new chat or handed to another account once sent (ADR 0013).
+- Muse Tư liệu (ADR 0014): assets (`assets.go`) are attached to a prompt that names them (`@tag` or exact name) with their role and lock (`roleLines`); a job's images are decided at submit and stored on the job. A storyboard is an image job plus a video job that waits for it (`After`) and attaches its frames in a new chat. A request using none of this builds the same message as before.
 - A Muse job with a `SessionID` is only re-checked in that chat, never re-sent; a send whose answer was lost fails instead of retrying (ADR 0008). An unknown outcome (missing session ID, unknown status, missing file, transient RPC/listing error) is always re-checked, never treated as "not sent" (ADR 0012).
 - After a sign-in in the account's Chrome window (not a plain check), a site implementing `accounts.SignInFollowUp` runs its own step before the account shows as signed in; its failures are only noted on the account (`Inspection.Note`). Muse uses it to send `muse.setupMessage` (Cài đặt Muse → Tài khoản) in a chat of its own, once per account (a message Muse took is never sent again), and waits for Muse's reply (`muse/setup.go`).
 - Durable queues and journals use `internal/jobs` (Flow image queue, Muse queue and library); a queue task writes its request ID to disk before the request can leave the app.
@@ -116,6 +117,7 @@ Production desktop application scaffold built with Go and Wails v2, using Vite +
 - 0011 Muse: Base Image/Video Generation, Limits Read from Muse → docs/decisions/0011-muse-base-media-from-platform-config.md
 - 0012 Production Hardening: Pay Once, Fail Closed, Durable Queues, Composable Nodes → docs/decisions/0012-production-hardening-pay-once-fail-closed.md
 - 0013 Muse Long Videos: the App's Guide, a Status Line, Continue in the Same Chat → docs/decisions/0013-muse-long-video.md
+- 0014 Muse Asset Library, Reference Roles, Storyboard and Source Video → docs/decisions/0014-muse-assets-roles-storyboard.md
 
 ## Deeper docs
 - Decisions: `docs/decisions/README.md`

@@ -17,7 +17,14 @@ export {
 export { turnLifecycle, useStudioSubmit } from './useStudioSubmit';
 export type { StudioDraft } from './useStudioSubmit';
 export { conversationItemKey, createStudioSlice, selectedModelOf } from './studioStore';
-export { turnsFromJobs, useRestoreJobs, useResumeJob, useStopGeneration } from './recovery';
+export {
+  turnsFromJobs,
+  useRestoreJobs,
+  useReportPreviousEdits,
+  useRestoreJobsOfRun,
+  useResumeJob,
+  useStopGeneration,
+} from './recovery';
 export type { RecoverableItem } from './recovery';
 export type {
   ConversationAttachment,

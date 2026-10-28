@@ -35,6 +35,10 @@ type Provider struct {
 	jobs     *jobStore
 	// library lists every file finished jobs made, kept apart from the queue.
 	library *jobs.Journal[MuseLibraryItem]
+	// assets and templates are the reusable references and saved prompts
+	// (assets.go), kept apart from the queue.
+	assets    *jobs.Journal[MuseAsset]
+	templates *jobs.Journal[MusePromptTemplate]
 	// defaultOutputDir is the batch folder until the user picks one.
 	defaultOutputDir string
 
@@ -97,6 +101,8 @@ func New(dataDir, outputDir string, cfg *config.Manager, store *media.Store, acc
 	})
 	p.jobs = newJobStore(filepath.Join(root, "jobs.json"), func() int { return p.cfg.Get().Muse.MaxJobs })
 	p.library = newLibrary(filepath.Join(root, "library.json"))
+	p.assets = newAssets(filepath.Join(root, "assets.json"))
+	p.templates = newTemplates(filepath.Join(root, "templates.json"))
 	p.pageFor = p.openPage
 	// A signed-in, re-enabled or rested account may take queued jobs now.
 	accts.OnChange(p.trigger)
@@ -133,6 +139,7 @@ func (p *Provider) Start(ctx context.Context, emit func(events.Event, any)) {
 		}
 	}
 	p.loadLibrary()
+	p.loadStudio()
 	for _, job := range p.jobs.list() {
 		if job.Status != MuseJobProcessing {
 			continue
@@ -164,6 +171,8 @@ func (p *Provider) Start(ctx context.Context, emit func(events.Event, any)) {
 		})
 	}
 	p.sweepReferences()
+	p.sweepAssetImages()
+	p.releaseWaiting()
 	p.wg.Add(1)
 	go p.loop()
 }
@@ -363,6 +372,9 @@ func (p *Provider) finishRun(jobID string) {
 				j.NextCheckAt = ""
 			}
 		})
+	}
+	if ok && job.BoardFrames > 0 && job.Kind == MuseJobImage {
+		p.releaseWaiting()
 	}
 	p.trigger()
 }

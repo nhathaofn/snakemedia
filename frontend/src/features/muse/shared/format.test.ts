@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MuseJobKind, MuseJobMode, MuseJobStatus } from '../../../types';
 import type { MuseJob } from '../../../types';
 import {
+  fromPreviousRun,
   jobsOf,
   matchesFilter,
   mayBePaid,
@@ -10,7 +11,11 @@ import {
   upsertJob,
 } from './format';
 
-const job = (id: string, status: MuseJobStatus = MuseJobStatus.Queued) =>
+const job = (
+  id: string,
+  status: MuseJobStatus = MuseJobStatus.Queued,
+  extra: Partial<Omit<MuseJob, 'convertValues'>> = {},
+) =>
   ({
     id,
     kind: MuseJobKind.Video,
@@ -23,7 +28,8 @@ const job = (id: string, status: MuseJobStatus = MuseJobStatus.Queued) =>
     attempts: 0,
     files: [],
     createdAt: '',
-  }) as MuseJob;
+    ...extra,
+  }) as unknown as MuseJob;
 
 describe('muse format helpers', () => {
   it('upserts jobs newest first', () => {
@@ -52,7 +58,7 @@ describe('mergeSnapshot', () => {
   });
 
   it('lets newer events win over the snapshot', () => {
-    const newer = { ...a, prompt: 'new' };
+    const newer = { ...a, prompt: 'new' } as MuseJob;
     const c = { id: 'c', prompt: 'c' } as MuseJob;
     const merged = mergeSnapshot(
       [a, b],
@@ -68,10 +74,10 @@ describe('mergeSnapshot', () => {
 
 describe('jobsOf', () => {
   it('keeps one kind and mode, reading a missing mode as Hàng loạt', () => {
-    const single = { ...job('single'), mode: MuseJobMode.Single };
-    const batch = { ...job('batch'), mode: MuseJobMode.Batch };
+    const single = job('single', undefined, { mode: MuseJobMode.Single });
+    const batch = job('batch', undefined, { mode: MuseJobMode.Batch });
     const old = job('old');
-    const image = { ...job('image'), kind: MuseJobKind.Image };
+    const image = job('image', undefined, { kind: MuseJobKind.Image });
     const jobs = [single, batch, old, image];
     expect(jobsOf(jobs, MuseJobKind.Video, MuseJobMode.Single).map((j) => j.id)).toEqual([
       'single',
@@ -81,11 +87,17 @@ describe('jobsOf', () => {
       'old',
     ]);
   });
+
+  it('shows a storyboard image job with the video it opens', () => {
+    const board = job('board', undefined, { kind: MuseJobKind.Image, boardFrames: 3 });
+    expect(jobsOf([board], MuseJobKind.Video, MuseJobMode.Batch)).toEqual([board]);
+    expect(jobsOf([board], MuseJobKind.Image, MuseJobMode.Batch)).toEqual([]);
+  });
 });
 
 describe('matchesFilter', () => {
   it('matches held jobs whatever their status', () => {
-    const held = { ...job('h'), held: true };
+    const held = job('h', undefined, { held: true });
     expect(matchesFilter(held, 'held')).toBe(true);
     expect(matchesFilter(job('q'), 'held')).toBe(false);
     expect(matchesFilter(job('q'), MuseJobStatus.Queued)).toBe(true);
@@ -100,5 +112,19 @@ describe('mayBePaid', () => {
     expect(mayBePaid({ ...job('c', MuseJobStatus.Failed), sendUnknown: true } as MuseJob)).toBe(
       true,
     );
+  });
+});
+
+describe('fromPreviousRun', () => {
+  const start = '2026-10-28T10:00:00.000Z';
+  it('hides only finished jobs made before this run', () => {
+    const old = job('o', MuseJobStatus.Succeeded, { createdAt: '2026-10-27T10:00:00.000Z' });
+    const oldRunning = job('r', MuseJobStatus.Processing, {
+      createdAt: '2026-10-27T10:00:00.000Z',
+    });
+    const fresh = job('f', MuseJobStatus.Succeeded, { createdAt: '2026-10-28T11:00:00.000Z' });
+    expect(fromPreviousRun(old, start)).toBe(true);
+    expect(fromPreviousRun(oldRunning, start)).toBe(false);
+    expect(fromPreviousRun(fresh, start)).toBe(false);
   });
 });

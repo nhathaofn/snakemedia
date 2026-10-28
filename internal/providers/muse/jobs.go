@@ -73,6 +73,23 @@ type MuseJob struct {
 	Label string `json:"label,omitempty"`
 	// References are local media URLs of the attached images, in order.
 	References []string `json:"references"`
+	// RefInfo gives References their tag, role and lock (assets.go), in the
+	// same order; empty for jobs whose images carry no role, which keep the
+	// plain Reference lines.
+	RefInfo []MuseRefInfo `json:"refInfo,omitempty"`
+	// BoardFrames on an image job asks for that many storyboard frames
+	// (storyboard.go). On a video job it is how many Frames open its scenes.
+	BoardFrames int `json:"boardFrames,omitempty"`
+	// After is the storyboard image job a video job waits for; Frames are
+	// that job's images, attached before References once it succeeded.
+	After  string   `json:"after,omitempty"`
+	Frames []string `json:"frames,omitempty"`
+	// Review holds the video once its frames arrive, whatever ran it before,
+	// so the user sees the storyboard and runs the video themselves.
+	Review bool `json:"review,omitempty"`
+	// SourceVideo is a local media URL of a video whose camera, timing and
+	// motion the job recreates (v2v), attached before every image.
+	SourceVideo string `json:"sourceVideo,omitempty"`
 	// OutputDir is the batch's own folder (under the folder the user chose,
 	// see batchFolder) a Hàng loạt job's files are saved into, and Index the
 	// prompt's place in that batch (from 1), which numbers them
@@ -151,6 +168,15 @@ func resetForQueue(j *MuseJob) {
 // SendUnknown existed are recognised by their error.
 func (j MuseJob) mayBePaid() bool {
 	return j.SessionID != "" || j.SendUnknown || j.Error == errSendUnknown.Error()
+}
+
+// screenKind is the screen a job belongs to: a storyboard's image job is
+// part of the video it opens.
+func (j MuseJob) screenKind() MuseJobKind {
+	if j.Kind == MuseJobImage && j.BoardFrames > 0 {
+		return MuseJobVideo
+	}
+	return j.Kind
 }
 
 func (j MuseJob) finished() bool {

@@ -65,6 +65,16 @@ export const MuseJobMode = muse.MuseJobMode;
 export type MuseJobMode = muse.MuseJobMode;
 export const MuseJobStatus = muse.MuseJobStatus;
 export type MuseJobStatus = muse.MuseJobStatus;
+export type MuseAsset = muse.MuseAsset;
+export const MuseAsset = muse.MuseAsset;
+export type MusePromptTemplate = muse.MusePromptTemplate;
+export const MusePromptTemplate = muse.MusePromptTemplate;
+export type MusePromptCheck = muse.MusePromptCheck;
+export const MuseStoryboard = muse.MuseStoryboard;
+export const MuseRefRole = muse.MuseRefRole;
+export type MuseRefRole = muse.MuseRefRole;
+export const MuseRefMode = muse.MuseRefMode;
+export type MuseRefMode = muse.MuseRefMode;
 
 export type UpdateRelease = updater.Release;
 export type UpdateProgress = updater.Progress;

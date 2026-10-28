@@ -14,7 +14,7 @@ import {
   turnLifecycle,
   useGeneration,
   useModelCatalog,
-  useRestoreJobs,
+  useRestoreJobsOfRun,
   useResumeJob,
   useStopGeneration,
   useSaveMedia,
@@ -22,6 +22,7 @@ import {
 import { SourceVideoPanel } from './SourceVideoPanel';
 import { trimRequest, useFlowEditStore } from './store/flowEditStore';
 import { PromptBar } from '../../../components/studio';
+import { PreviousRunToggle } from '../../../components/feedback';
 
 /** Edit results replace a job's earlier items (upsert), unlike the other studios. */
 const editRecoveryStore = {
@@ -119,7 +120,11 @@ function EditWorkspace() {
     },
     'video',
   );
-  useRestoreJobs(editRecoveryStore, api.listVideoEditJobs, 'Đang đối soát job chỉnh sửa video');
+  const previousCount = useRestoreJobsOfRun(
+    editRecoveryStore,
+    api.listVideoEditJobs,
+    'Đang đối soát job chỉnh sửa video',
+  );
   const { resuming, resumeJob } = useResumeJob(editRecoveryStore, api.resumeVideoEdit);
   const stopGeneration = useStopGeneration();
   const saveMedia = useSaveMedia();
@@ -189,6 +194,11 @@ function EditWorkspace() {
 
   return (
     <div className="flow-workspace-container">
+      {previousCount > 0 && (
+        <div className="flow-edit-toolbar">
+          <PreviousRunToggle count={previousCount} />
+        </div>
+      )}
       <ConversationGallery
         turns={turns}
         items={items}

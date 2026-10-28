@@ -28,6 +28,9 @@ import type {
   MuseJobMode,
   MuseJobRequest,
   MuseLibraryItem,
+  MuseAsset,
+  MusePromptCheck,
+  MusePromptTemplate,
   MuseOptions,
   MuseReference,
   ProxyCheckResult,
@@ -244,6 +247,23 @@ export const api = {
   openMuseOutputFolder: () => invoke<boolean>('OpenMuseOutputFolder', Backend.OpenMuseOutputFolder),
   revealFile: (path: string) => invoke<boolean>('RevealFile', () => Backend.RevealFile(path)),
   listMuseLibrary: () => invoke<MuseLibraryItem[]>('ListMuseLibrary', Backend.ListMuseLibrary),
+  listMuseAssets: () => invoke<MuseAsset[]>('ListMuseAssets', Backend.ListMuseAssets),
+  saveMuseAsset: (asset: MuseAsset) =>
+    invoke<MuseAsset>('SaveMuseAsset', () => Backend.SaveMuseAsset(asset)),
+  removeMuseAssets: (ids: string[]) =>
+    invoke<number>('RemoveMuseAssets', () => Backend.RemoveMuseAssets(ids)),
+  pickMuseAssetImages: () =>
+    invoke<MuseReference[]>('PickMuseAssetImages', Backend.PickMuseAssetImages),
+  pickMuseSourceVideo: () =>
+    invoke<MuseReference>('PickMuseSourceVideo', Backend.PickMuseSourceVideo),
+  checkMusePrompt: (prompt: string, assetIds: string[]) =>
+    invoke<MusePromptCheck>('CheckMusePrompt', () => Backend.CheckMusePrompt(prompt, assetIds)),
+  listMuseTemplates: () =>
+    invoke<MusePromptTemplate[]>('ListMuseTemplates', Backend.ListMuseTemplates),
+  saveMuseTemplate: (template: MusePromptTemplate) =>
+    invoke<MusePromptTemplate>('SaveMuseTemplate', () => Backend.SaveMuseTemplate(template)),
+  removeMuseTemplate: (id: string) =>
+    invoke<boolean>('RemoveMuseTemplate', () => Backend.RemoveMuseTemplate(id)),
   removeMuseLibraryItems: (ids: string[]) =>
     invoke<number>('RemoveMuseLibraryItems', () => Backend.RemoveMuseLibraryItems(ids)),
 };

@@ -94,6 +94,8 @@ func run() error {
 			muse.AllMuseJobKinds,
 			muse.AllMuseJobModes,
 			muse.AllMuseJobStatuses,
+			muse.AllMuseRefRoles,
+			muse.AllMuseRefModes,
 		},
 	})
 }

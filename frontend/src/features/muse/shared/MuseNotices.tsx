@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { X } from 'lucide-react';
 import { Button, Icon } from '../../../components/ui';
 import { useMuseStore } from './museStore';
+import { MusePreviousRunToggle } from './PreviousRun';
 
 /**
  * Banners at the top of a Muse workspace: the queue could not be loaded, or
@@ -12,9 +13,11 @@ export function MuseNotices() {
   const loadError = useMuseStore((s) => s.loadError);
   const journalWarning = useMuseStore((s) => s.options?.journalWarning);
   const [dismissed, setDismissed] = useState(false);
-  if (!loadError && (!journalWarning || dismissed)) return null;
   return (
     <div className="muse-notices">
+      <div className="muse-notices-bar">
+        <MusePreviousRunToggle />
+      </div>
       {loadError && (
         <div role="alert" className="muse-alert muse-alert-danger">
           {loadError}

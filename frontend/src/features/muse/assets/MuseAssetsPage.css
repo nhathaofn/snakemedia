@@ -1,0 +1,343 @@
+/* Tư liệu: a heading with its lead, then cards of assets and saved prompts. */
+.muse-assets-heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.muse-assets-lead {
+  max-width: var(--muse-lead-max);
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  line-height: 1.5;
+}
+
+.muse-assets-lead code {
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-small);
+}
+
+.muse-assets-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.muse-assets-section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  color: var(--text-primary);
+  font-size: var(--font-size-label);
+  font-weight: var(--font-weight-semibold);
+}
+
+.muse-assets-count {
+  min-width: var(--space-10);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  text-align: center;
+}
+
+.muse-assets-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-10) var(--space-8);
+  border: var(--border-width) dashed var(--border-color);
+  border-radius: var(--radius-lg);
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+  text-align: center;
+}
+
+.muse-assets-empty strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+}
+
+/* Asset cards: a square cover of up to three views, then tag, name and lock. */
+.muse-assets-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--muse-asset-card-min), 1fr));
+  gap: var(--space-8);
+}
+
+.muse-asset-card,
+.muse-template-card {
+  display: flex;
+  flex-direction: column;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  overflow: hidden;
+  transition: border-color var(--transition-fast);
+}
+
+.muse-asset-card:hover,
+.muse-template-card:hover {
+  border-color: var(--primary);
+}
+
+.muse-asset-cover {
+  position: relative;
+  display: grid;
+  aspect-ratio: 4 / 3;
+  gap: var(--border-width);
+  background: var(--media-letterbox);
+}
+
+.muse-asset-cover.is-2 {
+  grid-template-columns: 1fr 1fr;
+}
+
+.muse-asset-cover.is-3 {
+  grid-template-columns: 2fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.muse-asset-cover.is-3 img:first-child {
+  grid-row: span 2;
+}
+
+.muse-asset-cover img {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  object-fit: cover;
+}
+
+.muse-role-badge {
+  position: absolute;
+  top: var(--space-4);
+  left: var(--space-4);
+  padding: var(--space-1) var(--space-4);
+  border-radius: var(--radius-full);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  box-shadow: var(--shadow-md);
+}
+
+.muse-role-badge.is-face,
+.muse-role-badge.is-character {
+  color: var(--accent);
+}
+
+.muse-role-badge.is-product {
+  color: var(--warning);
+}
+
+.muse-role-badge.is-storyboard,
+.muse-role-badge.is-setting {
+  color: var(--primary);
+}
+
+.muse-role-badge.is-style {
+  color: var(--success);
+}
+
+.muse-asset-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-6) var(--space-6) var(--space-3);
+}
+
+.muse-asset-name {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.muse-asset-name strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+}
+
+.muse-asset-name span,
+.muse-asset-lock {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--font-size-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.muse-asset-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: 0 var(--space-4) var(--space-4);
+}
+
+/* Saved prompts: name and actions on one line, the text clamped below. */
+.muse-templates-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--muse-template-card-min), 1fr));
+  gap: var(--space-8);
+}
+
+.muse-template-card {
+  gap: var(--space-4);
+  padding: var(--space-6);
+}
+
+.muse-template-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.muse-template-head strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+}
+
+.muse-template-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.muse-template-text {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--font-size-small);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
+/* The asset dialog: images on top, tag and name side by side, roles as choices. */
+.muse-asset-dialog {
+  width: min(var(--muse-asset-dialog-width), calc(100vw - var(--space-11)));
+}
+
+.muse-asset-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  padding: var(--space-8);
+}
+
+.muse-role-option.is-wide {
+  grid-column: 1 / -1;
+}
+
+.muse-asset-images {
+  display: flex;
+  gap: var(--space-6);
+}
+
+.muse-asset-image {
+  position: relative;
+  width: var(--muse-asset-image-size);
+  height: var(--muse-asset-image-size);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--media-letterbox);
+}
+
+.muse-asset-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.muse-asset-image.is-add {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  border: var(--border-width) dashed var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--font-size-small);
+  cursor: pointer;
+}
+
+.muse-asset-image.is-add:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.muse-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-6);
+}
+
+.muse-tag-input {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--text-muted);
+}
+
+.muse-tag-input input {
+  flex: 1;
+  min-width: 0;
+}
+
+.muse-role-picker {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+
+.muse-role-options {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-4);
+}
+
+.muse-role-option {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4) var(--space-6);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color var(--transition-fast);
+}
+
+.muse-role-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.muse-role-option strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-small);
+}
+
+.muse-role-option span {
+  color: var(--text-muted);
+  font-size: var(--font-size-caption);
+}
+
+.muse-role-option:hover,
+.muse-role-option:focus-within {
+  border-color: var(--primary);
+}
+
+.muse-role-option.is-on {
+  border-color: var(--primary);
+  background: var(--feedback-primary-bg);
+}

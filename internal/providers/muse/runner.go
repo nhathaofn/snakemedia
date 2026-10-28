@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -87,8 +88,26 @@ var kindName = map[MuseJobKind]string{MuseJobImage: "ảnh", MuseJobVideo: "vide
 // then the user's prompt unchanged.
 func buildMessage(job MuseJob) string {
 	lines := []string{kindRequest[job.Kind]}
+	if job.Kind == MuseJobImage && job.BoardFrames > 0 {
+		lines = append([]string{"Task: Create the storyboard images of a video."}, boardImageLines(job)...)
+	}
+	if job.SourceVideo != "" {
+		lines = append(lines, v2vLines(job)...)
+	}
+	first := 1
+	if len(job.Frames) > 0 {
+		lines = append(lines, boardVideoLines(job)...)
+		first += len(job.Frames)
+	}
 	if n := len(job.References); n > 0 {
-		lines = append(lines, referenceLines(job.Kind, n)...)
+		switch {
+		case len(job.RefInfo) == n:
+			lines = append(lines, roleLines(job.Kind, job.RefInfo, first)...)
+		case first > 1:
+			lines = append(lines, roleLines(job.Kind, make([]MuseRefInfo, n), first)...)
+		default:
+			lines = append(lines, referenceLines(job.Kind, n)...)
+		}
 	}
 	lines = append(lines, formatLines(job)...)
 	switch {
@@ -590,6 +609,9 @@ func (p *Provider) collect(ctx context.Context, job MuseJob, accountID string, p
 			p.addToLibrary(done)
 		}
 		p.emit(events.EventMuseJobUpdated, done)
+		if succeeded && done.BoardFrames > 0 && done.Kind == MuseJobImage {
+			p.releaseAfter(done)
+		}
 	}
 	p.refreshQuotaLater(accountID, page)
 	return nil
@@ -743,7 +765,7 @@ func (p *Provider) capabilities(ctx context.Context, acc accounts.Record, page P
 // Muse's composer has for this account. Limits read earlier that refuse the
 // job are read again once before the job fails, in case Muse changed them.
 func (p *Provider) attachments(ctx context.Context, job MuseJob, acc accounts.Record, page Page) ([]Attachment, error) {
-	if len(job.References) == 0 {
+	if len(job.References) == 0 && len(job.Frames) == 0 && job.SourceVideo == "" {
 		return nil, nil
 	}
 	caps, read, err := p.capabilities(ctx, acc, page, false)
@@ -762,11 +784,23 @@ func (p *Provider) attachments(ctx context.Context, job MuseJob, acc accounts.Re
 
 // attach reads the job's reference images and checks them against caps.
 func (p *Provider) attach(job MuseJob, caps *MuseCapabilities) ([]Attachment, error) {
-	if len(job.References) > caps.MaxFiles {
-		return nil, &inputError{msg: fmt.Sprintf("Muse nhận tối đa %d file mỗi tin nhắn (tác vụ có %d ảnh).", caps.MaxFiles, len(job.References))}
+	images := append(slices.Clone(job.Frames), job.References...)
+	total := len(images)
+	if job.SourceVideo != "" {
+		total++
 	}
-	atts := make([]Attachment, 0, len(job.References))
-	for k, ref := range job.References {
+	if total > caps.MaxFiles {
+		return nil, &inputError{msg: fmt.Sprintf("Muse nhận tối đa %d file mỗi tin nhắn (tác vụ có %d file).", caps.MaxFiles, total)}
+	}
+	atts := make([]Attachment, 0, total)
+	if job.SourceVideo != "" {
+		att, err := p.attachVideo(job.SourceVideo, caps)
+		if err != nil {
+			return nil, err
+		}
+		atts = append(atts, att)
+	}
+	for k, ref := range images {
 		path, err := p.media.Path(ref)
 		if err != nil {
 			return nil, &inputError{msg: err.Error()}
@@ -786,6 +820,27 @@ func (p *Provider) attach(job MuseJob, caps *MuseCapabilities) ([]Attachment, er
 		atts = append(atts, Attachment{Filename: fmt.Sprintf("image_%d%s", k+1, ext), MimeType: mime, DataBase64: base64.StdEncoding.EncodeToString(data), Category: "image"})
 	}
 	return atts, nil
+}
+
+// attachVideo reads a source video and checks it against caps.
+func (p *Provider) attachVideo(ref string, caps *MuseCapabilities) (Attachment, error) {
+	path, err := p.media.Path(ref)
+	if err != nil {
+		return Attachment{}, &inputError{msg: err.Error()}
+	}
+	ext := strings.ToLower(filepath.Ext(path))
+	mime, ok := caps.videoMime(ext)
+	if !ok {
+		return Attachment{}, &inputError{msg: "Muse không nhận video định dạng này: " + filepath.Base(path)}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Attachment{}, &inputError{msg: "Không đọc được video mẫu (có thể đã bị xoá): " + filepath.Base(path)}
+	}
+	if int64(len(data)) > caps.MaxFileBytes {
+		return Attachment{}, &inputError{msg: fmt.Sprintf("%s vượt %d MB, giới hạn một file của Muse.", filepath.Base(path), caps.MaxFileBytes>>20)}
+	}
+	return Attachment{Filename: "video_1" + ext, MimeType: mime, DataBase64: base64.StdEncoding.EncodeToString(data), Category: "video"}, nil
 }
 
 // errPageNotReady means the account's tab answered but Muse's chat client

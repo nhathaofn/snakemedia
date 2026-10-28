@@ -1,5 +1,5 @@
-import { MuseJobMode, MuseJobStatus } from '../../../types';
-import type { MuseJob, MuseJobKind } from '../../../types';
+import { MuseJobKind, MuseJobMode, MuseJobStatus } from '../../../types';
+import type { MuseJob } from '../../../types';
 
 export const jobStatusLabels: Record<MuseJobStatus, string> = {
   [MuseJobStatus.Queued]: 'Chờ chạy',
@@ -51,7 +51,14 @@ export function jobMode(job: MuseJob): MuseJobMode {
 
 /** The jobs of one studio screen (kind and mode), in the store's order. */
 export function jobsOf(jobs: readonly MuseJob[], kind: MuseJobKind, mode: MuseJobMode): MuseJob[] {
-  return jobs.filter((job) => job.kind === kind && jobMode(job) === mode);
+  return jobs.filter((job) => screenKind(job) === kind && jobMode(job) === mode);
+}
+
+/** The screen kind of a job: a storyboard's image job belongs to its video. */
+export function screenKind(job: MuseJob): MuseJobKind {
+  return job.kind === MuseJobKind.Image && (job.boardFrames ?? 0) > 0
+    ? MuseJobKind.Video
+    : job.kind;
 }
 
 /** Queue filter: every job, one status, or the jobs on hold. */
@@ -75,6 +82,21 @@ export function isActive(job: MuseJob): boolean {
  */
 export function mayBePaid(job: MuseJob): boolean {
   return !!job.sessionId || !!job.sendUnknown;
+}
+
+/**
+ * Whether a job belongs to an earlier run of the app: it ended before this
+ * run started (made before it, for a job without an end time). Jobs still
+ * waiting or running, and older jobs resumed or retried that ended in this
+ * run, count as this run's, so hiding the earlier run never hides them.
+ */
+export function fromPreviousRun(job: MuseJob, runStart: string): boolean {
+  const finished =
+    job.status === MuseJobStatus.Succeeded ||
+    job.status === MuseJobStatus.Failed ||
+    job.status === MuseJobStatus.Cancelled;
+  const made = Date.parse(job.finishedAt || job.createdAt);
+  return finished && !Number.isNaN(made) && made < Date.parse(runStart);
 }
 
 /** Whether the job ended without files (failed or cancelled). */

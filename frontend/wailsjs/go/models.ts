@@ -1727,6 +1727,42 @@ export namespace models {
 		    return a;
 		}
 	}
+	export class Response_SnakeMedia_internal_providers_muse_MuseAsset_ {
+	    success: boolean;
+	    data: muse.MuseAsset;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_muse_MuseAsset_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.MuseAsset);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Response_SnakeMedia_internal_providers_muse_MuseJob_ {
 	    success: boolean;
 	    data: muse.MuseJob;
@@ -1777,6 +1813,114 @@ export namespace models {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
 	        this.data = this.convertValues(source["data"], muse.MuseOptions);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_muse_MusePromptCheck_ {
+	    success: boolean;
+	    data: muse.MusePromptCheck;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_muse_MusePromptCheck_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.MusePromptCheck);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_muse_MusePromptTemplate_ {
+	    success: boolean;
+	    data: muse.MusePromptTemplate;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_muse_MusePromptTemplate_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.MusePromptTemplate);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_muse_MuseReference_ {
+	    success: boolean;
+	    data: muse.MuseReference;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_muse_MuseReference_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.MuseReference);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }
@@ -2375,6 +2519,42 @@ export namespace models {
 		    return a;
 		}
 	}
+	export class Response___SnakeMedia_internal_providers_muse_MuseAsset_ {
+	    success: boolean;
+	    data: muse.MuseAsset[];
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response___SnakeMedia_internal_providers_muse_MuseAsset_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.MuseAsset);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Response___SnakeMedia_internal_providers_muse_MuseJob_ {
 	    success: boolean;
 	    data: muse.MuseJob[];
@@ -2425,6 +2605,42 @@ export namespace models {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
 	        this.data = this.convertValues(source["data"], muse.MuseLibraryItem);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response___SnakeMedia_internal_providers_muse_MusePromptTemplate_ {
+	    success: boolean;
+	    data: muse.MusePromptTemplate[];
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response___SnakeMedia_internal_providers_muse_MusePromptTemplate_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.MusePromptTemplate);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }
@@ -2593,6 +2809,60 @@ export namespace muse {
 	    Queued = "queued",
 	    Succeeded = "succeeded",
 	}
+	export enum MuseRefMode {
+	    Pair = "pair",
+	    Rotate = "rotate",
+	    Shared = "shared",
+	}
+	export enum MuseRefRole {
+	    Character = "character",
+	    Face = "face",
+	    None = "",
+	    Product = "product",
+	    Setting = "setting",
+	    Storyboard = "storyboard",
+	    Style = "style",
+	}
+	export class MuseAsset {
+	    id: string;
+	    tag: string;
+	    name: string;
+	    role: MuseRefRole;
+	    lock?: string;
+	    images: string[];
+	    createdAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseAsset(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.tag = source["tag"];
+	        this.name = source["name"];
+	        this.role = source["role"];
+	        this.lock = source["lock"];
+	        this.images = source["images"];
+	        this.createdAt = source["createdAt"];
+	    }
+	}
+	export class MuseRefInfo {
+	    tag?: string;
+	    role?: MuseRefRole;
+	    lock?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseRefInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tag = source["tag"];
+	        this.role = source["role"];
+	        this.lock = source["lock"];
+	    }
+	}
 	export class MuseJob {
 	    id: string;
 	    kind: MuseJobKind;
@@ -2600,6 +2870,12 @@ export namespace muse {
 	    prompt: string;
 	    label?: string;
 	    references: string[];
+	    refInfo?: MuseRefInfo[];
+	    boardFrames?: number;
+	    after?: string;
+	    frames?: string[];
+	    review?: boolean;
+	    sourceVideo?: string;
 	    outputDir?: string;
 	    index?: number;
 	    ratio?: string;
@@ -2639,6 +2915,12 @@ export namespace muse {
 	        this.prompt = source["prompt"];
 	        this.label = source["label"];
 	        this.references = source["references"];
+	        this.refInfo = this.convertValues(source["refInfo"], MuseRefInfo);
+	        this.boardFrames = source["boardFrames"];
+	        this.after = source["after"];
+	        this.frames = source["frames"];
+	        this.review = source["review"];
+	        this.sourceVideo = source["sourceVideo"];
 	        this.outputDir = source["outputDir"];
 	        this.index = source["index"];
 	        this.ratio = source["ratio"];
@@ -2666,6 +2948,38 @@ export namespace muse {
 	        this.limitReplies = source["limitReplies"];
 	        this.nextCheckAt = source["nextCheckAt"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class MuseStoryboard {
+	    frames: number;
+	    review: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseStoryboard(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.frames = source["frames"];
+	        this.review = source["review"];
+	    }
 	}
 	export class MuseJobRequest {
 	    kind: MuseJobKind;
@@ -2678,6 +2992,10 @@ export namespace muse {
 	    outputDir: string;
 	    ratio: string;
 	    duration: number;
+	    refMode?: MuseRefMode;
+	    assets?: string[];
+	    storyboard?: MuseStoryboard;
+	    sourceVideo?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new MuseJobRequest(source);
@@ -2695,7 +3013,29 @@ export namespace muse {
 	        this.outputDir = source["outputDir"];
 	        this.ratio = source["ratio"];
 	        this.duration = source["duration"];
+	        this.refMode = source["refMode"];
+	        this.assets = source["assets"];
+	        this.storyboard = this.convertValues(source["storyboard"], MuseStoryboard);
+	        this.sourceVideo = source["sourceVideo"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class MuseLibraryItem {
 	    id: string;
@@ -2766,6 +3106,8 @@ export namespace muse {
 	    ratios: MuseRatio[];
 	    durations: number[];
 	    clipSeconds: number;
+	    maxBoardFrames: number;
+	    maxAssetImages: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new MuseOptions(source);
@@ -2783,6 +3125,8 @@ export namespace muse {
 	        this.ratios = this.convertValues(source["ratios"], MuseRatio);
 	        this.durations = source["durations"];
 	        this.clipSeconds = source["clipSeconds"];
+	        this.maxBoardFrames = source["maxBoardFrames"];
+	        this.maxAssetImages = source["maxAssetImages"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2803,6 +3147,41 @@ export namespace muse {
 		    return a;
 		}
 	}
+	export class MusePromptCheck {
+	    tags: string[];
+	    images: number;
+	    warnings: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new MusePromptCheck(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tags = source["tags"];
+	        this.images = source["images"];
+	        this.warnings = source["warnings"];
+	    }
+	}
+	export class MusePromptTemplate {
+	    id: string;
+	    name: string;
+	    text: string;
+	    createdAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MusePromptTemplate(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.text = source["text"];
+	        this.createdAt = source["createdAt"];
+	    }
+	}
+	
 	
 	export class MuseReference {
 	    localUrl: string;

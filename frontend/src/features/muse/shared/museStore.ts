@@ -1,7 +1,9 @@
+import { useMemo } from 'react';
 import { create } from 'zustand';
 import { api, unwrap, unwrapList } from '../../../services';
+import { RUN_START, usePreviousRunStore } from '../../../stores';
 import type { MuseJob, MuseOptions } from '../../../types';
-import { mergeSnapshot, upsertJob } from './format';
+import { fromPreviousRun, mergeSnapshot, upsertJob } from './format';
 
 interface MuseState {
   jobs: MuseJob[];
@@ -94,3 +96,13 @@ export const useMuseStore = create<MuseState>((set, get) => ({
     set({ jobs: get().jobs.filter((job) => job.id !== id) });
   },
 }));
+
+/** The jobs the Muse screens list: earlier runs' finished jobs only when the user chose to see them. */
+export function useVisibleMuseJobs(): MuseJob[] {
+  const jobs = useMuseStore((s) => s.jobs);
+  const showPrevious = usePreviousRunStore((s) => s.showPrevious);
+  return useMemo(
+    () => (showPrevious ? jobs : jobs.filter((job) => !fromPreviousRun(job, RUN_START))),
+    [jobs, showPrevious],
+  );
+}
