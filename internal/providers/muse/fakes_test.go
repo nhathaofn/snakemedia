@@ -40,6 +40,11 @@ type fakePage struct {
 	homeFixes bool
 	homes     int
 	capsReads int
+	// sendTos, sendToRes, sendToErr and onSendTo script SendTo.
+	sendTos   []string
+	sendToRes SendResult
+	sendToErr error
+	onSendTo  func()
 }
 
 // Login answers like page.js: a signed-out page gets HTTP 401 unless http
@@ -81,6 +86,23 @@ func (f *fakePage) Send(_ context.Context, text string, atts []Attachment) (Send
 	f.sends = append(f.sends, text)
 	f.attachments = append(f.attachments, atts)
 	return f.sendRes, f.sendErr
+}
+
+// SendTo records a message into an existing chat; onSendTo (run without the
+// lock) scripts what the chat holds afterwards.
+func (f *fakePage) SendTo(_ context.Context, sid, text string) (SendResult, error) {
+	f.mu.Lock()
+	hook := f.onSendTo
+	f.sendTos = append(f.sendTos, sid+": "+text)
+	res, err := f.sendToRes, f.sendToErr
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	if res == (SendResult{}) && err == nil {
+		res = SendResult{OK: true, SessionID: sid}
+	}
+	return res, err
 }
 
 func (f *fakePage) Status(context.Context, string) (string, error) {

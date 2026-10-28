@@ -258,6 +258,23 @@ func (p *chromePage) Send(ctx context.Context, text string, atts []Attachment) (
 	return r, err
 }
 
+// SendTo posts text into an existing chat. page.js routes the message to that
+// thread; a page without Muse's chat client is sent home and tried once more.
+func (p *chromePage) SendTo(ctx context.Context, sessionID, text string) (SendResult, error) {
+	var r SendResult
+	if err := p.invoke(ctx, p.sendTimeout, "send", &r, text, []Attachment(nil), sessionID); err != nil {
+		return r, err
+	}
+	if !strings.HasPrefix(r.Reason, "not_ready") {
+		return r, nil
+	}
+	if err := p.Home(ctx); err != nil {
+		return r, nil
+	}
+	err := p.invoke(ctx, p.sendTimeout, "send", &r, text, []Attachment(nil), sessionID)
+	return r, err
+}
+
 // Home loads Muse's home page once no other call is using the tab.
 func (p *chromePage) Home(ctx context.Context) error {
 	if p.nav != nil {

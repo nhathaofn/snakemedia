@@ -82,13 +82,21 @@ var kindName = map[MuseJobKind]string{MuseJobImage: "ảnh", MuseJobVideo: "vide
 // buildMessage is the chat message sent for a job, in English like the setup
 // message: one labelled line each for what to make, how to use the attached
 // images (when there are any), and the ratio and duration asked
-// (formatLines), then the user's prompt unchanged.
+// (formatLines), the video guide (longVideoLines for several clips,
+// shortVideoLines for one),
+// then the user's prompt unchanged.
 func buildMessage(job MuseJob) string {
 	lines := []string{kindRequest[job.Kind]}
 	if n := len(job.References); n > 0 {
 		lines = append(lines, referenceLines(job.Kind, n)...)
 	}
 	lines = append(lines, formatLines(job)...)
+	switch {
+	case isLong(job):
+		lines = append(lines, longVideoLines(job)...)
+	case job.Kind == MuseJobVideo:
+		lines = append(lines, shortVideoLines(job)...)
+	}
 	return strings.Join(lines, "\n") + "\nPrompt:\n" + job.Prompt
 }
 
@@ -202,11 +210,85 @@ func (p *Provider) execute(ctx context.Context, jobID, accountID string) error {
 			return err
 		}
 	}
-	ended, err := p.poll(ctx, job, page, cfg)
-	if err != nil {
-		return err
+	for {
+		ended, err := p.poll(ctx, job, page, cfg)
+		if err != nil {
+			return err
+		}
+		err = p.collect(ctx, job, accountID, page, ended, cfg)
+		var more *continueNeeded
+		if !errors.As(err, &more) {
+			return err
+		}
+		if job, err = p.sendContinue(ctx, job, acc, page, more.seen); err != nil {
+			return err
+		}
 	}
-	return p.collect(ctx, job, accountID, page, ended, cfg)
+}
+
+// sendContinue posts continueMessage into a long video's chat. Continues and
+// RepliesSeen are written first, so after a lost answer or a restart the job
+// only waits for a reply newer than the ones already read; it is never sent
+// again in a new chat. SentAt moves to now: the time limit counts from here.
+func (p *Provider) sendContinue(ctx context.Context, job MuseJob, acc accounts.Record, page Page, seen int) (MuseJob, error) {
+	release, err := p.sendSlot(ctx, acc.ID)
+	if err != nil {
+		return job, err
+	}
+	defer release()
+	prevSeen, prevSentAt := job.RepliesSeen, job.SentAt
+	kept := false
+	job, err = p.updateJob(job.ID, func(j *MuseJob) {
+		if j.Status != MuseJobProcessing {
+			return
+		}
+		kept = true
+		j.Continues++
+		j.RepliesSeen = seen
+		j.SentAt = p.now().UTC().Format(time.RFC3339)
+		j.Step = fmt.Sprintf("Nhắc Muse làm tiếp (lần %d/%d)", j.Continues, continueLimit(*j))
+	})
+	if err != nil {
+		return job, err
+	}
+	if !kept {
+		return job, context.Canceled
+	}
+	sendCtx, stopSend := p.sendContext(ctx)
+	defer stopSend()
+	res, err := page.SendTo(sendCtx, job.SessionID, continueMessage)
+	if err != nil {
+		if sendCtx.Err() != nil {
+			return job, sendCtx.Err()
+		}
+		// Muse may have taken it: the chat is read again later and only a
+		// newer reply counts.
+		logger.Get().Warn("muse continue outcome unknown", "job", job.ID, "error", err)
+		return job, fmt.Errorf("Không rõ Muse đã nhận lời nhắc làm tiếp chưa: %w", err)
+	}
+	p.updateAccount(acc.ID, func(_ *accounts.Record, d *museData) { d.LastSentAt = p.now().UTC().Format(time.RFC3339Nano) })
+	if !res.OK {
+		// Definitely not taken: the next try reads the same reply again.
+		job, _ = p.updateJob(job.ID, func(j *MuseJob) {
+			j.Continues--
+			j.RepliesSeen, j.SentAt = prevSeen, prevSentAt
+		})
+		if strings.HasPrefix(res.Reason, "not_ready") {
+			return job, &notSentError{err: errPageNotReady}
+		}
+		// Never a rejectedSend: that may hand the job to another account, in a
+		// new chat that would pay for the clips again. The chat is kept.
+		if until := p.restingUntil(sendCtx, acc.ID, page); !until.IsZero() {
+			return job, &waitAccountError{until: until}
+		}
+		return job, fmt.Errorf("Muse không nhận lời nhắc làm tiếp: %s", res.Reason)
+	}
+	job, err = p.updateJob(job.ID, func(j *MuseJob) {
+		if j.Status == MuseJobProcessing {
+			j.Step = "Muse đang làm tiếp"
+		}
+	})
+	return job, err
 }
 
 // send waits for the account's send slot and its send gap, then posts the
@@ -371,9 +453,19 @@ func (p *Provider) poll(ctx context.Context, job MuseJob, page Page, cfg config.
 			noteStatus(status)
 		}
 		if status == sessionCompleted || status == sessionInterrupted {
-			return status, nil
+			// Right after a continue the chat may still show the last turn's
+			// end: only a newer reply ends this one.
+			if job.RepliesSeen == 0 || p.newReply(ctx, job, page) {
+				return status, nil
+			}
+			status = sessionRunning
 		}
 		overdue := p.now().Sub(sent) > limit
+		if overdue && job.RepliesSeen > 0 && !p.newReply(ctx, job, page) {
+			// The continue got no answer in time. Sending the video again in a
+			// new chat would pay for its clips twice: it fails instead.
+			return "", &longIncompleteError{continues: job.Continues, detail: "Muse không trả lời lời nhắc làm tiếp"}
+		}
 		if (status != sessionRunning || overdue) && p.chatHasResult(ctx, job, page) {
 			return sessionCompleted, nil
 		}
@@ -391,14 +483,26 @@ func (p *Provider) poll(ctx context.Context, job MuseJob, page Page, cfg config.
 	}
 }
 
-// chatHasResult reports whether the chat already holds a file of the job's kind.
+// chatHasResult reports whether the chat already holds a file of the job's
+// kind. A long video's chat holds its clips long before the joined file, so
+// for it only a status line saying it is done counts.
 func (p *Provider) chatHasResult(ctx context.Context, job MuseJob, page Page) bool {
 	events, err := page.Result(ctx, job.SessionID)
 	if err != nil {
 		return false
 	}
+	if isLong(job) {
+		return len(events) > job.RepliesSeen && parseLongStatus(repliesAfter(events, job.RepliesSeen)).State == statusDone
+	}
 	wanted, _ := wantedMedia(events, job.Kind)
 	return len(wanted) > 0
+}
+
+// newReply reports whether the chat holds an answer newer than the ones read
+// before the job's last continue.
+func (p *Provider) newReply(ctx context.Context, job MuseJob, page Page) bool {
+	events, err := page.Result(ctx, job.SessionID)
+	return err == nil && len(events) > job.RepliesSeen
 }
 
 // wantedMedia picks the result files of kind from a chat, and reports whether
@@ -427,10 +531,25 @@ func (p *Provider) collect(ctx context.Context, job MuseJob, accountID string, p
 		return err
 	}
 	wanted, missing := wantedMedia(replies, job.Kind)
+	var long longStatus
+	if isLong(job) {
+		if long, err = p.longOutcome(ctx, job, accountID, page, replies); err != nil {
+			return err
+		}
+		// The chat holds every clip; the joined video is the last one Muse sent.
+		if len(wanted) > 1 {
+			wanted = wanted[len(wanted)-1:]
+		}
+	}
 	if len(wanted) == 0 && missing {
 		// Muse made the file but cannot hand it over right now: read the chat
 		// again later instead of paying for a new one.
 		return fmt.Errorf("Muse đã tạo %s nhưng chưa lấy được file", kindName[job.Kind])
+	}
+	if len(wanted) == 0 && isLong(job) && long.State == "" {
+		// Muse ends its turn while it still joins the clips ("joining now, I
+		// will send the file"): read the chat again later, never a refusal.
+		return fmt.Errorf("Muse chưa giao video %d giây", job.Duration)
 	}
 	if len(wanted) == 0 {
 		return p.noResult(ctx, accountID, page, ended, replies, cfg)
@@ -444,6 +563,11 @@ func (p *Provider) collect(ctx context.Context, job MuseJob, accountID string, p
 		}
 		files = append(files, url)
 	}
+	if isLong(job) && long.State == "" && p.tooShort(ctx, job, files[0]) {
+		// No status line and only a clip so far: Muse may still be joining
+		// (it has ended a turn early with one clip and sent the video later).
+		return fmt.Errorf("Muse chưa giao đủ video %d giây", job.Duration)
+	}
 	saved := p.saveOutputs(job, files)
 	note := p.measureNote(ctx, job, files)
 	succeeded := false
@@ -452,6 +576,7 @@ func (p *Provider) collect(ctx context.Context, job MuseJob, accountID string, p
 			return // cancelled meanwhile: keep the user's decision
 		}
 		j.Status, j.Files, j.Error, j.SavedFiles, j.FormatNote = MuseJobSucceeded, files, "", saved, note
+		j.ChangeNote = long.Changed
 		j.Step = fmt.Sprintf("Đã tải %d file", len(files))
 		j.FinishedAt = p.now().UTC().Format(time.RFC3339)
 		succeeded = true
@@ -468,6 +593,58 @@ func (p *Provider) collect(ctx context.Context, job MuseJob, accountID string, p
 	}
 	p.refreshQuotaLater(accountID, page)
 	return nil
+}
+
+// longOutcome reads how Muse said a long video's latest turn ended:
+//   - TOO SHORT: a script longer than the length, nothing made (fails);
+//   - REFUSED: Muse declined the prompt (policyError, never retried as is);
+//   - INCOMPLETE: clips are missing. An account out of usage waits with its
+//     chat (waitAccountError); otherwise a continue is sent into the chat
+//     (continueNeeded) until continueLimit, then the job fails;
+//   - DONE or no status line: the files are collected as usual.
+func (p *Provider) longOutcome(ctx context.Context, job MuseJob, accountID string, page Page, replies []AssistantEvent) (longStatus, error) {
+	st := parseLongStatus(repliesAfter(replies, job.RepliesSeen))
+	switch st.State {
+	case statusTooShort:
+		return st, &tooShortError{need: st.Detail}
+	case statusRefused:
+		reason := st.Detail
+		if reason == "" {
+			reason = replyText(replies[min(job.RepliesSeen, len(replies)):])
+		}
+		return st, &policyError{reply: reason}
+	case statusIncomplete:
+		if until := p.restingUntil(ctx, accountID, page); !until.IsZero() {
+			return st, &waitAccountError{until: until}
+		}
+		if job.Continues >= continueLimit(job) {
+			return st, &longIncompleteError{continues: job.Continues, detail: st.Detail}
+		}
+		return st, &continueNeeded{seen: len(replies)}
+	}
+	return st, nil
+}
+
+// tooShort reports whether a downloaded video is clearly shorter than the
+// job asked for. A file that cannot be measured is not judged.
+func (p *Provider) tooShort(ctx context.Context, job MuseJob, file string) bool {
+	path, err := p.media.Path(file)
+	if err != nil {
+		return false
+	}
+	meta, err := media.ProbeVideo(ctx, path, p.cfg.Get().Flow)
+	return err == nil && meta.DurationSeconds > 0 && meta.DurationSeconds < float64(job.Duration)-durationTolerance
+}
+
+// restingUntil reads the account's quota and returns when its rest ends, or
+// zero when it may send now.
+func (p *Provider) restingUntil(ctx context.Context, accountID string, page Page) time.Time {
+	p.refreshQuota(ctx, accountID, page)
+	acc, err := p.accounts.Record(accountID)
+	if err != nil {
+		return time.Time{}
+	}
+	return pausedUntil(museView(acc), p.cfg.Get().Muse, p.now())
 }
 
 // refreshQuotaLater reads the account's quota once in the background, so the
@@ -755,12 +932,14 @@ func (p *Provider) recordFailure(jobID, accountID string, err error) {
 		return until.Local().Format("15:04:05")
 	}
 	var (
-		policy   *policyError
-		usage    *usageError
-		rejected *rejectedSend
-		input    *inputError
-		muse     *museError
-		notSent  *notSentError
+		policy     *policyError
+		usage      *usageError
+		rejected   *rejectedSend
+		input      *inputError
+		muse       *museError
+		notSent    *notSentError
+		incomplete *longIncompleteError
+		waitAcc    *waitAccountError
 	)
 	switch {
 	case errors.Is(err, errNotSignedIn):
@@ -791,9 +970,18 @@ func (p *Provider) recordFailure(jobID, accountID string, err error) {
 		}
 		log("page not ready", "requeued without an attempt", err)
 		requeue(fmt.Sprintf("%s: %v Thử lại lúc %s.", accName, err, at), false)
-	case errors.As(err, &policy), errors.As(err, &input):
+	case errors.As(err, &policy), errors.As(err, &input), errors.As(err, &incomplete), errors.As(err, new(*tooShortError)):
 		log(failureClass(err), "failed", nil)
 		failed(err.Error())
+	case errors.As(err, &waitAcc):
+		// The chat holds clips already paid for: wait for this account.
+		log("usage", "waits for the account's rest", nil)
+		p.holdUntil(jobID, waitAcc.until)
+		p.updateJob(jobID, func(j *MuseJob) {
+			if j.Status == MuseJobProcessing {
+				j.Step, j.Error = "Chờ "+accName+" có lượt lại để làm tiếp", err.Error()
+			}
+		})
 	case errors.Is(err, errSendUnknown):
 		// Marked, so a retry warns that Muse may already have made it.
 		log(failureClass(err), "failed", nil)
@@ -856,6 +1044,8 @@ func failureClass(err error) string {
 		return "rejected"
 	case errors.As(err, &muse):
 		return "no result"
+	case errors.As(err, new(*longIncompleteError)):
+		return "long video incomplete"
 	}
 	return "error"
 }

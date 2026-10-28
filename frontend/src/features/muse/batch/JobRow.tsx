@@ -5,7 +5,7 @@ import type { QueueTone } from '../../../components/batch';
 import { Icon } from '../../../components/ui';
 import { MuseJobKind, MuseJobStatus } from '../../../types';
 import type { MuseJob } from '../../../types';
-import { isEnded, jobStatusLabels } from '../shared/format';
+import { isEnded, jobNote, jobStatusLabels } from '../shared/format';
 import type { JobActions } from '../shared/useMuseActions';
 
 interface JobRowProps {
@@ -118,7 +118,7 @@ export const JobRow = memo(function JobRow({
         title={[accountName, format].filter(Boolean).join(' · ') || undefined}
         detail={busy ? job.step : format || undefined}
         error={ended ? job.error : undefined}
-        warning={job.formatNote}
+        warning={jobNote(job) || undefined}
         savedPath={job.status === MuseJobStatus.Succeeded ? saved : undefined}
         onReveal={saved ? () => actions.reveal(saved) : undefined}
         action={

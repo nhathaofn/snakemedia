@@ -81,3 +81,14 @@ export function mayBePaid(job: MuseJob): boolean {
 export function isEnded(job: MuseJob): boolean {
   return job.status === MuseJobStatus.Failed || job.status === MuseJobStatus.Cancelled;
 }
+
+/**
+ * What a finished job's result differs in from what was asked: its size or
+ * length (formatNote), and what Muse changed in a long video's prompt to get
+ * it past its video tool (changeNote). Empty when nothing differs.
+ */
+export function jobNote(job: MuseJob): string {
+  return [job.formatNote, job.changeNote ? `Muse đã đổi: ${job.changeNote}` : '']
+    .filter(Boolean)
+    .join(' ');
+}

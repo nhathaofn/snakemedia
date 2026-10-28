@@ -37,6 +37,9 @@ type MuseOptions struct {
 	// Ratios and Durations (seconds, video) are what a job may ask Muse for.
 	Ratios    []MuseRatio `json:"ratios"`
 	Durations []int       `json:"durations"`
+	// ClipSeconds is one Muse clip; a longer duration is made as several clips
+	// joined in one chat.
+	ClipSeconds int `json:"clipSeconds"`
 }
 
 // MuseJobRequest queues Repeat jobs per non-empty prompt with shared settings.
@@ -110,12 +113,12 @@ func (p *Provider) GetOptions() models.Response[MuseOptions] {
 	p.mu.Unlock()
 	if caps == nil {
 		return models.SuccessResponse(MuseOptions{ImageExtensions: []string{}, Models: offered, JournalWarning: warning,
-			Ratios: museRatios, Durations: museDurations})
+			Ratios: museRatios, Durations: museDurations, ClipSeconds: museClipSeconds})
 	}
 	return models.SuccessResponse(MuseOptions{
 		Known: true, MaxFileBytes: caps.MaxFileBytes, MaxFiles: caps.MaxFiles,
 		ImageExtensions: caps.extensions(), Models: offered, CheckedAt: caps.CheckedAt,
-		JournalWarning: warning, Ratios: museRatios, Durations: museDurations,
+		JournalWarning: warning, Ratios: museRatios, Durations: museDurations, ClipSeconds: museClipSeconds,
 	})
 }
 

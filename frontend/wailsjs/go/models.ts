@@ -2605,6 +2605,9 @@ export namespace muse {
 	    ratio?: string;
 	    duration?: number;
 	    formatNote?: string;
+	    changeNote?: string;
+	    continues?: number;
+	    repliesSeen?: number;
 	    rechecks?: number;
 	    held?: boolean;
 	    status: MuseJobStatus;
@@ -2641,6 +2644,9 @@ export namespace muse {
 	        this.ratio = source["ratio"];
 	        this.duration = source["duration"];
 	        this.formatNote = source["formatNote"];
+	        this.changeNote = source["changeNote"];
+	        this.continues = source["continues"];
+	        this.repliesSeen = source["repliesSeen"];
 	        this.rechecks = source["rechecks"];
 	        this.held = source["held"];
 	        this.status = source["status"];
@@ -2759,6 +2765,7 @@ export namespace muse {
 	    journalWarning: string;
 	    ratios: MuseRatio[];
 	    durations: number[];
+	    clipSeconds: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new MuseOptions(source);
@@ -2775,6 +2782,7 @@ export namespace muse {
 	        this.journalWarning = source["journalWarning"];
 	        this.ratios = this.convertValues(source["ratios"], MuseRatio);
 	        this.durations = source["durations"];
+	        this.clipSeconds = source["clipSeconds"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

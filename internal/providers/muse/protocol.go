@@ -65,6 +65,9 @@ type Page interface {
 	Login(ctx context.Context) (LoginState, error)
 	// Send posts text and attachments into a new chat.
 	Send(ctx context.Context, text string, atts []Attachment) (SendResult, error)
+	// SendTo posts text into the existing chat sessionID (a long video's
+	// continue message).
+	SendTo(ctx context.Context, sessionID, text string) (SendResult, error)
 	// Status returns the session status; "running" while Muse works.
 	Status(ctx context.Context, sessionID string) (string, error)
 	Result(ctx context.Context, sessionID string) ([]AssistantEvent, error)

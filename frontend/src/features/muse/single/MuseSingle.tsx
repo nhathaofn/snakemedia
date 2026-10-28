@@ -16,7 +16,7 @@ import { Icon, IconAction, Modal, RevealList, Spinner } from '../../../component
 import { LIST_REVEAL_STEP, MUSE_SINGLE_MAX_VARIANTS } from '../../../constants';
 import { MuseJobKind, MuseJobMode, MuseJobStatus } from '../../../types';
 import type { MuseJob } from '../../../types';
-import { isActive, isEnded, jobStatusLabels, jobsOf } from '../shared/format';
+import { isActive, isEnded, jobNote, jobStatusLabels, jobsOf } from '../shared/format';
 import { useMuseDraft } from '../shared/museDraft';
 import { FormatFields, MusePanel, ReferencesField } from '../shared/MusePanel';
 import { MuseNotices } from '../shared/MuseNotices';
@@ -193,8 +193,8 @@ const SingleTile = memo(function SingleTile({
         )}
       </div>
       <div className="muse-tile-foot">
-        <p className="muse-tile-prompt" title={job.formatNote || job.prompt}>
-          {job.formatNote && <Icon icon={AlertCircle} size="sm" className="muse-tile-note" />}
+        <p className="muse-tile-prompt" title={jobNote(job) || job.prompt}>
+          {jobNote(job) && <Icon icon={AlertCircle} size="sm" className="muse-tile-note" />}
           {job.prompt}
         </p>
         <div className="muse-tile-actions">

@@ -37,7 +37,7 @@ The notes below add what AGENTS.md does not cover.
 
 ## Providers
 - **Flow** (Google Flow/Labs): image, video and video-edit generation over account rotation, plus the durable image batch queue (`image_queue.go`, Ảnh → Hàng loạt) that resumes by request ID after a restart; see ADRs 0005–0007 and 0012.
-- **Muse** (muse.ai): drives Muse's own chat client inside a signed-in muse.ai tab via the embedded `page.js` (evaluated over CDP by `page.go`). Every muse.ai page dependency lives in `page.js`. Owns a durable image/video job queue and scheduler. What Muse allows (quota, upload limits, models) is read from muse.ai per account, never configured. See ADRs 0008 and 0011.
+- **Muse** (muse.ai): drives Muse's own chat client inside a signed-in muse.ai tab via the embedded `page.js` (evaluated over CDP by `page.go`). Every muse.ai page dependency lives in `page.js`. Owns a durable image/video job queue and scheduler. What Muse allows (quota, upload limits, models) is read from muse.ai per account, never configured. Videos of 20–60 s are one chat built from the app's guide (`longvideo.go`) and checked with `SNAKEMEDIA_LIVE_LONG=1 go test ./internal/providers/muse -run '^TestLiveLongVideo$' -v -count=1`. See ADRs 0008, 0011 and 0013.
 - Both providers follow "never pay twice": a job that may already have been sent is only re-checked (resumed), never re-submitted. Preserve this when touching job/retry code. ADR 0012 lists the reconciliation rules (what counts as a definite refusal, timeouts from `SentAt`, bulk retry skipping accepted jobs, graph run keys).
 
 ## Frontend sections
