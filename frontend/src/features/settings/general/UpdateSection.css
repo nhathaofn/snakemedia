@@ -1,0 +1,19 @@
+.update-actions {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.update-status {
+  font-size: var(--font-size-small);
+  color: var(--text-secondary);
+}
+
+.update-notes {
+  max-height: var(--update-notes-max-height);
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: var(--font-size-small);
+  color: var(--text-secondary);
+}

@@ -6,6 +6,9 @@ import type { SegmentedOption } from '../components/ui/SegmentedControl/Segmente
 /** Default auto-dismiss delay for toasts; 0 keeps a toast until dismissed. */
 export const DEFAULT_TOAST_DURATION_MS = 4000;
 
+/** The "new version" toast stays until the user dismisses it. */
+export const UPDATE_TOAST_DURATION_MS = 0;
+
 /**
  * How long a Flow catalogue or account count is reused between panels that
  * mount together (Single and All tabs), so the same request is not sent twice.

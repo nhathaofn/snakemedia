@@ -235,7 +235,7 @@ func (s *Provider) Start(ctx context.Context, emit func(events.Event, any)) {
 	q.mu.Unlock()
 	if err := q.journal.Load(); err != nil {
 		logger.Get().Warn("flow image queue reset", "error", err)
-		if errors.Is(err, jobs.ErrCorrupt) {
+		if errors.Is(err, jobs.ErrCorrupt) || errors.Is(err, jobs.ErrNewerFormat) {
 			q.mu.Lock()
 			q.warning = strings.TrimSuffix(err.Error(), ": "+jobs.ErrCorrupt.Error())
 			q.mu.Unlock()

@@ -209,3 +209,39 @@ func TestDefaultFlowPagePolicyHasDiscoveryDefaults(t *testing.T) {
 		t.Fatal("zero RPC cache accepted")
 	}
 }
+
+func TestManager_SavesSchemaVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	m, _ := NewManager(path)
+	if _, err := m.Update(m.Get()); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), `"schemaVersion": 1`) || !strings.Contains(string(data), `"theme"`) {
+		t.Fatalf("saved config = %s", data)
+	}
+}
+
+func TestManager_NewerConfigIsReadOnlyAndKept(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	newer := []byte(`{"schemaVersion": 99, "theme": "light", "someNewSetting": true}`)
+	if err := os.WriteFile(path, newer, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := NewManager(path)
+	if !errors.Is(err, ErrNewerConfig) {
+		t.Fatalf("NewManager error = %v, want ErrNewerConfig", err)
+	}
+	if m.Get().Theme != ThemeLight {
+		t.Errorf("values the build accepts were not used: theme %q", m.Get().Theme)
+	}
+	if _, err := m.Update(m.Get()); !errors.Is(err, ErrNewerConfig) {
+		t.Fatalf("Update = %v, want the save refused", err)
+	}
+	if data, _ := os.ReadFile(path); string(data) != string(newer) {
+		t.Fatalf("file changed to %s", data)
+	}
+	if matches, _ := filepath.Glob(path + ".corrupt-*"); len(matches) > 0 {
+		t.Fatal("a newer config was moved aside as corrupt")
+	}
+}

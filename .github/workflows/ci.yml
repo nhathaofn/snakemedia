@@ -5,6 +5,8 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  # release.yml runs the same checks before it builds anything.
+  workflow_call:
 
 jobs:
   validate:
@@ -52,3 +54,18 @@ jobs:
 
       - name: Build (Go)
         run: go build ./...
+
+      # The CLI matches the wails module in go.mod, so a build never rewrites go.mod.
+      - name: Install Wails CLI
+        run: |
+          $version = go list -m -f '{{.Version}}' github.com/wailsapp/wails/v2
+          go install "github.com/wailsapp/wails/v2/cmd/wails@$version"
+
+      - name: Bindings are up to date
+        run: |
+          wails generate module
+          $changed = git status --porcelain -- frontend/wailsjs
+          if ($changed) {
+            Write-Output $changed
+            throw 'frontend/wailsjs is out of date: run "wails generate module" and commit the result.'
+          }

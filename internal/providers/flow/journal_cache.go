@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"SnakeMedia/internal/jobs"
 	"SnakeMedia/internal/logger"
 	"github.com/google/uuid"
 )
@@ -112,6 +113,12 @@ func listJournals[T any](s *Provider, kind string, check func(id string, value T
 		data, err := os.ReadFile(path)
 		if err != nil {
 			logger.Get().Warn("skipping unreadable job journal", "kind", kind, "job", id, "error", err)
+			continue
+		}
+		// A job a newer build saved is left in place for that build, never
+		// moved aside as corrupt (it may be a request Flow already took).
+		if err := jobs.CheckFormat(data); err != nil {
+			logger.Get().Warn("skipping job journal from a newer build", "kind", kind, "job", id, "error", err)
 			continue
 		}
 		var value T

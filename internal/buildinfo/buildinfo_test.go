@@ -33,6 +33,7 @@ func TestParse_Invalid(t *testing.T) {
 		"malformed":       `{`,
 		"missing name":    `{"info":{"productVersion":"1.0.0"}}`,
 		"missing version": `{"name":"Demo"}`,
+		"bad repository":  `{"name":"Demo","info":{"productVersion":"1.0.0"},"update":{"githubRepository":"https://github.com/a/b"}}`,
 	}
 	for name, manifest := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -40,5 +41,12 @@ func TestParse_Invalid(t *testing.T) {
 				t.Errorf("expected ErrInvalidManifest, got %v", err)
 			}
 		})
+	}
+}
+
+func TestParse_UpdateRepository(t *testing.T) {
+	info, err := Parse([]byte(`{"name":"Demo","info":{"productVersion":"1.0.0"},"update":{"githubRepository":"acme/demo"}}`))
+	if err != nil || info.UpdateRepository != "acme/demo" {
+		t.Fatalf("UpdateRepository = %q, %v", info.UpdateRepository, err)
 	}
 }

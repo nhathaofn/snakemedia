@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"runtime/debug"
 	"strings"
 )
@@ -33,7 +34,13 @@ type Info struct {
 	Version     string `json:"version"`
 	Commit      string `json:"commit"`
 	BuildDate   string `json:"buildDate"`
+	// UpdateRepository is the GitHub "owner/name" whose releases the updater
+	// reads (wails.json update.githubRepository); empty turns updates off.
+	UpdateRepository string `json:"updateRepository"`
 }
+
+// repositoryPattern is a GitHub "owner/name".
+var repositoryPattern = regexp.MustCompile(`^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$`)
 
 // ErrInvalidManifest is returned when wails.json is missing required identity fields.
 var ErrInvalidManifest = errors.New("buildinfo: invalid wails.json manifest")
@@ -45,6 +52,9 @@ type wailsManifest struct {
 		ProductName    string `json:"productName"`
 		ProductVersion string `json:"productVersion"`
 	} `json:"info"`
+	Update struct {
+		GitHubRepository string `json:"githubRepository"`
+	} `json:"update"`
 }
 
 // Parse builds Info from the raw contents of wails.json.
@@ -60,6 +70,11 @@ func Parse(manifest []byte) (Info, error) {
 		return Info{}, fmt.Errorf("%w: \"info.productVersion\" is required", ErrInvalidManifest)
 	}
 
+	repo := strings.TrimSpace(m.Update.GitHubRepository)
+	if repo != "" && !repositoryPattern.MatchString(repo) {
+		return Info{}, fmt.Errorf("%w: \"update.githubRepository\" must be owner/name, got %q", ErrInvalidManifest, repo)
+	}
+
 	productName := m.Info.ProductName
 	if productName == "" {
 		productName = m.Name
@@ -72,6 +87,8 @@ func Parse(manifest []byte) (Info, error) {
 		Version:     m.Info.ProductVersion,
 		Commit:      resolveCommit(),
 		BuildDate:   valueOr(buildDate, unknown),
+
+		UpdateRepository: repo,
 	}, nil
 }
 

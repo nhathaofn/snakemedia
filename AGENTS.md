@@ -22,12 +22,13 @@ Production desktop application scaffold built with Go and Wails v2, using Vite +
 | Format (Frontend) | `npm --prefix frontend run format` / `format:check` |
 | Build (Frontend static assets) | `npm --prefix frontend run build` — required before any Go command, `main.go` embeds `frontend/dist` |
 | Build (Go backend) | `go build ./...` |
-| Build (Full Desktop Executable) | `wails build` (optionally `-ldflags "-X SnakeMedia/internal/buildinfo.buildDate=<date>"`) |
+| Build (Full Desktop Executable) | `wails build` (optionally `-ldflags "-X SnakeMedia/internal/buildinfo.buildDate=<date>"`); `-nsis` adds the installer |
+| Release | Bump `info.productVersion` in `wails.json`, push tag `v<version>` (`release.yml`) |
 
 ## Repo map
 | Path | Responsibility | Details |
 |---|---|---|
-| `wails.json` | **Single source of truth** for app name, product name, company and version (`info.productVersion`) | Embedded by `main.go` |
+| `wails.json` | **Single source of truth** for app name, product name, company, version (`info.productVersion`) and the update repository (`update.githubRepository`) | Embedded by `main.go` |
 | `main.go` | Entry point: parses manifest, builds window options from config, lifecycle hooks, single-instance lock, enum bindings | — |
 | `app.go` | Wails-bound controller; every exported method is exposed to the frontend | — |
 | `internal/buildinfo/` | App identity and build metadata parsed from `wails.json` | `buildinfo.go` |
@@ -37,13 +38,14 @@ Production desktop application scaffold built with Go and Wails v2, using Vite +
 | `internal/logger/` | `log/slog` logger: file + stdout, size rotation at startup, runtime level changes; `Recover` for background goroutines | `logger.go`, `recover.go` |
 | `internal/events/` | Typed IPC event names (`events.Event`) and dispatcher | `events.go` |
 | `internal/models/` | `models.Response[T]` envelope and `models.Code` result codes | `response.go` |
-| `internal/services/` | App services (`SystemService`, `SettingsService`) | — |
+| `internal/services/` | App services (`SystemService`, `SettingsService`, `UpdateService`: update check/install, log folder) | `update.go` |
+| `internal/updater/` | Reads the latest GitHub release, downloads the installer, checks `SHA256SUMS.txt`, runs it silently after the app closes | `updater.go`, `install_windows.go` |
 | `internal/engine/` | Node specs (typed ports, settings), registry, typed node adapter, `MediaRef` (the value of image/video/media ports) and `Compatible`, option sources (`OptionsFrom`), `PendingError`, graph executor (`RunGraph`) and run keys that make re-runs resume instead of resend | `node.go`, `graph.go`, `media.go`, `options.go`, `runkey.go` |
 | `internal/media/` | Downloaded and imported media store, `/flow-media/` middleware, streaming `SaveTo`, allowed output roots (`roots.go`), `media.save` node | `store.go`, `roots.go` |
 | `internal/browser/` | Chrome for every provider: launcher (job object), one-browser-per-profile `Pool`, CDP calls (`Call`, `Evaluate`, `Conn`), tabs, cookie import | `pool.go`, `cdp.go`, `tab.go` |
 | `internal/proxy/` | Shared proxy list (encrypted), parsing, health checks, rotating providers, local bridge, per-account `Route` | `manager.go`, `proxy.go`, `bridge.go` |
 | `internal/accounts/` | Every provider's accounts: encrypted store, sign-in window or cookies, checks, proxy assignment, removal; a provider plugs in a `Site` and keeps its data in `Record.Data` | `service.go`, `api.go`, `site.go` |
-| `internal/jobs/` | Generic durable journal for queues: index by ID, atomic writes, transient (unsaved) progress, trim of finished records only, corrupt-file quarantine | `journal.go` |
+| `internal/jobs/` | Generic durable journal for queues: index by ID, atomic writes, transient (unsaved) progress, trim of finished records only, corrupt-file quarantine; on-disk `FormatVersion` shared with Flow's job files | `journal.go`, `format.go` |
 | `internal/providers/` | `Provider` interface and the plugin set (`Plugin{Site, New}`, `Prepare`/`Build`/`Register`/`Start`/`Close`); one package per external service | `provider.go` |
 | `internal/providers/flow/` | Google Flow provider: rotation, projects, model catalogue, image/video generation (shared billable entry in `billable.go`), video edit, job journals (cached), the durable image batch queue (Ảnh → Hàng loạt), platform limits not exposed by Flow as logged fallbacks (`limits.go`), nodes | `provider.go`, `billable.go`, `generation_jobs.go`, `image_queue.go`, `limits.go`, `edit.go`, `nodes.go` |
 | `internal/providers/flow/session/` | Flow's `accounts.Site` (identity, session values, balance) and the account view the Flow provider rotates over | `site.go`, `service.go` |
@@ -63,7 +65,8 @@ Production desktop application scaffold built with Go and Wails v2, using Vite +
 | `frontend/src/types/` | `backend.ts` re-exports generated DTOs/enums; `app.ts` holds frontend-only types | — |
 | `frontend/wailsjs/` | Auto-generated Go bindings and runtime bridge | Auto-generated |
 | `.agents/verify.json` | Verification gate commands for fast pre-completion checks | — |
-| `.github/workflows/` | Continuous integration pipeline configuration | `ci.yml` |
+| `.github/workflows/` | CI (checks, bindings up to date) and release on a `v*` tag (per-user NSIS installer, portable exe, `SHA256SUMS.txt`) | `ci.yml`, `release.yml` |
+| `build/windows/installer/` | NSIS installer, per user (`REQUEST_EXECUTION_LEVEL "user"`, `%LocalAppData%\Programs`), so updates need no admin | `project.nsi` |
 
 ## Conventions
 - **Zero hardcode:** identity/version come from `wails.json`; user-tunable values live in `internal/config`; shared enums (theme, log level, events, response codes) are Go types bound via `EnumBind` and consumed in TS through `frontend/src/types/backend.ts`. Never redeclare a backend DTO or enum in TypeScript.
@@ -90,6 +93,8 @@ Production desktop application scaffold built with Go and Wails v2, using Vite +
 - Every batch form splits prompts with `components/batch/prompts.ts` in the mode the user picks (Từng dòng: one prompt per line; Theo đoạn: blocks between blank lines; Tổng hợp: the whole text is one prompt); the last mode is remembered in localStorage. Flow Ảnh → Hàng loạt fixes the mode to Từng dòng (`promptMode`). Enter (or a .txt import) adds the prompts to the queue on hold, skipping prompts already waiting (`newPrompts`); Ctrl+Enter breaks the line; the screen's "Chạy" starts held prompts and "Dừng" holds the waiting ones (Flow and Muse alike).
 - Files saved for the user are named `<n>-snakemedia-<provider>-<6 random chars>` (`media.OutputName`): n is the prompt's place in its batch, or the folder's next number for a file saved by hand. Batch forms pick the folder with `components/batch/OutputFolderField` (remembered per provider in config: `flow.batchOutputDir`, `muse.outputDir`); each batch (Flow Ảnh → Hàng loạt, Muse Hàng loạt) saves into its own sub-folder `snakemedia-<provider>-<kind>-<date-time>` of that folder, and prompts added while it is unfinished join it with the next numbers (`media.BatchFolder`); Muse images (made as WebP) are converted on save to `muse.imageFormat` (PNG, JPG or original; `media.ConvertImages`), the media folder keeps the original; single studios save nothing on their own, only through their download button.
 - Platform limits Flow does not expose live in `internal/providers/flow/limits.go` as named fallbacks logged on first use; never in config or TypeScript.
+- Saved data is versioned: `config.json` carries `schemaVersion` (`config.SchemaVersion`), journals and Flow job files `formatVersion` (`jobs.FormatVersion`). Raise the number when a saved field changes meaning and read the older form on load. Data from a newer build is never quarantined or overwritten: config becomes read-only, a journal refuses writes, a Flow job file is skipped.
+- Releases come only from a `v*` tag equal to `wails.json`'s version; the updater relies on the asset names `release.yml` writes. The Wails CLI must match the `wails/v2` version in `go.mod`.
 - Fast checks defined in `.agents/verify.json` must pass before finishing any development task.
 
 ## Boundaries

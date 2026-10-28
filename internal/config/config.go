@@ -74,6 +74,21 @@ var ErrInvalidConfig = errors.New("config: invalid configuration")
 // saving it would undo changes another screen saved in between.
 var ErrConflict = errors.New("Cài đặt vừa được lưu ở màn hình khác; hãy thử lưu lại.")
 
+// SchemaVersion is the format of config.json, saved in it as schemaVersion.
+// Raise it when a saved field changes meaning, and carry older values over in
+// migrate. A file without it predates versioning and is read as version 1.
+const SchemaVersion = 1
+
+// ErrNewerConfig refuses to save over a config.json written by a newer build:
+// this build would drop the settings it does not know.
+var ErrNewerConfig = errors.New("Cài đặt được lưu bởi bản app mới hơn nên bản này chỉ đọc, không lưu thay đổi. Hãy cập nhật app.")
+
+// storedConfig is config.json: the settings plus their format version.
+type storedConfig struct {
+	SchemaVersion int `json:"schemaVersion"`
+	AppConfig
+}
+
 // AppConfig defines user-editable runtime settings.
 type AppConfig struct {
 	Theme    Theme    `json:"theme"`
@@ -84,6 +99,7 @@ type AppConfig struct {
 	Accounts    AccountConfig `json:"accounts"`
 	Flow        FlowConfig    `json:"flow"`
 	Muse        MuseConfig    `json:"muse"`
+	Updates     UpdateConfig  `json:"updates"`
 	// Revision counts saves in this run. An update must carry the revision it
 	// was made from (0 from a client that predates it is accepted), so a stale
 	// screen cannot overwrite a newer save. It is not kept across restarts.
@@ -99,6 +115,7 @@ func DefaultConfig() AppConfig {
 		Accounts:    DefaultAccountConfig(),
 		Flow:        DefaultFlowConfig(),
 		Muse:        DefaultMuseConfig(),
+		Updates:     DefaultUpdateConfig(),
 	}
 }
 
@@ -135,6 +152,8 @@ type Manager struct {
 	mu     sync.RWMutex
 	config AppConfig
 	path   string
+	// readOnly refuses every save (ErrNewerConfig) for the rest of the run.
+	readOnly error
 }
 
 // NewManager loads configuration from path. It always returns a usable manager:
@@ -169,6 +188,9 @@ func (m *Manager) Update(cfg AppConfig) (AppConfig, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if m.readOnly != nil {
+		return m.config, m.readOnly
+	}
 	if cfg.Revision != 0 && cfg.Revision != m.config.Revision {
 		return m.config, ErrConflict
 	}
@@ -190,6 +212,21 @@ func (m *Manager) load() error {
 	}
 	if err != nil {
 		return fmt.Errorf("config: read %s: %w", m.path, err)
+	}
+
+	// A newer build's file is kept as it is: its values are used where this
+	// build accepts them, and nothing is saved over it.
+	var head struct {
+		SchemaVersion int `json:"schemaVersion"`
+	}
+	if json.Unmarshal(data, &head) == nil && head.SchemaVersion > SchemaVersion {
+		m.readOnly = ErrNewerConfig
+		cfg := DefaultConfig()
+		if json.Unmarshal(data, &cfg) == nil && cfg.Validate() == nil {
+			cfg.Revision = 0
+			m.config = cfg
+		}
+		return fmt.Errorf("config: %s (định dạng %d, bản này đọc tới %d): %w", m.path, head.SchemaVersion, SchemaVersion, ErrNewerConfig)
 	}
 
 	// Decode over defaults so fields added in newer versions keep sensible values.
@@ -255,7 +292,7 @@ func (m *Manager) quarantine(cause error) error {
 }
 
 func (m *Manager) write(cfg AppConfig) error {
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	data, err := json.MarshalIndent(storedConfig{SchemaVersion: SchemaVersion, AppConfig: cfg}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("config: encode: %w", err)
 	}

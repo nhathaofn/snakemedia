@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { DEFAULT_TOAST_DURATION_MS } from '../constants';
-import type { AppConfig, AppInfo, ToastNotification } from '../types';
+import type { AppConfig, AppInfo, ToastNotification, UpdateRelease } from '../types';
 
 interface AppState {
   // Backend-sourced state (null until loaded by useAppBootstrap)
@@ -8,6 +8,9 @@ interface AppState {
   setAppInfo: (info: AppInfo) => void;
   config: AppConfig | null;
   setConfig: (cfg: AppConfig) => void;
+  /** Newer release found by the startup check or by Cài đặt → Chung. */
+  availableUpdate: UpdateRelease | null;
+  setAvailableUpdate: (release: UpdateRelease | null) => void;
 
   // Sidebar navigation state
   sidebarCollapsed: boolean;
@@ -25,6 +28,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   setAppInfo: (appInfo) => set({ appInfo }),
   config: null,
   setConfig: (config) => set({ config }),
+  availableUpdate: null,
+  setAvailableUpdate: (availableUpdate) => set({ availableUpdate }),
 
   sidebarCollapsed: false,
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),

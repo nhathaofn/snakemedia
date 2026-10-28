@@ -5,7 +5,7 @@ Desktop application built with Go + Wails v2 and a Vite + React + TypeScript fro
 ## Prerequisites
 - Go (version in `go.mod`)
 - Node.js 22+ and npm
-- Wails CLI v2: `go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0`
+- Wails CLI v2, the same version as `github.com/wailsapp/wails/v2` in `go.mod` (an older CLI rewrites `go.mod`): `go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.0`
 
 ## Getting started
 ```bash
@@ -18,7 +18,26 @@ wails dev
 ```bash
 wails build
 ```
-The executable is written to `build/bin/`.
+The executable is written to `build/bin/`. `wails build -nsis` also makes the
+per-user installer (needs NSIS's `makensis`).
+
+## Releasing
+1. Set `info.productVersion` in `wails.json` (for example `1.1.0`), commit and push.
+2. Tag that commit `v1.1.0` and push the tag.
+
+`.github/workflows/release.yml` runs every check, builds the installer and the
+portable exe, and publishes a GitHub release with `SHA256SUMS.txt`. A tag that
+does not match `wails.json` fails the release.
+
+## Updates
+The app reads releases of the repository named in `wails.json`
+(`update.githubRepository`, which must be public). It checks on start (Cài đặt →
+Chung → Cập nhật, can be turned off) and only tells the user; installing waits
+for a click. The installer is downloaded to `%LocalAppData%\SnakeMedia\updates`,
+checked against `SHA256SUMS.txt`, and run silently into the app's own folder
+once the app has closed; it then starts the app again. Queued jobs stay in their
+journals and are re-checked, not re-sent. The portable exe and dev builds are
+not replaced: they show where to download the new version.
 
 ## Name and version
 Edit `wails.json` (`name`, `info.productName`, `info.productVersion`). Nothing else needs to change.

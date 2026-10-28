@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"SnakeMedia/internal/providers/muse"
 	"SnakeMedia/internal/proxy"
 	"SnakeMedia/internal/services"
+	"SnakeMedia/internal/updater"
 	"SnakeMedia/internal/window"
 )
 
@@ -44,6 +46,7 @@ type App struct {
 	nodes               *engine.Registry
 	dispatcher          *events.Dispatcher
 	requests            *services.RequestRegistry
+	updates             *services.UpdateService
 	// startupNotice is shown once the window is up (config reset to defaults).
 	startupNotice string
 }
@@ -66,6 +69,9 @@ func NewApp(info buildinfo.Info) (*App, error) {
 	if cfgErr != nil {
 		log.Warn("configuration could not be loaded, using defaults", "error", cfgErr)
 		notice = "Không đọc được file cài đặt, app đang dùng cài đặt mặc định. Hãy kiểm tra lại trong Cài đặt.\n\n" + cfgErr.Error()
+		if errors.Is(cfgErr, config.ErrNewerConfig) {
+			notice = config.ErrNewerConfig.Error()
+		}
 	}
 	log.Info("starting application",
 		"name", info.Name, "version", info.Version, "commit", info.Commit, "dataDir", p.DataDir)
@@ -100,6 +106,7 @@ func NewApp(info buildinfo.Info) (*App, error) {
 		nodes:               nodes,
 		requests:            services.NewRequestRegistry(),
 		startupNotice:       notice,
+		updates:             services.NewUpdateService(updater.New(info.Name, info.Version, info.UpdateRepository, p.UpdatesDir), p.LogDir),
 	}, nil
 }
 
@@ -121,6 +128,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.dispatcher = events.NewDispatcher(ctx)
 	emit := func(event events.Event, data any) { a.dispatcher.Emit(event, data) }
+	a.updates.Start(emit, func() { runtime.Quit(ctx) })
 	a.accounts.Start(ctx, emit)
 	a.providers.Start(ctx, emit)
 }
@@ -129,6 +137,9 @@ func (a *App) domReady(ctx context.Context) {
 	logger.Get().Info("frontend ready")
 	a.showMainWindow(ctx)
 	a.dispatcher.Emit(events.EventAppReady)
+	if a.cfg.Get().Updates.CheckOnStartup {
+		a.updates.CheckInBackground(ctx)
+	}
 	if a.startupNotice != "" {
 		// Off the callback: the dialog waits for the user.
 		go func() {
@@ -189,6 +200,28 @@ func (a *App) onSecondInstanceLaunch(data options.SecondInstanceData) {
 // GetAppInfo exposes application identity and build metadata.
 func (a *App) GetAppInfo() models.Response[buildinfo.Info] {
 	return a.system.GetAppInfo(a.ctx)
+}
+
+// CheckForUpdate looks for a newer release of the app.
+func (a *App) CheckForUpdate() models.Response[updater.Release] {
+	return logged("CheckForUpdate", a.updates.Check(a.ctx))
+}
+
+// InstallUpdate downloads and verifies the newer release, then closes the app
+// so its installer can run; the installer starts the app again. Progress
+// arrives as events.EventUpdateProgress.
+func (a *App) InstallUpdate() models.Response[bool] {
+	return logged("InstallUpdate", a.updates.Install(a.ctx))
+}
+
+// GetUpdateProgress returns the running update download's progress.
+func (a *App) GetUpdateProgress() models.Response[updater.Progress] {
+	return a.updates.Progress()
+}
+
+// OpenLogFolder shows the folder holding app.log.
+func (a *App) OpenLogFolder() models.Response[bool] {
+	return logged("OpenLogFolder", a.updates.OpenLogFolder())
 }
 
 // GetSystemInfo exposes host runtime information.

@@ -33,6 +33,8 @@ import type {
   ProxyCheckResult,
   SaveMediaResult,
   StudioConfig,
+  UpdateProgress,
+  UpdateRelease,
   UploadedSourceVideo,
 } from '../types';
 import { errorMessage } from '../utils';
@@ -107,6 +109,10 @@ export function unwrapList<T>(res: ApiResponse<T[] | null>): T[] {
 /** Typed bridge to the Go backend. Add one entry per exported App method. */
 export const api = {
   getAppInfo: () => invoke<AppInfo>('GetAppInfo', Backend.GetAppInfo),
+  checkForUpdate: () => invoke<UpdateRelease>('CheckForUpdate', Backend.CheckForUpdate),
+  installUpdate: () => invoke<boolean>('InstallUpdate', Backend.InstallUpdate),
+  getUpdateProgress: () => invoke<UpdateProgress>('GetUpdateProgress', Backend.GetUpdateProgress),
+  openLogFolder: () => invoke<boolean>('OpenLogFolder', Backend.OpenLogFolder),
   getConfig: () => invoke<AppConfig>('GetConfig', Backend.GetConfig),
   updateConfig: (cfg: AppConfig) =>
     invoke<AppConfig>('UpdateConfig', () => Backend.UpdateConfig(cfg)),

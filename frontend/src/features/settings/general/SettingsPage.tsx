@@ -1,5 +1,5 @@
 import React from 'react';
-import { SegmentedControl } from '../../../components/ui';
+import { Button, SegmentedControl } from '../../../components/ui';
 import {
   NumberSetting,
   SettingRow,
@@ -9,7 +9,9 @@ import {
 } from '../../../components/settings';
 import { LOG_LEVEL_OPTIONS, THEME_OPTIONS, WINDOW_SCALE_OPTIONS } from '../../../constants';
 import { useConfigSection, useConfigUpdate } from '../../../hooks';
+import { api } from '../../../services';
 import { useAppStore } from '../../../stores';
+import { UpdateSection } from './UpdateSection';
 
 const MB = 1 << 20;
 
@@ -22,6 +24,13 @@ export const SettingsPage: React.FC = () => {
   const { update, saving } = useConfigUpdate();
   const { section: accounts, patch, saving: savingAccounts } = useConfigSection('accounts');
   const busy = saving || savingAccounts;
+  const addToast = useAppStore((s) => s.addToast);
+
+  const openLogFolder = async () => {
+    const res = await api.openLogFolder();
+    if (!res.success)
+      addToast({ type: 'error', message: res.error ?? 'Không mở được thư mục log.' });
+  };
 
   return (
     <SettingsShell title="Cài đặt">
@@ -178,7 +187,14 @@ export const SettingsPage: React.FC = () => {
             disabled={!config || busy}
           />
         </SettingRow>
+        <SettingRow label="Tệp log" hint="Gửi kèm tệp log khi báo lỗi.">
+          <Button size="sm" onClick={() => void openLogFolder()}>
+            Mở thư mục log
+          </Button>
+        </SettingRow>
       </SettingsSection>
+
+      <UpdateSection />
     </SettingsShell>
   );
 };

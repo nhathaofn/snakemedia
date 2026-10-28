@@ -107,6 +107,7 @@ export namespace buildinfo {
 	    version: string;
 	    commit: string;
 	    buildDate: string;
+	    updateRepository: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Info(source);
@@ -120,6 +121,7 @@ export namespace buildinfo {
 	        this.version = source["version"];
 	        this.commit = source["commit"];
 	        this.buildDate = source["buildDate"];
+	        this.updateRepository = source["updateRepository"];
 	    }
 	}
 
@@ -189,6 +191,18 @@ export namespace config {
 	        this.maxResponseBytes = source["maxResponseBytes"];
 	        this.maxDownloadBytes = source["maxDownloadBytes"];
 	        this.idleBrowserMinutes = source["idleBrowserMinutes"];
+	    }
+	}
+	export class UpdateConfig {
+	    checkOnStartup: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new UpdateConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.checkOnStartup = source["checkOnStartup"];
 	    }
 	}
 	export class MuseConfig {
@@ -294,6 +308,7 @@ export namespace config {
 	    accounts: AccountConfig;
 	    flow: FlowConfig;
 	    muse: MuseConfig;
+	    updates: UpdateConfig;
 	    revision: number;
 	
 	    static createFrom(source: any = {}) {
@@ -308,6 +323,7 @@ export namespace config {
 	        this.accounts = this.convertValues(source["accounts"], AccountConfig);
 	        this.flow = this.convertValues(source["flow"], FlowConfig);
 	        this.muse = this.convertValues(source["muse"], MuseConfig);
+	        this.updates = this.convertValues(source["updates"], UpdateConfig);
 	        this.revision = source["revision"];
 	    }
 	
@@ -329,6 +345,7 @@ export namespace config {
 		    return a;
 		}
 	}
+	
 	
 
 }
@@ -609,6 +626,8 @@ export namespace events {
 	    FlowImageTasksChanged = "flow:image-tasks-changed",
 	    MuseJobUpdated = "muse:job-updated",
 	    MuseJobsChanged = "muse:jobs-changed",
+	    UpdateAvailable = "update:available",
+	    UpdateProgress = "update:progress",
 	}
 
 }
@@ -1852,6 +1871,78 @@ export namespace models {
 		    return a;
 		}
 	}
+	export class Response_SnakeMedia_internal_updater_Progress_ {
+	    success: boolean;
+	    data: updater.Progress;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_updater_Progress_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], updater.Progress);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_updater_Release_ {
+	    success: boolean;
+	    data: updater.Release;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_updater_Release_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], updater.Release);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Response___SnakeMedia_internal_accounts_Account_ {
 	    success: boolean;
 	    data: accounts.Account[];
@@ -2775,6 +2866,51 @@ export namespace services {
 	        this.arch = source["arch"];
 	        this.goVersion = source["goVersion"];
 	        this.uptime = source["uptime"];
+	    }
+	}
+
+}
+
+export namespace updater {
+	
+	export class Progress {
+	    done: number;
+	    total: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Progress(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.done = source["done"];
+	        this.total = source["total"];
+	    }
+	}
+	export class Release {
+	    current: string;
+	    latest: string;
+	    available: boolean;
+	    notes: string;
+	    pageUrl: string;
+	    publishedAt: string;
+	    canInstall: boolean;
+	    reason?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Release(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.current = source["current"];
+	        this.latest = source["latest"];
+	        this.available = source["available"];
+	        this.notes = source["notes"];
+	        this.pageUrl = source["pageUrl"];
+	        this.publishedAt = source["publishedAt"];
+	        this.canInstall = source["canInstall"];
+	        this.reason = source["reason"];
 	    }
 	}
 

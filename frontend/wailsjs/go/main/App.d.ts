@@ -19,6 +19,8 @@ export function CancelMuseJob(arg1:string):Promise<models.Response_SnakeMedia_in
 
 export function CheckAccount(arg1:string):Promise<models.Response_SnakeMedia_internal_accounts_Account_>;
 
+export function CheckForUpdate():Promise<models.Response_SnakeMedia_internal_updater_Release_>;
+
 export function CheckProxies():Promise<models.Response___SnakeMedia_internal_proxy_CheckResult_>;
 
 export function ChooseBatchOutputDirectory(arg1:accounts.Provider):Promise<models.Response_SnakeMedia_internal_media_DirectoryResult_>;
@@ -63,6 +65,8 @@ export function GetStudioConfig():Promise<models.Response_SnakeMedia_internal_pr
 
 export function GetSystemInfo():Promise<models.Response_SnakeMedia_internal_services_SystemInfo_>;
 
+export function GetUpdateProgress():Promise<models.Response_SnakeMedia_internal_updater_Progress_>;
+
 export function GetVideoModels():Promise<models.Response___SnakeMedia_internal_providers_flow_FlowVideoModel_>;
 
 export function HoldFlowImageTasks(arg1:Array<string>):Promise<models.Response_int_>;
@@ -72,6 +76,8 @@ export function HoldMuseQueued(arg1:muse.MuseJobKind,arg2:muse.MuseJobMode):Prom
 export function ImportAccountCookies(arg1:accounts.Provider,arg2:string,arg3:string):Promise<models.Response_SnakeMedia_internal_accounts_Account_>;
 
 export function ImportFlowProjectImageReference(arg1:string,arg2:string,arg3:flow.ImageProjectMode,arg4:string):Promise<models.Response_SnakeMedia_internal_providers_flow_ImageTaskReference_>;
+
+export function InstallUpdate():Promise<models.Response_bool_>;
 
 export function ListFlowImageProjects(arg1:flow.ImageProjectMode):Promise<models.Response___SnakeMedia_internal_providers_flow_FlowImageProject_>;
 
@@ -90,6 +96,8 @@ export function ListPendingVideoGenerations():Promise<models.Response___SnakeMed
 export function ListVideoEditJobs():Promise<models.Response___SnakeMedia_internal_providers_flow_GeneratedVideoItem_>;
 
 export function OpenAccountBrowser(arg1:string):Promise<models.Response_SnakeMedia_internal_accounts_Account_>;
+
+export function OpenLogFolder():Promise<models.Response_bool_>;
 
 export function OpenMuseOutputFolder():Promise<models.Response_bool_>;
 

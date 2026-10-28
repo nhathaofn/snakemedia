@@ -26,6 +26,10 @@ export function CheckAccount(arg1) {
   return window['go']['main']['App']['CheckAccount'](arg1);
 }
 
+export function CheckForUpdate() {
+  return window['go']['main']['App']['CheckForUpdate']();
+}
+
 export function CheckProxies() {
   return window['go']['main']['App']['CheckProxies']();
 }
@@ -114,6 +118,10 @@ export function GetSystemInfo() {
   return window['go']['main']['App']['GetSystemInfo']();
 }
 
+export function GetUpdateProgress() {
+  return window['go']['main']['App']['GetUpdateProgress']();
+}
+
 export function GetVideoModels() {
   return window['go']['main']['App']['GetVideoModels']();
 }
@@ -132,6 +140,10 @@ export function ImportAccountCookies(arg1, arg2, arg3) {
 
 export function ImportFlowProjectImageReference(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ImportFlowProjectImageReference'](arg1, arg2, arg3, arg4);
+}
+
+export function InstallUpdate() {
+  return window['go']['main']['App']['InstallUpdate']();
 }
 
 export function ListFlowImageProjects(arg1) {
@@ -168,6 +180,10 @@ export function ListVideoEditJobs() {
 
 export function OpenAccountBrowser(arg1) {
   return window['go']['main']['App']['OpenAccountBrowser'](arg1);
+}
+
+export function OpenLogFolder() {
+  return window['go']['main']['App']['OpenLogFolder']();
 }
 
 export function OpenMuseOutputFolder() {

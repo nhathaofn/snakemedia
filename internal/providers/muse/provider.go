@@ -126,7 +126,7 @@ func (p *Provider) Start(ctx context.Context, emit func(events.Event, any)) {
 	p.mu.Unlock()
 	if err := p.jobs.load(); err != nil {
 		logger.Get().Warn("muse job journal reset", "error", err)
-		if errors.Is(err, errJournalCorrupt) {
+		if errors.Is(err, errJournalCorrupt) || errors.Is(err, jobs.ErrNewerFormat) {
 			p.mu.Lock()
 			p.journalWarning = strings.TrimSuffix(err.Error(), ": "+errJournalCorrupt.Error())
 			p.mu.Unlock()

@@ -14,6 +14,7 @@ const (
 	imageOutputDirName = "generated-images"
 	museOutputDirName  = "muse-output"
 	accountsDirName    = "accounts"
+	updatesDirName     = "updates"
 )
 
 // Paths groups the resolved on-disk locations for one application.
@@ -30,6 +31,9 @@ type Paths struct {
 	// AccountsDir holds every provider's accounts, their Chrome profiles and
 	// the proxy list.
 	AccountsDir string
+	// UpdatesDir holds a downloaded installer until it has run; it is under
+	// the local (not roaming) cache folder where the OS has one.
+	UpdatesDir string
 }
 
 // Resolve returns the standard per-user locations for appName, rooted at the
@@ -39,7 +43,11 @@ func Resolve(appName string) (Paths, error) {
 	if err != nil {
 		return Paths{}, fmt.Errorf("paths: resolve user config dir: %w", err)
 	}
-	return ForRoot(filepath.Join(base, appName)), nil
+	p := ForRoot(filepath.Join(base, appName))
+	if cache, err := os.UserCacheDir(); err == nil {
+		p.UpdatesDir = filepath.Join(cache, appName, updatesDirName)
+	}
+	return p, nil
 }
 
 // ForRoot returns the layout for an explicit data directory (useful in tests).
@@ -52,5 +60,6 @@ func ForRoot(dataDir string) Paths {
 		ImageOutputDir: filepath.Join(dataDir, imageOutputDirName),
 		MuseOutputDir:  filepath.Join(dataDir, museOutputDirName),
 		AccountsDir:    filepath.Join(dataDir, accountsDirName),
+		UpdatesDir:     filepath.Join(dataDir, updatesDirName),
 	}
 }

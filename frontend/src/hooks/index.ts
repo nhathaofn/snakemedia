@@ -6,3 +6,4 @@ export * from './useCompactLayout';
 export * from './useThemeSync';
 export * from './useWailsEvent';
 export * from './useNow';
+export * from './useUpdateNotice';

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"SnakeMedia/internal/jobs"
 	"SnakeMedia/internal/media"
 	"SnakeMedia/internal/providers/flow/session"
 	"SnakeMedia/pkg/utils"
@@ -97,6 +98,13 @@ func (s *Provider) saveState(kind, id string, value any) error {
 	if err != nil {
 		return err
 	}
+	// Never write over a record a newer build saved (it may be a paid job).
+	if old, err := os.ReadFile(path); err == nil {
+		if err := jobs.CheckFormat(old); err != nil {
+			return err
+		}
+	}
+	data = jobs.Stamp(data)
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
@@ -111,6 +119,9 @@ func (s *Provider) readState(kind, id string, out any) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("Không đọc được tham chiếu đã lưu: %w", err)
+	}
+	if err := jobs.CheckFormat(data); err != nil {
+		return err
 	}
 	return json.Unmarshal(data, out)
 }

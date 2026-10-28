@@ -46,6 +46,15 @@ type Journal[T Record] struct {
 	transient func(before, after T) bool
 	items     []T
 	byID      map[string]int
+	// blocked stops every write: the file belongs to a newer build.
+	blocked error
+}
+
+// journalFile is the journal on disk (FormatVersion). Journals written before
+// versioning are a bare JSON array of records.
+type journalFile[T Record] struct {
+	FormatVersion int `json:"formatVersion"`
+	Records       []T `json:"records"`
 }
 
 // Options configure a journal.
@@ -67,7 +76,9 @@ func New[T Record](path string, opts Options[T]) *Journal[T] {
 
 // Load reads the journal. A missing file is an empty queue. A corrupt file is
 // moved aside, the queue starts empty and the error wraps ErrCorrupt with
-// where the old file now is, so the caller can tell the user.
+// where the old file now is, so the caller can tell the user. A file saved by
+// a newer build stays untouched: the queue is empty and every write fails
+// with ErrNewerFormat until that build (or a later one) runs again.
 func (j *Journal[T]) Load() error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -80,8 +91,20 @@ func (j *Journal[T]) Load() error {
 	if err != nil {
 		return err
 	}
+	if err := CheckFormat(data); err != nil {
+		j.items, j.blocked = []T{}, err
+		j.reindexLocked()
+		return fmt.Errorf("Không mở được danh sách tác vụ %s: %w", j.path, err)
+	}
 	var items []T
-	if err := json.Unmarshal(data, &items); err != nil {
+	if isObject(data) {
+		var file journalFile[T]
+		err = json.Unmarshal(data, &file)
+		items = file.Records
+	} else {
+		err = json.Unmarshal(data, &items)
+	}
+	if err != nil {
 		backup := fmt.Sprintf("%s.corrupt-%s", j.path, time.Now().Format("20060102-150405"))
 		_ = os.Rename(j.path, backup)
 		j.items = []T{}
@@ -239,7 +262,10 @@ func (j *Journal[T]) trimLocked() {
 }
 
 func (j *Journal[T]) saveLocked() error {
-	data, err := json.Marshal(j.items)
+	if j.blocked != nil {
+		return j.blocked
+	}
+	data, err := json.Marshal(journalFile[T]{FormatVersion: FormatVersion, Records: j.items})
 	if err != nil {
 		return err
 	}

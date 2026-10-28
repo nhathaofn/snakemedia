@@ -3,10 +3,10 @@ import { useAppStore } from '../stores';
 import type { AppConfig } from '../types';
 import { useConfigUpdate } from './useConfigUpdate';
 
-type SectionKey = 'accounts' | 'flow' | 'muse';
+type SectionKey = 'accounts' | 'flow' | 'muse' | 'updates';
 
 /**
- * One nested group of the backend config (accounts, flow or muse) with a
+ * One nested group of the backend config (accounts, flow, muse or updates) with a
  * patch that saves changed fields on top of the current values.
  */
 export function useConfigSection<K extends SectionKey>(key: K) {

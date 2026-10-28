@@ -6,7 +6,7 @@
  * `wails build` or `wails generate module` to regenerate.
  */
 import { accounts, config, events, flow, models, muse } from '../../wailsjs/go/models';
-import type { buildinfo, media, proxy } from '../../wailsjs/go/models';
+import type { buildinfo, media, proxy, updater } from '../../wailsjs/go/models';
 
 export type AppInfo = buildinfo.Info;
 export type AppConfig = config.AppConfig;
@@ -65,6 +65,10 @@ export const MuseJobMode = muse.MuseJobMode;
 export type MuseJobMode = muse.MuseJobMode;
 export const MuseJobStatus = muse.MuseJobStatus;
 export type MuseJobStatus = muse.MuseJobStatus;
+
+export type UpdateRelease = updater.Release;
+export type UpdateProgress = updater.Progress;
+export type UpdateConfig = config.UpdateConfig;
 
 export type MuseConfig = config.MuseConfig;
 export const MuseConfig = config.MuseConfig;

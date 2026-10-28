@@ -28,6 +28,10 @@ const (
 	EventFlowImageTasksChanged Event = "flow:image-tasks-changed"
 	// EventAccountsUpdated carries the full []accounts.Account list.
 	EventAccountsUpdated Event = "accounts:updated"
+	// EventUpdateAvailable carries the updater.Release a startup check found.
+	EventUpdateAvailable Event = "update:available"
+	// EventUpdateProgress carries updater.Progress while an installer downloads.
+	EventUpdateProgress Event = "update:progress"
 )
 
 // AllEvents is bound to the frontend as a TypeScript enum (events.Event).
@@ -42,6 +46,8 @@ var AllEvents = []struct {
 	{EventFlowImageTaskUpdated, "FlowImageTaskUpdated"},
 	{EventFlowImageTasksChanged, "FlowImageTasksChanged"},
 	{EventAccountsUpdated, "AccountsUpdated"},
+	{EventUpdateAvailable, "UpdateAvailable"},
+	{EventUpdateProgress, "UpdateProgress"},
 }
 
 // Dispatcher broadcasts events to the Wails frontend.

@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -18,6 +16,7 @@ import (
 	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/media"
 	"SnakeMedia/internal/models"
+	"SnakeMedia/pkg/utils"
 	"github.com/google/uuid"
 )
 
@@ -533,16 +532,7 @@ func (p *Provider) OpenOutputFolder() models.Response[bool] {
 		dir = p.defaultOutputDir
 	}
 	_ = os.MkdirAll(dir, 0o755)
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		cmd = exec.Command("explorer", dir)
-	case "darwin":
-		cmd = exec.Command("open", dir)
-	default:
-		cmd = exec.Command("xdg-open", dir)
-	}
-	if err := cmd.Start(); err != nil {
+	if err := utils.OpenFolder(dir); err != nil {
 		return fail[bool](err, models.CodeInternal)
 	}
 	return models.SuccessResponse(true)
