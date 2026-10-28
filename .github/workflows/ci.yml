@@ -47,10 +47,21 @@ jobs:
       - name: Format check (Go)
         run: go run ./tools/gofmtcheck
 
+      # Failures are repeated as annotations: they show on the run page
+      # without signing in, unlike the step log.
       - name: Vet & test (Go)
         run: |
-          go vet ./...
-          go test ./...
+          foreach ($cmd in @('vet', 'test')) {
+            $out = go $cmd ./... 2>&1 | ForEach-Object { "$_" }
+            $code = $LASTEXITCODE
+            $out
+            if ($code -ne 0) {
+              $out | Select-String -Pattern '^(--- FAIL|FAIL|panic:|vet:)|\.go:\d+' |
+                Select-Object -First 40 |
+                ForEach-Object { "::error title=go ${cmd}::$($_.Line)" }
+              exit $code
+            }
+          }
 
       - name: Build (Go)
         run: go build ./...
