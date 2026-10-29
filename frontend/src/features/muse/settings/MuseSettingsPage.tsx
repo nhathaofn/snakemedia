@@ -6,10 +6,13 @@ import {
   SettingsSection,
   SettingsShell,
   TextAreaSetting,
+  TextSetting,
   ToggleSetting,
 } from '../../../components/settings';
 import { useConfigSection } from '../../../hooks';
 import { ImageFormat, MuseMode } from '../../../types';
+import { CleanChatsButton } from './CleanChatsButton';
+import './MuseSettingsPage.css';
 
 const modeOptions = [
   { value: MuseMode.Rotate, label: 'Luân phiên' },
@@ -173,6 +176,20 @@ export const MuseSettingsPage: React.FC = () => {
             disabled={saving}
             onCommit={(setupMessage) => patch({ setupMessage })}
           />
+        </SettingRow>
+        <SettingRow
+          label="Dọn đoạn chat phụ"
+          hint="Gửi tin nhắn này trong một chat mới trên mọi tài khoản Muse đã đăng nhập; Muse xoá các đoạn chat khác, chỉ giữ chat vừa gửi. Tài khoản còn tác vụ đang chạy hoặc chờ kiểm tra được bỏ qua để tác vụ không mất chat; trong lúc dọn, tài khoản không nhận tác vụ mới."
+          stacked
+        >
+          <TextSetting
+            aria-label="Tin nhắn dọn đoạn chat phụ"
+            value={muse.cleanupMessage}
+            placeholder="Chưa có tin nhắn"
+            disabled={saving}
+            onCommit={(cleanupMessage) => patch({ cleanupMessage })}
+          />
+          <CleanChatsButton disabled={saving || !muse.cleanupMessage.trim()} />
         </SettingRow>
       </SettingsSection>
 

@@ -47,8 +47,9 @@ func (s *Provider) resumeImageGeneration(ctx context.Context, job generationJob,
 	var found []GeneratedImageItem
 	foundClientIDs := make(map[string]bool, len(job.ClientIDs))
 	listed := false
+	workflows := parseWorkflows(listing)
 	for _, clientID := range job.ClientIDs {
-		match := mediaForClient(listing, clientID)
+		match := workflows.forClient(clientID)
 		if match.name == "" {
 			continue
 		}

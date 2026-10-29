@@ -48,6 +48,16 @@ type Journal[T Record] struct {
 	byID      map[string]int
 	// blocked stops every write: the file belongs to a newer build.
 	blocked error
+
+	// Group commit: changed counts changes, saved is the last change on disk.
+	// One writer at a time writes outside mu; changes made meanwhile wait and
+	// share the next write, so concurrent updates cost one write, not one each.
+	flushed  *sync.Cond
+	changed  uint64
+	saved    uint64
+	writing  bool
+	failedAt uint64
+	failErr  error
 }
 
 // journalFile is the journal on disk (FormatVersion). Journals written before
@@ -71,7 +81,9 @@ type Options[T Record] struct {
 
 // New returns a journal stored at path. Call Load before using it.
 func New[T Record](path string, opts Options[T]) *Journal[T] {
-	return &Journal[T]{path: path, limit: opts.Limit, normalize: opts.Normalize, transient: opts.Transient, items: []T{}, byID: map[string]int{}}
+	j := &Journal[T]{path: path, limit: opts.Limit, normalize: opts.Normalize, transient: opts.Transient, items: []T{}, byID: map[string]int{}}
+	j.flushed = sync.NewCond(&j.mu)
+	return j
 }
 
 // Load reads the journal. A missing file is an empty queue. A corrupt file is
@@ -163,19 +175,26 @@ func (j *Journal[T]) Snapshot(ids []string) map[string]T {
 // finished records go while the journal is over its cap, so a record being
 // updated never moves or disappears.
 func (j *Journal[T]) Add(records ...T) error {
+	_, err := j.AddTrimming(records...)
+	return err
+}
+
+// AddTrimming is Add that also returns the IDs of the finished records trimmed
+// to make room, so listeners can drop them without reloading the queue.
+func (j *Journal[T]) AddTrimming(records ...T) ([]string, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	for _, r := range records {
 		if _, dup := j.byID[r.JobID()]; dup {
-			return fmt.Errorf("tác vụ %s đã có", r.JobID())
+			return nil, fmt.Errorf("tác vụ %s đã có", r.JobID())
 		}
 	}
 	for _, r := range records {
 		j.items = append(j.items, r)
 		j.byID[r.JobID()] = len(j.items) - 1
 	}
-	j.trimLocked()
-	return j.saveLocked()
+	trimmed := j.trimLocked()
+	return trimmed, j.saveLocked()
 }
 
 // Update applies change to a record and persists the journal, unless the
@@ -208,17 +227,59 @@ func (j *Journal[T]) update(id string, change func(*T), persist bool) (T, error)
 	return record, j.saveLocked()
 }
 
-// RemoveWhere deletes every record drop selects and returns how many went.
-func (j *Journal[T]) RemoveWhere(drop func(T) bool) (int, error) {
+// UpdateMany applies change to each listed record (unknown IDs are skipped)
+// and persists the journal once, so a bulk action on N records is one write
+// instead of N. change reports whether it changed the record; only those
+// are returned, in the order of ids.
+func (j *Journal[T]) UpdateMany(ids []string, change func(*T) bool) ([]T, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	before := len(j.items)
-	j.items = slices.DeleteFunc(j.items, drop)
-	if len(j.items) == before {
-		return 0, nil
+	var changed []T
+	persist := false
+	for _, id := range ids {
+		i, ok := j.byID[id]
+		if !ok {
+			continue
+		}
+		before := j.items[i]
+		if !change(&j.items[i]) {
+			continue
+		}
+		record := j.items[i]
+		changed = append(changed, record)
+		if j.transient == nil || !j.transient(before, record) {
+			persist = true
+		}
+	}
+	if !persist {
+		return changed, nil
+	}
+	return changed, j.saveLocked()
+}
+
+// RemoveWhere deletes every record drop selects and returns how many went.
+func (j *Journal[T]) RemoveWhere(drop func(T) bool) (int, error) {
+	ids, err := j.RemoveWhereIDs(drop)
+	return len(ids), err
+}
+
+// RemoveWhereIDs is RemoveWhere returning the IDs of the removed records.
+func (j *Journal[T]) RemoveWhereIDs(drop func(T) bool) ([]string, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	var removed []string
+	j.items = slices.DeleteFunc(j.items, func(r T) bool {
+		if drop(r) {
+			removed = append(removed, r.JobID())
+			return true
+		}
+		return false
+	})
+	if len(removed) == 0 {
+		return nil, nil
 	}
 	j.reindexLocked()
-	return before - len(j.items), j.saveLocked()
+	return removed, j.saveLocked()
 }
 
 // Remove deletes the record with id.
@@ -241,34 +302,69 @@ func (j *Journal[T]) reindexLocked() {
 	}
 }
 
-func (j *Journal[T]) trimLocked() {
+func (j *Journal[T]) trimLocked() (trimmed []string) {
 	if j.limit == nil {
-		return
+		return nil
 	}
 	extra := len(j.items) - j.limit()
 	if j.limit() < 1 || extra <= 0 {
-		return
+		return nil
 	}
 	kept := make([]T, 0, len(j.items))
 	for _, r := range j.items {
 		if extra > 0 && r.Finished() {
 			extra--
+			trimmed = append(trimmed, r.JobID())
 			continue
 		}
 		kept = append(kept, r)
 	}
 	j.items = kept
 	j.reindexLocked()
+	return trimmed
 }
 
+// saveLocked returns once the journal on disk holds every change made so far
+// (it may be written by another caller's write that started later). mu is
+// released while the file is written, so readers are not held up by the disk.
 func (j *Journal[T]) saveLocked() error {
 	if j.blocked != nil {
 		return j.blocked
 	}
-	data, err := json.Marshal(journalFile[T]{FormatVersion: FormatVersion, Records: j.items})
-	if err != nil {
-		return err
+	j.changed++
+	mine := j.changed
+	for j.saved < mine {
+		if j.failedAt >= mine {
+			return j.failErr
+		}
+		if j.writing {
+			j.flushed.Wait()
+			continue
+		}
+		data, err := json.Marshal(journalFile[T]{FormatVersion: FormatVersion, Records: j.items})
+		if err != nil {
+			return err
+		}
+		upTo := j.changed
+		j.writing = true
+		j.mu.Unlock()
+		err = j.write(data)
+		j.mu.Lock()
+		j.writing = false
+		if err != nil {
+			j.failedAt, j.failErr = upTo, err
+		} else {
+			j.saved = upTo
+		}
+		j.flushed.Broadcast()
+		if err != nil {
+			return err
+		}
 	}
+	return nil
+}
+
+func (j *Journal[T]) write(data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(j.path), 0o700); err != nil {
 		return err
 	}

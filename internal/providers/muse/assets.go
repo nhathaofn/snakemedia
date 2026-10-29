@@ -193,18 +193,23 @@ func (p *Provider) ImportAssetImages(paths []string) models.Response[[]MuseRefer
 // sweepAssetImages deletes asset images no asset and no job uses. An image
 // imported but not saved yet is kept for referenceRetention, like references.
 func (p *Provider) sweepAssetImages() {
+	p.sweepMedia(assetPrefix, p.usedAssetImages(p.jobs.list()), p.readMediaDir())
+}
+
+// usedAssetImages is the set of images assets or jobs use.
+func (p *Provider) usedAssetImages(jobs []MuseJob) map[string]bool {
 	used := map[string]bool{}
 	for _, a := range p.assets.List() {
 		for _, img := range a.Images {
 			used[img] = true
 		}
 	}
-	for _, j := range p.jobs.list() {
+	for _, j := range jobs {
 		for _, ref := range j.References {
 			used[ref] = true
 		}
 	}
-	p.sweepMedia(assetPrefix, used)
+	return used
 }
 
 // ListTemplates returns the saved prompts, oldest first.

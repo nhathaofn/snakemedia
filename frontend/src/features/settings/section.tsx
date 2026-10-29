@@ -1,6 +1,8 @@
 import { Settings, SlidersHorizontal } from 'lucide-react';
 import type { AppSection } from '../../types';
-import { SettingsPage } from './general/SettingsPage';
+import { lazyPage } from '../../routes/lazyPage';
+
+const SettingsPage = lazyPage(() => import('./general/SettingsPage').then((m) => m.SettingsPage));
 
 /** Settings: pinned to the bottom of the sidebar rather than a header tab. */
 export const settingsSection = {

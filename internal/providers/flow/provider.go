@@ -46,6 +46,10 @@ type Provider struct {
 	// queue runs the image batch queue (Ảnh → All); see image_queue.go.
 	queue               *imageQueue
 	balanceRefreshLocks sync.Map
+	// creditRefreshes holds, per account, whether a balance refresh runs and
+	// whether another was asked for meanwhile (coalesceCreditRefresh).
+	creditRefreshMu     sync.Mutex
+	creditRefreshes     map[string]*creditRefresh
 	projectResolveLocks sync.Map // account ID -> serialises resolveProject
 	pageLocks           sync.Map // browser port -> *sync.RWMutex (pageLock)
 	// undiscoverableBuilds remembers Flow builds whose project page lacked
@@ -104,12 +108,7 @@ func New(accounts Accounts, cfg *config.Manager, store *media.Store, productName
 	s.fetchModelsPayload = s.fetchModelsPayloadFromAccount
 	// The balance query must not delay the generation reply; its activity epoch
 	// check already drops a result made stale by a newer request.
-	s.refreshLiveCredits = func(ctx context.Context, id string) {
-		go func() {
-			defer logger.Recover("cập nhật credit Flow")
-			s.refreshAccountCredits(context.WithoutCancel(ctx), id)
-		}()
-	}
+	s.refreshLiveCredits = s.coalesceCreditRefresh
 	s.generateLiveVideos = s.generateVideosFromAccount
 	s.uploadLiveVideo = s.uploadVideoFromAccount
 	s.editLiveVideos = s.editVideosFromAccount

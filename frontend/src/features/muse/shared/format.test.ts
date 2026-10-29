@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MuseJobKind, MuseJobMode, MuseJobStatus } from '../../../types';
 import type { MuseJob } from '../../../types';
 import {
-  fromPreviousRun,
+  jobRunAge,
   jobsOf,
   matchesFilter,
   mayBePaid,
@@ -115,16 +115,19 @@ describe('mayBePaid', () => {
   });
 });
 
-describe('fromPreviousRun', () => {
+describe('jobRunAge', () => {
+  const previousStart = '2026-10-27T09:00:00.000Z';
   const start = '2026-10-28T10:00:00.000Z';
-  it('hides only finished jobs made before this run', () => {
-    const old = job('o', MuseJobStatus.Succeeded, { createdAt: '2026-10-27T10:00:00.000Z' });
+  it('splits finished jobs into this run, the run before and older runs', () => {
+    const older = job('x', MuseJobStatus.Succeeded, { createdAt: '2026-10-26T10:00:00.000Z' });
+    const previous = job('o', MuseJobStatus.Succeeded, { createdAt: '2026-10-27T10:00:00.000Z' });
     const oldRunning = job('r', MuseJobStatus.Processing, {
-      createdAt: '2026-10-27T10:00:00.000Z',
+      createdAt: '2026-10-26T10:00:00.000Z',
     });
     const fresh = job('f', MuseJobStatus.Succeeded, { createdAt: '2026-10-28T11:00:00.000Z' });
-    expect(fromPreviousRun(old, start)).toBe(true);
-    expect(fromPreviousRun(oldRunning, start)).toBe(false);
-    expect(fromPreviousRun(fresh, start)).toBe(false);
+    expect(jobRunAge(older, start, previousStart)).toBe('older');
+    expect(jobRunAge(previous, start, previousStart)).toBe('previous');
+    expect(jobRunAge(oldRunning, start, previousStart)).toBe('current');
+    expect(jobRunAge(fresh, start, previousStart)).toBe('current');
   });
 });

@@ -27,6 +27,8 @@ export function CheckProxies():Promise<models.Response___SnakeMedia_internal_pro
 
 export function ChooseBatchOutputDirectory(arg1:accounts.Provider):Promise<models.Response_SnakeMedia_internal_media_DirectoryResult_>;
 
+export function CleanMuseChats():Promise<models.Response___SnakeMedia_internal_providers_muse_MuseCleanResult_>;
+
 export function ClearFinishedFlowImageTasks():Promise<models.Response_int_>;
 
 export function ClearMuseFinished(arg1:muse.MuseJobKind,arg2:muse.MuseJobMode):Promise<models.Response_int_>;

@@ -42,6 +42,10 @@ export function ChooseBatchOutputDirectory(arg1) {
   return window['go']['main']['App']['ChooseBatchOutputDirectory'](arg1);
 }
 
+export function CleanMuseChats() {
+  return window['go']['main']['App']['CleanMuseChats']();
+}
+
 export function ClearFinishedFlowImageTasks() {
   return window['go']['main']['App']['ClearFinishedFlowImageTasks']();
 }

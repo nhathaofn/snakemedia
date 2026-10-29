@@ -75,6 +75,11 @@ func (p pageEntry) flowPage() (*url.URL, bool) {
 	return u, true
 }
 
+func (p pageEntry) projectPage() bool {
+	u, ok := p.flowPage()
+	return ok && strings.HasPrefix(u.Path, "/project/")
+}
+
 // InspectFlowIdentity detects the authenticated page identity without waiting on
 // optional balance/capability APIs. A failure there must not hide the account.
 func InspectFlowIdentity(ctx context.Context, port int, policy config.AccountConfig) (*FlowSessionDetails, error) {

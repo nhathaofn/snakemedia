@@ -149,7 +149,7 @@ export function MuseSingleWorkspace({ kind }: { kind: MuseJobKind }) {
           {preview.kind === MuseJobKind.Video ? (
             <video src={preview.url} controls autoPlay preload="metadata" />
           ) : (
-            <img src={preview.url} alt={preview.prompt} />
+            <img src={preview.url} alt={preview.prompt} decoding="async" />
           )}
           <span className="modal-caption">{preview.prompt}</span>
         </Modal>

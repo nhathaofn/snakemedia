@@ -43,5 +43,8 @@ func (s *Store) Reveal(target string) models.Response[bool] {
 	if err := cmd.Start(); err != nil {
 		return models.ErrorResponse[bool](errors.Join(errors.New("Không mở được thư mục"), err).Error(), models.CodeInternal)
 	}
+	// Reap the process so its handle is released; its exit code says nothing
+	// (explorer exits 1 even when it opened the folder).
+	go func() { _ = cmd.Wait() }()
 	return models.SuccessResponse(true)
 }

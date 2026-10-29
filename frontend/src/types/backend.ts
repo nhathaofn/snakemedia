@@ -54,6 +54,7 @@ export type StudioConfig = flow.StudioConfig;
 
 export type MuseJob = muse.MuseJob;
 export type MuseLibraryItem = muse.MuseLibraryItem;
+export type MuseCleanResult = muse.MuseCleanResult;
 export type MuseOptions = muse.MuseOptions;
 export type MuseReference = muse.MuseReference;
 export type MuseRatio = muse.MuseRatio;

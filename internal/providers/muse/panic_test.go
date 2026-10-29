@@ -10,10 +10,10 @@ import (
 // "not sent": Muse may have taken it, so it fails as errSendUnknown.
 func TestPanicWhileSendingIsAnUnknownSend(t *testing.T) {
 	s := newJobStore(filepath.Join(t.TempDir(), "jobs.json"), func() int { return 10 })
-	if err := s.add(MuseJob{ID: "sending", Status: MuseJobProcessing, Sending: true}); err != nil {
+	if _, err := s.add(MuseJob{ID: "sending", Status: MuseJobProcessing, Sending: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.add(MuseJob{ID: "idle", Status: MuseJobProcessing}); err != nil {
+	if _, err := s.add(MuseJob{ID: "idle", Status: MuseJobProcessing}); err != nil {
 		t.Fatal(err)
 	}
 	crash := errors.New("panic")

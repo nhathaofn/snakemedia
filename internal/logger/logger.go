@@ -65,7 +65,7 @@ func Init(opts Options) (*slog.Logger, error) {
 	}
 	writers = append(writers, os.Stdout)
 
-	handler := slog.NewTextHandler(io.MultiWriter(writers...), &slog.HandlerOptions{Level: level})
+	handler := slog.NewTextHandler(fanOut(writers), &slog.HandlerOptions{Level: level})
 	current = slog.New(handler)
 	slog.SetDefault(current)
 	return current, fileErr
@@ -230,4 +230,26 @@ func rotate(path string, maxSize int64, maxBackups int) error {
 		}
 	}
 	return os.Rename(path, path+".1")
+}
+
+// fanOut writes every record to each writer even when one of them fails, so
+// a log file that cannot be written (full disk, removed folder) never hides
+// the stdout copy. It reports the first error after trying every writer.
+type fanOut []io.Writer
+
+func (f fanOut) Write(p []byte) (int, error) {
+	var first error
+	for _, w := range f {
+		n, err := w.Write(p)
+		if err == nil && n != len(p) {
+			err = io.ErrShortWrite
+		}
+		if err != nil && first == nil {
+			first = err
+		}
+	}
+	if first != nil {
+		return 0, first
+	}
+	return len(p), nil
 }

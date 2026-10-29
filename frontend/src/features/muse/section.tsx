@@ -1,11 +1,19 @@
 import { Clapperboard, Film, Image, Settings, Sparkles, Users } from 'lucide-react';
 import type { AppSection } from '../../types';
 import { MuseJobKind } from '../../types';
-import { MuseAssetsPage } from './assets/MuseAssetsPage';
-import { MuseLibraryPage } from './library/MuseLibraryPage';
-import { MuseStudio } from './MuseStudio';
-import { MuseSettingsPage } from './settings/MuseSettingsPage';
 import { MusePreviousRunReport } from './shared/PreviousRun';
+import { lazyPage } from '../../routes/lazyPage';
+
+const MuseAssetsPage = lazyPage(() =>
+  import('./assets/MuseAssetsPage').then((m) => m.MuseAssetsPage),
+);
+const MuseLibraryPage = lazyPage(() =>
+  import('./library/MuseLibraryPage').then((m) => m.MuseLibraryPage),
+);
+const MuseStudio = lazyPage(() => import('./MuseStudio').then((m) => m.MuseStudio));
+const MuseSettingsPage = lazyPage(() =>
+  import('./settings/MuseSettingsPage').then((m) => m.MuseSettingsPage),
+);
 
 /** Muse tab: single and batch image and video generation with Muse's agent across the Muse accounts. */
 export const museSection = {

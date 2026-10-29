@@ -27,6 +27,7 @@ type queueHarness struct {
 	mu        sync.Mutex
 	clock     time.Time
 	phases    map[string]string
+	phaseErr  error
 	generated []GenerateImageRequest
 	resumed   []string
 	saved     []string
@@ -44,11 +45,14 @@ func newQueueHarness(t *testing.T) *queueHarness {
 	h.q.cfg = func() config.FlowConfig { return cfg }
 	h.q.now = func() time.Time { h.mu.Lock(); defer h.mu.Unlock(); return h.clock }
 	h.q.gap = func(int, int) time.Duration { return 0 }
-	h.q.requestPhase = func(id string) (string, bool) {
+	h.q.requestPhase = func(id string) (string, bool, error) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
+		if err := h.phaseErr; err != nil {
+			return "", false, err
+		}
 		phase, ok := h.phases[id]
-		return phase, ok
+		return phase, ok, nil
 	}
 	h.q.generate = func(ctx context.Context, req GenerateImageRequest) models.Response[[]GeneratedImageItem] {
 		h.mu.Lock()
@@ -175,6 +179,70 @@ func TestQueueResumesAnInterruptedRequestUnderTheSameID(t *testing.T) {
 	defer h.mu.Unlock()
 	if len(h.resumed) != 1 || h.resumed[0] != rid || done.Results[0].JobID != rid {
 		t.Fatalf("resumed %v, task %+v", h.resumed, done)
+	}
+}
+
+func TestQueueUnreadableJournalIsNeverSentAgain(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status ImageTaskStatus
+	}{
+		{"read error is checked again", errors.New("disk busy"), ImageTaskQueued},
+		{"quarantined journal fails keeping the ID", errJournalQuarantined, ImageTaskFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newQueueHarness(t)
+			if err := h.q.journal.Load(); err != nil {
+				t.Fatal(err)
+			}
+			const rid = "11111111-1111-4111-8111-111111111111"
+			task := ImageTask{ID: "22222222-2222-4222-8222-222222222222", BatchID: "33333333-3333-4333-8333-333333333333", Prompt: "p", ModelID: "m", OutputDir: h.dir,
+				Status: ImageTaskRunning, RequestID: rid, References: []ImageTaskReference{}, Results: []GeneratedImageItem{}, SavedFiles: []string{}}
+			if err := h.q.journal.Add(task); err != nil {
+				t.Fatal(err)
+			}
+			h.phaseErr = tc.err
+			h.onGen = func(context.Context, GenerateImageRequest) models.Response[[]GeneratedImageItem] {
+				t.Error("a request whose journal cannot be read must never be sent")
+				return models.ErrorResponse[[]GeneratedImageItem]("no", models.CodeInternal)
+			}
+			h.onResume = func(context.Context, string) models.Response[[]GeneratedImageItem] {
+				t.Error("a request whose journal cannot be read has nothing to resume")
+				return models.ErrorResponse[[]GeneratedImageItem]("no", models.CodeInternal)
+			}
+			h.start()
+			got := h.waitFor(task.ID, func(t ImageTask) bool {
+				return t.Status == tc.status && (t.Status == ImageTaskFailed || t.NextCheckAt != "")
+			})
+			if got.RequestID != rid {
+				t.Fatalf("the request ID must be kept: %+v", got)
+			}
+		})
+	}
+}
+
+func TestLoadGenerationJobReportsQuarantine(t *testing.T) {
+	s := testFlowService(testAccountService(t))
+	const rid = "44444444-4444-4444-8444-444444444444"
+	path, err := s.statePath("generation-jobs", rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.loadGenerationJob(rid); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing journal: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".corrupt", []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.loadGenerationJob(rid); !errors.Is(err, errJournalQuarantined) {
+		t.Fatalf("quarantined journal must not read as missing: %v", err)
+	}
+	if _, _, err := s.checkGenerationJob(rid, generationJobImage, "f"); err == nil {
+		t.Fatal("a quarantined request must not be sent again")
 	}
 }
 

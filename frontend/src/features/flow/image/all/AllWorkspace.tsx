@@ -1,6 +1,8 @@
-import { useMemo, useState } from 'react';
+import { thumbUrl } from '../../../../services';
+import { useCallback, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import { QueueFilterBar, QueueTable } from '../../../../components/batch';
+import { PreviousRunToggle } from '../../../../components/feedback';
 import { Icon, Modal } from '../../../../components/ui';
 import { api } from '../../../../services/api';
 import { useAppStore } from '../../../../stores';
@@ -11,7 +13,12 @@ import { QueueActions } from './QueueActions';
 import { ReferenceBankDialog } from './ReferenceBankDialog';
 import { TaskRow } from './TaskRow';
 import type { TaskRowActions } from './TaskRow';
-import { TASK_FILTERS, matchesTaskFilter, useImageQueueStore } from './queueStore';
+import {
+  TASK_FILTERS,
+  matchesTaskFilter,
+  useImageQueueStore,
+  useVisibleImageTasks,
+} from './queueStore';
 import type { TaskFilter } from './queueStore';
 import { applyToTasks, overCapacity, referenceTargets } from './references';
 import { useImageQueueLive } from './useImageQueueLive';
@@ -20,7 +27,7 @@ import './AllWorkspace.css';
 /** The image queue (Ảnh → Hàng loạt) as the backend runs it, with its results. */
 export function AllWorkspace() {
   useImageQueueLive();
-  const tasks = useImageQueueStore((s) => s.tasks);
+  const { tasks, offered } = useVisibleImageTasks();
   const warning = useImageQueueStore((s) => s.warning);
   const loadError = useImageQueueStore((s) => s.loadError);
   const dismissWarning = useImageQueueStore((s) => s.dismissWarning);
@@ -47,35 +54,46 @@ export function AllWorkspace() {
     () => tasks.filter((task) => matchesTaskFilter(task, filter)),
     [tasks, filter],
   );
-  const filterOptions = useMemo(
-    () =>
-      TASK_FILTERS.map(({ value, label }) => ({
-        value,
-        label,
-        count: tasks.filter((task) => matchesTaskFilter(task, value)).length,
-      })),
-    [tasks],
-  );
+  const filterOptions = useMemo(() => {
+    const counts = TASK_FILTERS.map(() => 0);
+    for (const task of tasks) {
+      TASK_FILTERS.forEach(({ value }, i) => {
+        if (matchesTaskFilter(task, value)) counts[i]++;
+      });
+    }
+    return TASK_FILTERS.map(({ value, label }, i) => ({ value, label, count: counts[i] }));
+  }, [tasks]);
   // Selection and bulk actions cover only the tasks the filter shows.
-  const notRunning = shown.filter((task) => task.status !== FlowImageTaskStatus.Running);
-  const selectedTasks = notRunning.filter((task) => selected.has(task.id));
-  const retryable = selectedTasks.filter(
-    (task) =>
-      task.status === FlowImageTaskStatus.Failed || task.status === FlowImageTaskStatus.Cancelled,
-  );
-  const failed = tasks.filter((task) => task.status === FlowImageTaskStatus.Failed);
-  const busy = tasks.some(
-    (task) =>
-      task.status === FlowImageTaskStatus.Running ||
-      (task.status === FlowImageTaskStatus.Queued && !task.held),
-  );
-  const removable = tasks.filter((task) => task.status !== FlowImageTaskStatus.Running);
-  const allSelected = notRunning.length > 0 && notRunning.every((task) => selected.has(task.id));
-  // References go to the selected tasks, or to every task that can take them.
-  const targets = referenceTargets(selectedTasks.length > 0 ? selectedTasks : tasks);
+  const { notRunning, selectedTasks, retryable, failed, busy, removable, allSelected, targets } =
+    useMemo(() => {
+      const notRunning = shown.filter((task) => task.status !== FlowImageTaskStatus.Running);
+      const selectedTasks = notRunning.filter((task) => selected.has(task.id));
+      return {
+        notRunning,
+        selectedTasks,
+        retryable: selectedTasks.filter(
+          (task) =>
+            task.status === FlowImageTaskStatus.Failed ||
+            task.status === FlowImageTaskStatus.Cancelled,
+        ),
+        failed: tasks.filter((task) => task.status === FlowImageTaskStatus.Failed),
+        busy: tasks.some(
+          (task) =>
+            task.status === FlowImageTaskStatus.Running ||
+            (task.status === FlowImageTaskStatus.Queued && !task.held),
+        ),
+        removable: tasks.filter((task) => task.status !== FlowImageTaskStatus.Running),
+        allSelected: notRunning.length > 0 && notRunning.every((task) => selected.has(task.id)),
+        // References go to the selected tasks, or to every task that can take them.
+        targets: referenceTargets(selectedTasks.length > 0 ? selectedTasks : tasks),
+      };
+    }, [shown, tasks, selected]);
 
-  const report = (title: string, message?: string) =>
-    addToast({ type: 'error', title, message: message ?? 'Không rõ lỗi.' });
+  const report = useCallback(
+    (title: string, message?: string) =>
+      addToast({ type: 'error', title, message: message ?? 'Không rõ lỗi.' }),
+    [addToast],
+  );
 
   const actions = useMemo<TaskRowActions>(
     () => ({
@@ -105,9 +123,7 @@ export function AllWorkspace() {
           if (!res.success) report('Không mở được thư mục', res.error);
         }),
     }),
-    // report only wraps the stable addToast.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [addToast],
+    [report],
   );
 
   const applyReferences = async (refs: FlowImageTaskReference[], errors: string[] = []) => {
@@ -178,40 +194,43 @@ export function AllWorkspace() {
           setSelected(new Set());
         }}
         actions={
-          <QueueActions
-            selectedCount={selectedTasks.length}
-            retryableCount={retryable.length}
-            failedCount={failed.length}
-            busy={busy}
-            removableCount={removable.length}
-            canAddReferences={models.length > 0}
-            onPickReferences={() => void pickReferences()}
-            onOpenBank={() => setBankOpen(true)}
-            onRetrySelected={() =>
-              void bulk(
-                api.retryFlowImageTasks(retryable.map((task) => task.id)),
-                'Không chạy lại được tác vụ',
-              )
-            }
-            onRemoveSelected={() =>
-              void bulk(
-                api.removeFlowImageTasks(selectedTasks.map((task) => task.id)),
-                'Không xóa được tác vụ',
-              )
-            }
-            onRetryFailed={() =>
-              void bulk(
-                api.retryFlowImageTasks(failed.map((task) => task.id)),
-                'Không chạy lại được tác vụ lỗi',
-              )
-            }
-            onRemoveAll={() =>
-              void bulk(
-                api.removeFlowImageTasks(removable.map((task) => task.id)),
-                'Không xóa được hàng đợi',
-              )
-            }
-          />
+          <>
+            <PreviousRunToggle count={offered} />
+            <QueueActions
+              selectedCount={selectedTasks.length}
+              retryableCount={retryable.length}
+              failedCount={failed.length}
+              busy={busy}
+              removableCount={removable.length}
+              canAddReferences={models.length > 0}
+              onPickReferences={() => void pickReferences()}
+              onOpenBank={() => setBankOpen(true)}
+              onRetrySelected={() =>
+                void bulk(
+                  api.retryFlowImageTasks(retryable.map((task) => task.id)),
+                  'Không chạy lại được tác vụ',
+                )
+              }
+              onRemoveSelected={() =>
+                void bulk(
+                  api.removeFlowImageTasks(selectedTasks.map((task) => task.id)),
+                  'Không xóa được tác vụ',
+                )
+              }
+              onRetryFailed={() =>
+                void bulk(
+                  api.retryFlowImageTasks(failed.map((task) => task.id)),
+                  'Không chạy lại được tác vụ lỗi',
+                )
+              }
+              onRemoveAll={() =>
+                void bulk(
+                  api.removeFlowImageTasks(removable.map((task) => task.id)),
+                  'Không xóa được hàng đợi',
+                )
+              }
+            />
+          </>
         }
       />
       <QueueTable
@@ -283,7 +302,12 @@ export function AllWorkspace() {
           <div className="flow-image-all-gallery-grid">
             {gallery.task.references.map((reference) => (
               <figure className="flow-image-all-gallery-item" key={reference.localUrl}>
-                <img src={reference.localUrl} alt={reference.fileName} loading="lazy" />
+                <img
+                  src={thumbUrl(reference.localUrl)}
+                  alt={reference.fileName}
+                  loading="lazy"
+                  decoding="async"
+                />
                 <figcaption title={reference.fileName}>{reference.fileName}</figcaption>
               </figure>
             ))}
@@ -297,7 +321,7 @@ export function AllWorkspace() {
           label="Ảnh kết quả phóng to"
           onClose={() => setPreviewImage(null)}
         >
-          <img src={previewImage.localUrl} alt={previewImage.prompt} />
+          <img src={previewImage.localUrl} alt={previewImage.prompt} decoding="async" />
         </Modal>
       )}
     </div>

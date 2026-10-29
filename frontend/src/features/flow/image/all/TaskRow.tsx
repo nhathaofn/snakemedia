@@ -1,3 +1,4 @@
+import { thumbUrl } from '../../../../services';
 import { memo } from 'react';
 import { QueuePrompt, QueueProgress } from '../../../../components/batch';
 import type { QueueTone } from '../../../../components/batch';
@@ -85,10 +86,11 @@ export const TaskRow = memo(function TaskRow({
               <img
                 className="queue-ref-thumb"
                 key={reference.localUrl}
-                src={reference.localUrl}
+                src={thumbUrl(reference.localUrl)}
                 alt={reference.fileName}
                 title={reference.fileName}
                 loading="lazy"
+                decoding="async"
               />
             ))}
             {overflow > 0 && (
@@ -121,9 +123,10 @@ export const TaskRow = memo(function TaskRow({
             >
               <img
                 className="queue-result-thumb"
-                src={result.localUrl}
+                src={thumbUrl(result.localUrl)}
                 alt={result.prompt || task.prompt}
                 loading="lazy"
+                decoding="async"
               />
             </button>
           ))

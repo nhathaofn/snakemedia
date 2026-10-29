@@ -1,3 +1,4 @@
+import { thumbUrl } from '../../../../services';
 import { ImagePlus, X } from 'lucide-react';
 import { Button, Icon } from '../../../../components/ui';
 import { api } from '../../../../services/api';
@@ -54,7 +55,13 @@ export function QueueReferences({ limit }: { limit?: number }) {
       <div className="flow-image-all-queue-reference-grid">
         {references.map((ref) => (
           <figure className="flow-image-all-queue-reference" key={ref.localUrl}>
-            <img src={ref.localUrl} alt={ref.fileName} title={ref.fileName} loading="lazy" />
+            <img
+              src={thumbUrl(ref.localUrl)}
+              alt={ref.fileName}
+              title={ref.fileName}
+              loading="lazy"
+              decoding="async"
+            />
             <button
               type="button"
               aria-label={`Bỏ ${ref.fileName}`}

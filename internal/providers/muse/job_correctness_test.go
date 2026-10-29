@@ -3,6 +3,7 @@ package muse
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,38 @@ func TestCompletedWithFileAndQuestionSucceeds(t *testing.T) {
 
 	if got := mustJob(t, p, job.ID); got.Status != MuseJobSucceeded || len(got.Files) != 1 {
 		t.Fatalf("job = %+v", got)
+	}
+}
+
+// Muse may send a video and then a corrected cut of it (seen on muse.ai:
+// "here's the exact-cut version, verified at 5.000 seconds, replacing the
+// 5.08s cut I just sent"). The job asked for one video: only the last one is
+// kept.
+func TestReplacedVideoKeepsOnlyTheLastCut(t *testing.T) {
+	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "completed"},
+		events: []AssistantEvent{
+			{Text: "Done — 1 clip."},
+			{Text: "5 seconds", Videos: []ResultMedia{{Path: "/out/new.mp4", Mime: "video/mp4", ByteLen: 5}}},
+			{Text: "Quick correction — here's the exact-cut version, replacing the 5.08s cut I just sent."},
+			{Text: "exactly 5.000 seconds", Videos: []ResultMedia{{Path: "/out/final.mp4", Mime: "video/mp4", ByteLen: 5}}},
+		}, files: map[string][]byte{"/out/new.mp4": []byte("first"), "/out/final.mp4": []byte("final")}}
+	p := testProvider(t, page)
+	acc := addSignedIn(t, p, "A")
+	job := submit(t, p, MuseJobVideo, "x")[0]
+
+	p.runOne(context.Background(), job.ID, acc.ID)
+	p.wg.Wait()
+
+	got := mustJob(t, p, job.ID)
+	if got.Status != MuseJobSucceeded || len(got.Files) != 1 {
+		t.Fatalf("job = %+v", got)
+	}
+	path, err := p.media.Path(got.Files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "final" {
+		t.Fatalf("kept %q %v, want the corrected cut", data, err)
 	}
 }
 
@@ -249,5 +282,56 @@ func TestUnknownSendIsMarked(t *testing.T) {
 	resetForRetry(&got)
 	if got.SendUnknown {
 		t.Fatal("a retry keeps the unknown mark")
+	}
+}
+
+// A job that ends while CancelJob is on its way keeps its answer: a made
+// file is never turned into "cancelled".
+func TestCancelKeepsAJobThatJustEnded(t *testing.T) {
+	p := testProvider(t, &fakePage{loggedIn: true})
+	job := submit(t, p, MuseJobImage, "x")[0]
+	if _, err := p.jobs.update(job.ID, func(j *MuseJob) { j.Status = MuseJobProcessing }); err != nil {
+		t.Fatal(err)
+	}
+	// The run settles between CancelJob's check and its save.
+	p.mu.Lock()
+	p.cancels[job.ID] = func() {
+		if _, err := p.jobs.update(job.ID, func(j *MuseJob) { j.Status = MuseJobSucceeded }); err != nil {
+			t.Error(err)
+		}
+	}
+	p.mu.Unlock()
+
+	if res := p.CancelJob(job.ID); res.Success || res.Error != errJobEnded.Error() {
+		t.Fatalf("cancel of an ended job: %+v", res)
+	}
+	if got := mustJob(t, p, job.ID); got.Status != MuseJobSucceeded {
+		t.Fatalf("job = %+v", got)
+	}
+}
+
+// EditAndRetry never resets a job the scheduler has started, whether the
+// run is registered or has already moved the job to Processing.
+func TestEditAndRetryLeavesAStartedJob(t *testing.T) {
+	p := testProvider(t, &fakePage{loggedIn: true})
+	job := submit(t, p, MuseJobImage, "x")[0]
+	p.mu.Lock()
+	p.running[job.ID] = "A"
+	p.mu.Unlock()
+	if res := p.EditAndRetry(job.ID, "y"); res.Success || res.Error != errRunStopping.Error() {
+		t.Fatalf("edit of a started job: %+v", res)
+	}
+
+	p.mu.Lock()
+	delete(p.running, job.ID)
+	p.mu.Unlock()
+	if _, err := p.jobs.update(job.ID, func(j *MuseJob) { j.Status, j.SessionID = MuseJobProcessing, "s1" }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.updateIdle(job.ID, func(j MuseJob) bool { return j.Status == MuseJobQueued || j.finished() }, resetForRetry); !errors.Is(err, errJobChanged) {
+		t.Fatalf("updateIdle on a processing job: %v", err)
+	}
+	if got := mustJob(t, p, job.ID); got.Status != MuseJobProcessing || got.SessionID != "s1" || got.Prompt != "x" {
+		t.Fatalf("job = %+v", got)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"SnakeMedia/internal/config"
@@ -55,9 +56,28 @@ func (f *FlowClient) SetProxy(proxy *url.URL) {
 		f.client.Transport = nil
 		return
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = http.ProxyURL(proxy)
-	f.client.Transport = transport
+	f.client.Transport = proxyTransport(proxy)
+}
+
+// proxyTransports keeps one transport per proxy URL, so every client on the
+// same route shares its connection pool instead of dialling (and handshaking
+// through the proxy) anew for each FlowClient.
+var proxyTransports = struct {
+	sync.Mutex
+	byURL map[string]*http.Transport
+}{byURL: map[string]*http.Transport{}}
+
+func proxyTransport(proxy *url.URL) *http.Transport {
+	key := proxy.String()
+	proxyTransports.Lock()
+	defer proxyTransports.Unlock()
+	if t, ok := proxyTransports.byURL[key]; ok {
+		return t
+	}
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.Proxy = http.ProxyURL(proxy)
+	proxyTransports.byURL[key] = t
+	return t
 }
 
 // Credentials returns the session credentials including any rotated cookies.

@@ -196,3 +196,29 @@ func TestTransientOptionSkipsProgressWrites(t *testing.T) {
 		t.Fatalf("after reload = %+v", got)
 	}
 }
+
+func TestUpdateManySavesOnceAndReturnsChanged(t *testing.T) {
+	j, path := open(t, 0)
+	if err := j.Add(rec{ID: "a"}, rec{ID: "b"}, rec{ID: "c"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := j.UpdateMany([]string{"c", "missing", "a", "b"}, func(r *rec) bool {
+		if r.ID == "b" {
+			return false
+		}
+		r.Done = true
+		return true
+	})
+	if err != nil || len(got) != 2 || got[0].ID != "c" || got[1].ID != "a" {
+		t.Fatalf("UpdateMany returned %+v %v", got, err)
+	}
+	again := New(path, Options[rec]{})
+	if err := again.Load(); err != nil {
+		t.Fatal(err)
+	}
+	for id, done := range map[string]bool{"a": true, "b": false, "c": true} {
+		if r, _ := again.Get(id); r.Done != done {
+			t.Fatalf("%s after reload: %+v", id, r)
+		}
+	}
+}

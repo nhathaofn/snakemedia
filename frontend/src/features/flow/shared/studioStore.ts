@@ -89,6 +89,29 @@ export interface StudioSlice<TModel extends StudioModel, TItem extends StudioRes
 type Setter<S> = (partial: Partial<S> | ((state: S) => Partial<S>)) => void;
 
 /**
+ * Revokes the blob URLs of dropped attachments that neither a reference image
+ * nor a kept turn still shows.
+ */
+function revokeDropped(
+  dropped: readonly ConversationAttachment[],
+  state: object,
+  turns: readonly ConversationTurn[],
+) {
+  const references =
+    (state as { referenceImages?: { previewUrl: string }[] }).referenceImages ?? [];
+  for (const attachment of dropped) {
+    if (
+      attachment.kind === 'image' &&
+      attachment.url.startsWith('blob:') &&
+      !references.some((image) => image.previewUrl === attachment.url) &&
+      !turns.some((turn) => turn.attachments.some((saved) => saved.url === attachment.url))
+    ) {
+      URL.revokeObjectURL(attachment.url);
+    }
+  }
+}
+
+/**
  * Builds the shared studio state for a zustand store. `fitToModel` keeps the
  * studio's own settings valid whenever the selected model changes (e.g. a video
  * duration the new model does not offer).
@@ -149,15 +172,16 @@ export function createStudioSlice<
       }),
     turns: [],
     beginTurn: (turn) =>
-      set((state) =>
-        state.turns.some((saved) => saved.id === turn.id)
-          ? ({
-              turns: state.turns.map((saved) =>
-                saved.id === turn.id ? { ...turn, resultKeys: [] } : saved,
-              ),
-            } as Partial<S>)
-          : ({ turns: [...state.turns, { ...turn, resultKeys: [] }] } as Partial<S>),
-      ),
+      set((state) => {
+        const replaced = state.turns.find((saved) => saved.id === turn.id);
+        if (!replaced)
+          return { turns: [...state.turns, { ...turn, resultKeys: [] }] } as Partial<S>;
+        const turns = state.turns.map((saved) =>
+          saved.id === turn.id ? { ...turn, resultKeys: [] } : saved,
+        );
+        revokeDropped(replaced.attachments, state, turns);
+        return { turns } as Partial<S>;
+      }),
     restoreTurns: (entries) =>
       set((state) => {
         const known = new Set(state.turns.map((turn) => turn.id));
@@ -210,18 +234,7 @@ export function createStudioSlice<
       set((state) => {
         const removed = state.turns.find((turn) => turn.id === turnId);
         const turns = state.turns.filter((turn) => turn.id !== turnId);
-        const references =
-          (state as S & { referenceImages?: { previewUrl: string }[] }).referenceImages ?? [];
-        for (const attachment of removed?.attachments ?? []) {
-          if (
-            attachment.kind === 'image' &&
-            attachment.url.startsWith('blob:') &&
-            !references.some((image) => image.previewUrl === attachment.url) &&
-            !turns.some((turn) => turn.attachments.some((saved) => saved.url === attachment.url))
-          ) {
-            URL.revokeObjectURL(attachment.url);
-          }
-        }
+        revokeDropped(removed?.attachments ?? [], state, turns);
         return { turns } as Partial<S>;
       }),
   };

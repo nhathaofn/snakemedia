@@ -17,7 +17,7 @@ import {
 } from '../../shared';
 import { useFlowImageStore } from '../store/flowImageStore';
 import { QueueReferences } from './QueueReferences';
-import { countTasks, useImageQueueStore } from './queueStore';
+import { countTasks, useVisibleImageTasks } from './queueStore';
 import './AllModePanel.css';
 
 /**
@@ -46,7 +46,7 @@ export const AllModePanel: React.FC = () => {
   const outputDirectory = useFlowImageStore((s) => s.imageOutputDirectory);
   const setImageOutputDirectory = useFlowImageStore((s) => s.setImageOutputDirectory);
   const model = useFlowImageStore(selectedModelOf);
-  const tasks = useImageQueueStore((s) => s.tasks);
+  const { tasks } = useVisibleImageTasks();
   const addToast = useAppStore((state) => state.addToast);
   const { loading, error } = useModelCatalog(api.getImageModels, setModels);
   const counts = countTasks(tasks);

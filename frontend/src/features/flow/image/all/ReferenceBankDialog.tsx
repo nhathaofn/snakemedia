@@ -1,3 +1,4 @@
+import { thumbUrl } from '../../../../services';
 import { useEffect, useState } from 'react';
 import { Button, Modal } from '../../../../components/ui';
 import { api } from '../../../../services/api';
@@ -175,7 +176,12 @@ export function ReferenceBankDialog({ onClose, onApply, applyLabel }: ReferenceB
                       );
                     }}
                   />
-                  <img src={image.previewUrl} alt={image.name} loading="lazy" />
+                  <img
+                    src={thumbUrl(image.previewUrl)}
+                    alt={image.name}
+                    loading="lazy"
+                    decoding="async"
+                  />
                   <span title={image.name}>{image.name}</span>
                 </label>
               ))}

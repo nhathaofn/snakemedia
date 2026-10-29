@@ -113,8 +113,16 @@ func (b *localBridge) close() {
 	_ = b.listener.Close()
 }
 
+// acceptRetryMin and acceptRetryMax bound the wait before a bridge accepts
+// again after a failed Accept; the wait doubles while failures repeat.
+const (
+	acceptRetryMin = 50 * time.Millisecond
+	acceptRetryMax = time.Second
+)
+
 func (b *localBridge) serve() {
 	defer logger.Recover("cầu nối proxy")
+	var delay time.Duration
 	for {
 		client, err := b.listener.Accept()
 		if err != nil {
@@ -122,10 +130,21 @@ func (b *localBridge) serve() {
 			case <-b.closed:
 				return
 			default:
-				time.Sleep(50 * time.Millisecond)
-				continue
 			}
+			if delay == 0 {
+				delay = acceptRetryMin
+				logger.Get().Warn("proxy bridge cannot accept connections", "error", err)
+			} else {
+				delay = min(delay*2, acceptRetryMax)
+			}
+			select {
+			case <-b.closed:
+				return
+			case <-time.After(delay):
+			}
+			continue
 		}
+		delay = 0
 		b.active.Add(1)
 		go func() {
 			defer b.active.Add(-1)

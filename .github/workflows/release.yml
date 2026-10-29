@@ -50,10 +50,24 @@ jobs:
       - name: Install frontend dependencies
         run: npm --prefix frontend ci
 
-      - name: Install Wails CLI and NSIS
+      - name: Wails version
+        id: wails
         run: |
           $version = go list -m -f '{{.Version}}' github.com/wailsapp/wails/v2
-          go install "github.com/wailsapp/wails/v2/cmd/wails@$version"
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Cache Wails CLI
+        id: wails-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/wails.exe
+          key: wails-cli-${{ runner.os }}-${{ steps.wails.outputs.version }}
+
+      - name: Install Wails CLI and NSIS
+        run: |
+          if ('${{ steps.wails-cache.outputs.cache-hit }}' -ne 'true') {
+            go install "github.com/wailsapp/wails/v2/cmd/wails@${{ steps.wails.outputs.version }}"
+          }
           if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
             choco install nsis -y --no-progress
             "C:\Program Files (x86)\NSIS" >> $env:GITHUB_PATH
@@ -62,7 +76,7 @@ jobs:
       - name: Build installer
         run: |
           $date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-          $ldflags = "-X SnakeMedia/internal/buildinfo.commit=${{ github.sha }} -X SnakeMedia/internal/buildinfo.buildDate=$date"
+          $ldflags = "-s -w -X SnakeMedia/internal/buildinfo.commit=${{ github.sha }} -X SnakeMedia/internal/buildinfo.buildDate=$date"
           wails build -clean -platform windows/amd64 -nsis -trimpath -ldflags "$ldflags"
 
       - name: Collect release files

@@ -191,11 +191,45 @@ func liveFlowVideo(t *testing.T, a *App) {
 		t.Fatal("no priced video variant")
 	}
 	req.RequestID, req.Prompt, req.Count = uuid.NewString(), "a red paper boat drifting slowly on a calm lake", 1
+	// SNAKEMEDIA_LIVE_FLOW_MODEL, _RESOLUTION, _DURATION, _RATIO and _PROMPT
+	// (a text file) replace the cheapest variant and the default prompt.
+	if env := os.Getenv("SNAKEMEDIA_LIVE_FLOW_MODEL"); env != "" {
+		req.ModelID = env
+	}
+	if env := os.Getenv("SNAKEMEDIA_LIVE_FLOW_RESOLUTION"); env != "" {
+		req.Resolution = env
+	}
+	if env, _ := strconv.Atoi(os.Getenv("SNAKEMEDIA_LIVE_FLOW_DURATION")); env > 0 {
+		req.Duration = env
+	}
+	if env := os.Getenv("SNAKEMEDIA_LIVE_FLOW_RATIO"); env != "" {
+		req.AspectRatio = env
+	}
+	if file := os.Getenv("SNAKEMEDIA_LIVE_FLOW_PROMPT"); file != "" {
+		text, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Prompt = strings.TrimSpace(string(text))
+	}
+	for _, m := range ms.Data {
+		for _, c := range m.Costs {
+			if m.ID == req.ModelID && c.Resolution == req.Resolution && (c.Duration == 0 || c.Duration == req.Duration) {
+				best = c.Credits
+			}
+		}
+	}
 	t.Logf("video request %s %s credits=%d", req.RequestID, dump(req), best)
 
 	done := make(chan any, 1)
 	go func() { done <- a.GenerateVideos(req) }()
-	time.Sleep(12 * time.Second)
+	// SNAKEMEDIA_LIVE_FLOW_WAIT (seconds) waits longer before the app-side
+	// cancel, so a slow model finishes in the first call.
+	wait := 12 * time.Second
+	if env, _ := strconv.Atoi(os.Getenv("SNAKEMEDIA_LIVE_FLOW_WAIT")); env > 0 {
+		wait = time.Duration(env) * time.Second
+	}
+	time.Sleep(wait)
 	t.Logf("cancel wait: %v", a.CancelGeneration(req.RequestID).Data)
 	first := (<-done)
 	t.Logf("after cancel: %s", dump(first))

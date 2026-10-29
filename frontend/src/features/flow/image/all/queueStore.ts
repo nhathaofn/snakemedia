@@ -1,7 +1,10 @@
+import { useMemo } from 'react';
 import { create } from 'zustand';
 import { api, unwrap } from '../../../../services';
 import { FlowImageTaskStatus } from '../../../../types';
 import type { FlowImageTask } from '../../../../types';
+import { latestOfPreviousRun, runAge, shownForRun, usePreviousRunStore } from '../../../../stores';
+import type { RunItemOf } from '../../../../stores';
 
 /** Replaces the task with the same ID, or appends a new one (queue order is oldest first). */
 export function upsertTask(tasks: readonly FlowImageTask[], task: FlowImageTask): FlowImageTask[] {
@@ -72,6 +75,10 @@ interface QueueState {
   /** Loads the queue; calls made while one is running share it. */
   load: () => Promise<void>;
   setTask: (task: FlowImageTask | null) => void;
+  /** Applies tasks added at once (FlowImageTasksAdded). */
+  addTasks: (tasks: readonly FlowImageTask[] | null) => void;
+  /** Drops tasks removed or trimmed at once (FlowImageTasksRemoved). */
+  removeTasks: (ids: readonly string[] | null) => void;
   dismissWarning: () => void;
 }
 
@@ -109,5 +116,60 @@ export const useImageQueueStore = create<QueueState>((set) => ({
     if (reload) touched.set(task.id, task);
     set((state) => ({ tasks: upsertTask(state.tasks, task) }));
   },
+  addTasks: (added) => {
+    if (!added?.length) return;
+    if (reload) added.forEach((task) => touched.set(task.id, task));
+    set((state) => ({ tasks: added.reduce(upsertTask, state.tasks) }));
+  },
+  removeTasks: (ids) => {
+    if (!ids?.length) return;
+    const gone = new Set(ids);
+    if (reload) gone.forEach((id) => touched.set(id, null));
+    set((state) => ({ tasks: state.tasks.filter((task) => !gone.has(task.id)) }));
+  },
   dismissWarning: () => set({ warning: '' }),
 }));
+
+/** A queue task's run: tasks of one batch share its folder. */
+const taskRunItem: RunItemOf<FlowImageTask> = {
+  id: (task) => task.id,
+  time: (task) => task.finishedAt || task.createdAt,
+  made: (task) => task.createdAt,
+  finished: (task) =>
+    task.status !== FlowImageTaskStatus.Queued && task.status !== FlowImageTaskStatus.Running,
+  screen: () => '',
+  task: (task) => task.outputDir,
+};
+
+/** The tasks of the last batch the run before this one finished (latestOfPreviousRun). */
+export function offeredTasks(
+  tasks: readonly FlowImageTask[],
+  runStart?: string,
+  previousStart?: string,
+): Set<string> {
+  return latestOfPreviousRun(tasks, taskRunItem, runStart, previousStart);
+}
+
+/**
+ * The tasks the queue lists: of the run before this one, only its last batch
+ * and only when the user chose to see it; other earlier tasks stay hidden.
+ */
+export function useVisibleImageTasks(): { tasks: FlowImageTask[]; offered: number } {
+  const tasks = useImageQueueStore((s) => s.tasks);
+  const showPrevious = usePreviousRunStore((s) => s.showPrevious);
+  const offered = useMemo(() => offeredTasks(tasks), [tasks]);
+  return useMemo(
+    () => ({
+      tasks: tasks.filter((task) =>
+        shownForRun(
+          runAge(taskRunItem.time(task), taskRunItem.finished(task)),
+          task.id,
+          offered,
+          showPrevious,
+        ),
+      ),
+      offered: offered.size,
+    }),
+    [tasks, offered, showPrevious],
+  );
+}

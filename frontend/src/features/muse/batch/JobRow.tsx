@@ -1,3 +1,4 @@
+import { thumbUrl } from '../../../services';
 import { memo } from 'react';
 import { Play } from 'lucide-react';
 import { QueuePrompt, QueueProgress } from '../../../components/batch';
@@ -71,7 +72,14 @@ export const JobRow = memo(function JobRow({
         {shownRefs.length > 0 ? (
           <>
             {shownRefs.map((url) => (
-              <img key={url} className="queue-ref-thumb" src={url} alt="" loading="lazy" />
+              <img
+                key={url}
+                className="queue-ref-thumb"
+                src={thumbUrl(url)}
+                alt=""
+                loading="lazy"
+                decoding="async"
+              />
             ))}
             {moreRefs > 0 && (
               <span className="queue-ref-empty" title={`${job.references.length} ảnh tham chiếu`}>
@@ -103,7 +111,13 @@ export const JobRow = memo(function JobRow({
                   </span>
                 </>
               ) : (
-                <img className="queue-result-thumb" src={url} alt="" loading="lazy" />
+                <img
+                  className="queue-result-thumb"
+                  src={thumbUrl(url)}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                />
               )}
             </button>
           ))

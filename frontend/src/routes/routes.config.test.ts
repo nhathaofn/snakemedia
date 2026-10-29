@@ -15,7 +15,10 @@ describe('router', () => {
   it('renders each feature at its own URL', () => {
     for (const section of APP_SECTIONS) {
       for (const feature of section.features) {
-        expect(leaf(featurePath(section, feature))?.element).toBe(feature.element);
+        // Wrapped in Suspense: pages load in their own chunk.
+        const element = leaf(featurePath(section, feature))?.element as
+          ReactElement<{ children: unknown }> | undefined;
+        expect(element?.props.children).toBe(feature.element);
       }
     }
   });

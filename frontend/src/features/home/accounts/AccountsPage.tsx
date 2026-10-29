@@ -43,7 +43,6 @@ const isProvider = (value: string | null): value is AccountProvider =>
  */
 export const AccountsPage: React.FC = () => {
   useAccountsLive();
-  const now = useNow();
   const [params, setParams] = useSearchParams();
   const requested = params.get('provider');
   const provider = isProvider(requested) ? requested : AccountProvider.Flow;
@@ -72,7 +71,9 @@ export const AccountsPage: React.FC = () => {
   // never falls back to the real IP. Re-read when the panel closes (a proxy
   // may have been set) — the list itself is edited on the Proxy page.
   const [noProxies, setNoProxies] = useState(false);
+  const panelOpen = panel !== null;
   useEffect(() => {
+    if (panelOpen) return;
     let active = true;
     void api.getProxies().then((res) => {
       if (active) setNoProxies(res.success && proxyLines(res.data ?? '').length === 0);
@@ -80,7 +81,7 @@ export const AccountsPage: React.FC = () => {
     return () => {
       active = false;
     };
-  }, [panel]);
+  }, [panelOpen]);
 
   const report = (cause: unknown) =>
     addToast({ type: 'error', message: cause instanceof Error ? cause.message : String(cause) });
@@ -178,7 +179,6 @@ export const AccountsPage: React.FC = () => {
       setPanel(null);
     });
 
-  const ready = list.filter((a) => accountReady(a, now)).length;
   return (
     <div className="page-shell accounts-page">
       <div className="accounts-header">
@@ -217,7 +217,7 @@ export const AccountsPage: React.FC = () => {
       </div>
 
       <p className="accounts-hint">
-        {providerHints[provider]} {list.length > 0 && `Sẵn sàng: ${ready}/${list.length}.`}
+        {providerHints[provider]} <ReadyCount list={list} />
       </p>
 
       {noProxies && (
@@ -258,18 +258,40 @@ export const AccountsPage: React.FC = () => {
           để bắt đầu.
         </div>
       ) : (
-        <div className="accounts-grid">
-          {list.map((account) => (
-            <AccountCard
-              key={account.id}
-              account={account}
-              now={now}
-              busy={accountBusy(busy.get(account.id))}
-              onAction={onAction}
-            />
-          ))}
-        </div>
+        <AccountsGrid list={list} busy={busy} onAction={onAction} />
       )}
     </div>
   );
 };
+
+/** "Sẵn sàng: n/m." for the hint. It reads the clock itself (rests end over time). */
+function ReadyCount({ list }: { list: readonly Account[] }) {
+  const now = useNow();
+  if (list.length === 0) return null;
+  const ready = list.filter((a) => accountReady(a, now)).length;
+  return <>{`Sẵn sàng: ${ready}/${list.length}.`}</>;
+}
+
+interface AccountsGridProps {
+  list: readonly Account[];
+  busy: ReadonlyMap<string, BusyWork>;
+  onAction: (action: AccountAction, account: Account) => void;
+}
+
+/** The account cards. It reads the clock itself, so the page does not re-render on it. */
+function AccountsGrid({ list, busy, onAction }: AccountsGridProps) {
+  const now = useNow();
+  return (
+    <div className="accounts-grid">
+      {list.map((account) => (
+        <AccountCard
+          key={account.id}
+          account={account}
+          now={now}
+          busy={accountBusy(busy.get(account.id))}
+          onAction={onAction}
+        />
+      ))}
+    </div>
+  );
+}

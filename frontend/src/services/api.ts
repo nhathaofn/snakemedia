@@ -28,6 +28,7 @@ import type {
   MuseJobMode,
   MuseJobRequest,
   MuseLibraryItem,
+  MuseCleanResult,
   MuseAsset,
   MusePromptCheck,
   MusePromptTemplate,
@@ -247,6 +248,7 @@ export const api = {
   openMuseOutputFolder: () => invoke<boolean>('OpenMuseOutputFolder', Backend.OpenMuseOutputFolder),
   revealFile: (path: string) => invoke<boolean>('RevealFile', () => Backend.RevealFile(path)),
   listMuseLibrary: () => invoke<MuseLibraryItem[]>('ListMuseLibrary', Backend.ListMuseLibrary),
+  cleanMuseChats: () => invoke<MuseCleanResult[]>('CleanMuseChats', Backend.CleanMuseChats),
   listMuseAssets: () => invoke<MuseAsset[]>('ListMuseAssets', Backend.ListMuseAssets),
   saveMuseAsset: (asset: MuseAsset) =>
     invoke<MuseAsset>('SaveMuseAsset', () => Backend.SaveMuseAsset(asset)),

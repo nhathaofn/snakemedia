@@ -151,3 +151,28 @@ func TestPoolRefusesForeignProfile(t *testing.T) {
 
 // launchedCmd marks a test browser as started by this run rather than adopted.
 func launchedCmd() *exec.Cmd { return &exec.Cmd{} }
+
+// A removed profile's launch lock is forgotten, so the map does not grow with
+// every account ever removed.
+func TestPoolForgetsLaunchLockOfRemovedProfile(t *testing.T) {
+	pool, profile := testPool(t)
+	pool.start = func(_ context.Context, opts LaunchOptions, _ config.AccountConfig) (*Browser, error) {
+		return &Browser{ProfileDir: opts.ProfileDir, done: make(chan struct{}), cmd: launchedCmd()}, nil
+	}
+	pool.shutdown = func(*Browser, config.AccountConfig) error { return nil }
+	if _, err := pool.Get(context.Background(), profile, Want{Route: "direct"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.RemoveIfIdle(profile); err != nil {
+		t.Fatal(err)
+	}
+	pool.mu.Lock()
+	n := len(pool.launches)
+	pool.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("launch locks kept after removal: %d", n)
+	}
+	if _, err := pool.Get(context.Background(), profile, Want{Route: "direct"}); err != nil || pool.Running(profile) == nil {
+		t.Fatalf("profile cannot start again: %v", err)
+	}
+}

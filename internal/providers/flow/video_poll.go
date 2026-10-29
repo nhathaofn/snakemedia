@@ -26,11 +26,13 @@ func (s *Provider) resumeVideoGeneration(ctx context.Context, job generationJob,
 	}
 	acc, release, err := s.readyOwnedAccount(ctx, job.AccountID)
 	if err != nil {
+		logger.Get().Warn("video job stays pending: account not ready", "job", job.ID, "error", err)
 		return models.SuccessResponse(pending)
 	}
 	defer release()
-	client, err := s.flowClient(ctx, *acc, chrome.MethodProjectContents, chrome.MethodMedia, chrome.MethodVideoStatus)
+	client, err := s.projectPageClient(ctx, *acc, chrome.MethodProjectContents, chrome.MethodMedia, chrome.MethodVideoStatus)
 	if err != nil {
+		logger.Get().Warn("video job stays pending: Flow client not ready", "job", job.ID, "error", err)
 		return models.SuccessResponse(pending)
 	}
 	defer s.keepCredentials(*acc, client)
@@ -43,6 +45,7 @@ func (s *Provider) resumeVideoGeneration(ctx context.Context, job generationJob,
 		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeUnavailable)
 	}
 	if err != nil {
+		logger.Get().Warn("video job stays pending: cannot check it", "job", job.ID, "error", err)
 		return models.SuccessResponse(pending)
 	}
 	return models.SuccessResponse(items)
@@ -73,6 +76,38 @@ func (s *Provider) videoBillable(ctx context.Context, req GenerateVideoRequest) 
 	}
 }
 
+// adoptBatchVideos gives the client IDs no workflow names the videos carrying
+// the request's batch ID, the first client ID (buildVideoRequest), in listing
+// order. They all come from the same request, so the order does not matter.
+func adoptBatchVideos(listing string, clientIDs []string, started []pendingVideo, known map[string]bool) []pendingVideo {
+	if len(clientIDs) == 0 {
+		return started
+	}
+	taken := make(map[string]bool, len(started))
+	for _, v := range started {
+		taken[v.name+"|"+v.operation] = true
+	}
+	batch := mediaForSeed(listing, clientIDs[0])
+	for _, clientID := range clientIDs {
+		if known[strings.ToLower(clientID)] {
+			continue
+		}
+		for len(batch) > 0 && taken[batch[0].name+"|"+batch[0].operation] {
+			batch = batch[1:]
+		}
+		if len(batch) == 0 {
+			break
+		}
+		match := batch[0]
+		batch = batch[1:]
+		match.clientID = clientID
+		taken[match.name+"|"+match.operation] = true
+		started = append(started, match)
+		known[strings.ToLower(clientID)] = true
+	}
+	return started
+}
+
 func (s *Provider) reconcileVideoGenerationWithClient(ctx context.Context, client *chrome.FlowClient, job generationJob, template GeneratedVideoItem) ([]GeneratedVideoItem, error) {
 	started := make([]pendingVideo, 0, len(job.ClientIDs))
 	known := make(map[string]bool, len(job.ClientIDs))
@@ -94,11 +129,12 @@ func (s *Provider) reconcileVideoGenerationWithClient(ctx context.Context, clien
 			listed = false
 			logger.Get().Warn("cannot list project to reconcile video job", "job", job.ID, "error", err)
 		} else {
+			workflows := parseWorkflows(listing)
 			for _, clientID := range job.ClientIDs {
 				if known[strings.ToLower(clientID)] {
 					continue
 				}
-				match := mediaForClient(listing, clientID)
+				match := workflows.forClient(clientID)
 				if match.name == "" && match.operation == "" {
 					continue
 				}
@@ -106,6 +142,7 @@ func (s *Provider) reconcileVideoGenerationWithClient(ctx context.Context, clien
 				started = append(started, match)
 				known[strings.ToLower(clientID)] = true
 			}
+			started = adoptBatchVideos(listing, job.ClientIDs, started, known)
 		}
 	}
 	if len(started) == 0 && listed && s.submissionLost(job) {
@@ -125,7 +162,12 @@ func (s *Provider) reconcileVideoGenerationWithClient(ctx context.Context, clien
 
 func (s *Provider) followGenerationVideos(ctx context.Context, client *chrome.FlowClient, job generationJob, started []pendingVideo, template GeneratedVideoItem) ([]GeneratedVideoItem, error) {
 	final, err := s.waitForVideos(ctx, client, job.ProjectID, started, s.cfg.Get().Flow.VideoPollIntervalMS, s.cfg.Get().Flow.VideoGenerationTimeoutSeconds, func(videos []pendingVideo) error {
-		job.Videos = trackVideos(videos)
+		// A round that changed nothing tracked leaves the saved journal as is.
+		tracked := trackVideos(videos)
+		if slices.Equal(tracked, job.Videos) {
+			return nil
+		}
+		job.Videos = tracked
 		return s.saveGenerationJob(job)
 	})
 	if len(final) > 0 {
@@ -321,12 +363,13 @@ func (s *Provider) waitForVideos(ctx context.Context, client *chrome.FlowClient,
 				listingOK = true
 				// GetProjectContents: field 3 (index 2) lists the project's media.
 				media, _ := parseVideoMedia(payload, 2)
+				workflows := parseWorkflows(payload)
 				for i, v := range videos {
 					if settled(v) {
 						continue
 					}
 					if v.clientID != "" && (v.name == "" || strings.EqualFold(v.name, v.clientID)) {
-						if found := mediaForClient(payload, v.clientID); found.name != "" {
+						if found := workflows.forClient(v.clientID); found.name != "" {
 							videos[i].name = found.name
 							videos[i].operation = found.operation
 						}

@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"slices"
 	"time"
-
-	"SnakeMedia/internal/logger"
 )
 
 // maxBoardFrames caps a storyboard: one opening frame per scene, and the
@@ -51,35 +49,59 @@ func v2vLines(job MuseJob) []string {
 // frames, so it fails instead of waiting forever; one whose storyboard failed
 // keeps waiting for that storyboard to be retried.
 func (p *Provider) releaseWaiting() {
-	for _, j := range p.jobs.list() {
+	all := p.jobs.list()
+	byID := make(map[string]MuseJob, len(all))
+	for _, j := range all {
+		byID[j.ID] = j
+	}
+	// reasons holds the jobs to fail and why; the other listed jobs show
+	// boardFailedStep. All are changed in one journal write.
+	reasons := map[string]string{}
+	var ids []string
+	var boards []MuseJob
+	released := map[string]bool{}
+	for _, j := range all {
 		if !waitsForBoard(j) || j.Status != MuseJobQueued || j.mayBePaid() {
 			continue
 		}
-		board, ok := p.jobs.get(j.After)
-		reason := ""
+		board, ok := byID[j.After]
 		switch {
 		case !ok:
-			reason = "Storyboard đã bị xoá; tạo lại video để làm storyboard mới."
+			reasons[j.ID] = "Storyboard đã bị xoá; tạo lại video để làm storyboard mới."
 		case board.Status == MuseJobSucceeded && len(board.Files) == 0:
-			reason = "Storyboard không có ảnh; tạo lại video để làm storyboard mới."
+			reasons[j.ID] = "Storyboard không có ảnh; tạo lại video để làm storyboard mới."
 		case board.Status == MuseJobSucceeded:
-			p.releaseAfter(board)
-			continue
-		case board.Status == MuseJobFailed || board.Status == MuseJobCancelled:
-			if j.Step != boardFailedStep {
-				_, _ = p.updateJob(j.ID, func(v *MuseJob) { v.Step = boardFailedStep })
+			if !released[board.ID] {
+				released[board.ID] = true
+				boards = append(boards, board)
 			}
 			continue
+		case board.Status == MuseJobFailed || board.Status == MuseJobCancelled:
+			if j.Step == boardFailedStep {
+				continue
+			}
 		default:
 			continue
 		}
-		_, err := p.updateJob(j.ID, func(v *MuseJob) {
+		ids = append(ids, j.ID)
+	}
+	p.updateJobs(ids, func(v *MuseJob) bool {
+		if !waitsForBoard(*v) || v.Status != MuseJobQueued || v.mayBePaid() {
+			return false
+		}
+		if reason, fail := reasons[v.ID]; fail {
 			v.Status, v.Error, v.Step = MuseJobFailed, reason, ""
 			v.FinishedAt = p.now().UTC().Format(time.RFC3339)
-		})
-		if err != nil {
-			logger.Get().Warn("cannot fail orphaned storyboard video", "job", j.ID, "error", err)
+			return true
 		}
+		if v.Step == boardFailedStep {
+			return false
+		}
+		v.Step = boardFailedStep
+		return true
+	})
+	for _, board := range boards {
+		p.releaseAfter(board)
 	}
 }
 
@@ -99,25 +121,30 @@ func (p *Provider) releaseAfter(board MuseJob) {
 	if board.Status != MuseJobSucceeded || len(board.Files) == 0 {
 		return
 	}
+	waiting := func(j MuseJob) bool {
+		return j.After == board.ID && j.Status == MuseJobQueued && !j.mayBePaid()
+	}
+	var ids []string
 	for _, j := range p.jobs.list() {
-		if j.After != board.ID || j.Status != MuseJobQueued || j.mayBePaid() {
-			continue
-		}
-		frames := slices.Clone(board.Files)
-		if len(frames) > j.BoardFrames && j.BoardFrames > 0 {
-			frames = frames[:j.BoardFrames]
-		}
-		_, err := p.updateJob(j.ID, func(v *MuseJob) {
-			v.Frames = frames
-			v.Step = "Đã có storyboard"
-			if v.Review {
-				v.Held = true
-				v.Step = "Đã có storyboard, xem rồi bấm Chạy để làm video"
-			}
-		})
-		if err != nil {
-			logger.Get().Warn("cannot attach storyboard", "job", j.ID, "error", err)
+		if waiting(j) {
+			ids = append(ids, j.ID)
 		}
 	}
+	p.updateJobs(ids, func(v *MuseJob) bool {
+		if !waiting(*v) {
+			return false
+		}
+		frames := slices.Clone(board.Files)
+		if len(frames) > v.BoardFrames && v.BoardFrames > 0 {
+			frames = frames[:v.BoardFrames]
+		}
+		v.Frames = frames
+		v.Step = "Đã có storyboard"
+		if v.Review {
+			v.Held = true
+			v.Step = "Đã có storyboard, xem rồi bấm Chạy để làm video"
+		}
+		return true
+	})
 	p.trigger()
 }

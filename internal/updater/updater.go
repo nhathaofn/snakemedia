@@ -213,8 +213,8 @@ func (u *Updater) installerName(version string) string {
 }
 
 // canInstall reports whether the running copy is one the installer replaces:
-// the installed <name>.exe on Windows. A dev build (<name>-dev.exe) or the
-// portable exe is updated by hand.
+// the installed <name>.exe, with the installer's uninstall.exe beside it, on
+// Windows. A dev build (<name>-dev.exe) or the portable exe is updated by hand.
 func (u *Updater) canInstall() (bool, string) {
 	if runtime.GOOS != "windows" {
 		return false, "Tự cập nhật chỉ hỗ trợ Windows."
@@ -223,8 +223,15 @@ func (u *Updater) canInstall() (bool, string) {
 	if err != nil {
 		return false, "Không xác định được vị trí app: " + err.Error()
 	}
+	notInstalled := "Bản đang chạy không phải bản cài đặt (" + filepath.Base(exe) + "); hãy tải bộ cài mới ở trang phát hành."
 	if !strings.EqualFold(filepath.Base(exe), u.name+".exe") {
-		return false, "Bản đang chạy không phải bản cài đặt (" + filepath.Base(exe) + "); hãy tải bộ cài mới ở trang phát hành."
+		return false, notInstalled
+	}
+	// The installer writes uninstall.exe beside the app. Without it this is a
+	// renamed portable copy, and installing into its folder (Downloads, the
+	// desktop) would let a later uninstall remove that folder's other files.
+	if _, err := os.Stat(filepath.Join(filepath.Dir(exe), "uninstall.exe")); err != nil {
+		return false, notInstalled
 	}
 	return true, ""
 }

@@ -43,6 +43,21 @@ export const MuseLibraryPage: React.FC = () => {
       await library.reload();
     });
 
+  // Forgets every file the filter shows; files saved to a folder stay there.
+  const clearShown = () =>
+    void act(async () => {
+      const what = filter === 'all' ? 'tệp' : filter === MuseJobKind.Video ? 'video' : 'ảnh';
+      if (
+        !window.confirm(
+          `Bỏ ${items.length} ${what} khỏi Thư viện Muse? Tệp đã lưu ra thư mục vẫn còn trên đĩa.`,
+        )
+      )
+        return;
+      const removed = unwrap(await api.removeMuseLibraryItems(items.map((item) => item.id)));
+      await library.reload();
+      addToast({ type: 'success', message: `Đã dọn ${removed} ${what} khỏi thư viện.` });
+    });
+
   return (
     <div className="page-shell muse-page">
       <div className="muse-header">
@@ -62,6 +77,16 @@ export const MuseLibraryPage: React.FC = () => {
             options={kindFilters}
           />
           <span className="muse-hint">{items.length} tệp</span>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="muse-lib-clear"
+            disabled={items.length === 0}
+            onClick={clearShown}
+          >
+            <Icon icon={Trash2} />
+            <span>Dọn thư viện</span>
+          </Button>
         </div>
 
         {library.error ? (

@@ -137,6 +137,17 @@ func listJournals[T any](s *Provider, kind string, check func(id string, value T
 	return out, nil
 }
 
+// journalQuarantined reports whether a journal of kind with id was moved
+// aside by quarantineJournal.
+func (s *Provider) journalQuarantined(kind, id string) bool {
+	path, err := s.statePath(kind, id)
+	if err != nil {
+		return false
+	}
+	matches, _ := filepath.Glob(path + ".corrupt*")
+	return len(matches) > 0
+}
+
 // quarantineJournal moves a broken journal out of the listing, keeping it for
 // diagnosis.
 func quarantineJournal(path, kind, id string, cause error) {

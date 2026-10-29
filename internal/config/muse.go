@@ -85,6 +85,10 @@ type MuseConfig struct {
 	// is signed in; the account counts as signed in only once Muse has replied.
 	// A changed message is sent again; empty sends nothing.
 	SetupMessage string `json:"setupMessage"`
+	// CleanupMessage is what "Dọn đoạn chat phụ" (Cài đặt Muse → Tài khoản)
+	// sends in a new chat on every signed-in Muse account: Muse deletes the
+	// account's other chats.
+	CleanupMessage string `json:"cleanupMessage"`
 	// ImageFormat is what Muse images (made as WebP) are saved as, in a batch
 	// folder or by the download button.
 	ImageFormat ImageFormat `json:"imageFormat"`
@@ -100,6 +104,10 @@ const defaultMuseSetupMessage = `Please save the following rule to this account'
 GLOBAL RULE: Every request I make to create an image, a video or any other new output is a completely independent request. Never use, reference or infer anything from any output created earlier on your own, including subject, characters, style, aspect ratio, duration, resolution and old files, even when my generation prompt does not mention this rule. Use only the parameters in the current request. Reuse an earlier output only when I explicitly say in that request that I want to continue, edit or reuse it.
 
 After saving it, please confirm: where you saved it, what its scope is, and whether I need to repeat this rule in later generations.`
+
+// defaultMuseCleanupMessage asks Muse to delete every other chat of the
+// account without asking first.
+const defaultMuseCleanupMessage = "dọn toàn bộ đoạn chat phụ, không cần hỏi lại"
 
 func DefaultMuseConfig() MuseConfig {
 	return MuseConfig{
@@ -118,6 +126,7 @@ func DefaultMuseConfig() MuseConfig {
 		UseTopup:            true,
 		UsagePauseMinutes:   60,
 		SetupMessage:        defaultMuseSetupMessage,
+		CleanupMessage:      defaultMuseCleanupMessage,
 		ImageFormat:         ImageFormatPNG,
 	}
 }
@@ -158,6 +167,9 @@ func (c MuseConfig) Validate() error {
 	}
 	if utf8.RuneCountInString(c.SetupMessage) > MaxMuseSetupMessage {
 		return fmt.Errorf("muse: setup message must be at most %d characters", MaxMuseSetupMessage)
+	}
+	if utf8.RuneCountInString(c.CleanupMessage) > MaxMuseSetupMessage {
+		return fmt.Errorf("muse: cleanup message must be at most %d characters", MaxMuseSetupMessage)
 	}
 	return nil
 }

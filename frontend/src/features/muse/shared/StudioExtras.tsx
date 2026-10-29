@@ -1,3 +1,4 @@
+import { thumbUrl } from '../../../services';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ChevronDown, Film, X } from 'lucide-react';
@@ -79,7 +80,9 @@ export function FixedAssetsField({ draft, update }: { draft: MuseDraft; update: 
                 })
               }
             >
-              {a.images[0] && <img src={a.images[0]} alt="" />}
+              {a.images[0] && (
+                <img src={thumbUrl(a.images[0])} alt="" loading="lazy" decoding="async" />
+              )}
               <span>@{a.tag}</span>
             </button>
           );

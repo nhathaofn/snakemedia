@@ -471,21 +471,23 @@ func (p *Provider) poll(ctx context.Context, job MuseJob, page Page, cfg config.
 			errorsInRow = 0
 			noteStatus(status)
 		}
+		// The chat is read at most once a tick, by whichever check needs it first.
+		chat := readChatOnce(ctx, job, page)
 		if status == sessionCompleted || status == sessionInterrupted {
 			// Right after a continue the chat may still show the last turn's
 			// end: only a newer reply ends this one.
-			if job.RepliesSeen == 0 || p.newReply(ctx, job, page) {
+			if job.RepliesSeen == 0 || newReply(job, chat) {
 				return status, nil
 			}
 			status = sessionRunning
 		}
 		overdue := p.now().Sub(sent) > limit
-		if overdue && job.RepliesSeen > 0 && !p.newReply(ctx, job, page) {
+		if overdue && job.RepliesSeen > 0 && !newReply(job, chat) {
 			// The continue got no answer in time. Sending the video again in a
 			// new chat would pay for its clips twice: it fails instead.
 			return "", &longIncompleteError{continues: job.Continues, detail: "Muse không trả lời lời nhắc làm tiếp"}
 		}
-		if (status != sessionRunning || overdue) && p.chatHasResult(ctx, job, page) {
+		if (status != sessionRunning || overdue) && chatHasResult(job, chat) {
 			return sessionCompleted, nil
 		}
 		if overdue {
@@ -505,8 +507,8 @@ func (p *Provider) poll(ctx context.Context, job MuseJob, page Page, cfg config.
 // chatHasResult reports whether the chat already holds a file of the job's
 // kind. A long video's chat holds its clips long before the joined file, so
 // for it only a status line saying it is done counts.
-func (p *Provider) chatHasResult(ctx context.Context, job MuseJob, page Page) bool {
-	events, err := page.Result(ctx, job.SessionID)
+func chatHasResult(job MuseJob, chat func() ([]AssistantEvent, error)) bool {
+	events, err := chat()
 	if err != nil {
 		return false
 	}
@@ -519,9 +521,26 @@ func (p *Provider) chatHasResult(ctx context.Context, job MuseJob, page Page) bo
 
 // newReply reports whether the chat holds an answer newer than the ones read
 // before the job's last continue.
-func (p *Provider) newReply(ctx context.Context, job MuseJob, page Page) bool {
-	events, err := page.Result(ctx, job.SessionID)
+func newReply(job MuseJob, chat func() ([]AssistantEvent, error)) bool {
+	events, err := chat()
 	return err == nil && len(events) > job.RepliesSeen
+}
+
+// readChatOnce returns a reader of the job's chat that asks the page on its
+// first use only and hands every later use the same answer.
+func readChatOnce(ctx context.Context, job MuseJob, page Page) func() ([]AssistantEvent, error) {
+	var (
+		read   bool
+		events []AssistantEvent
+		err    error
+	)
+	return func() ([]AssistantEvent, error) {
+		if !read {
+			read = true
+			events, err = page.Result(ctx, job.SessionID)
+		}
+		return events, err
+	}
 }
 
 // wantedMedia picks the result files of kind from a chat, and reports whether
@@ -555,10 +574,13 @@ func (p *Provider) collect(ctx context.Context, job MuseJob, accountID string, p
 		if long, err = p.longOutcome(ctx, job, accountID, page, replies); err != nil {
 			return err
 		}
-		// The chat holds every clip; the joined video is the last one Muse sent.
-		if len(wanted) > 1 {
-			wanted = wanted[len(wanted)-1:]
-		}
+	}
+	// A video job asks for one file. A long video's chat holds every clip
+	// before the joined one, and a short one may hold a cut Muse replaced
+	// ("here's the exact-cut version, replacing the 5.08s cut"): the last
+	// video Muse sent is the result either way.
+	if job.Kind == MuseJobVideo && len(wanted) > 1 {
+		wanted = wanted[len(wanted)-1:]
 	}
 	if len(wanted) == 0 && missing {
 		// Muse made the file but cannot hand it over right now: read the chat

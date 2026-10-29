@@ -246,13 +246,7 @@ func (c *MuseCapabilities) imageMime(ext string) (string, bool) {
 	if c == nil {
 		return "", false
 	}
-	ext = strings.ToLower(ext)
-	for _, t := range c.ImageTypes {
-		if slices.Contains(t.Extensions, ext) {
-			return t.Mime, true
-		}
-	}
-	return "", false
+	return mimeFor(c.ImageTypes, ext)
 }
 
 // videoMime returns the MIME type Muse lists for a video file extension.
@@ -260,8 +254,13 @@ func (c *MuseCapabilities) videoMime(ext string) (string, bool) {
 	if c == nil {
 		return "", false
 	}
+	return mimeFor(c.VideoTypes, ext)
+}
+
+// mimeFor returns the MIME type of the first of types listing ext.
+func mimeFor(types []MuseFileType, ext string) (string, bool) {
 	ext = strings.ToLower(ext)
-	for _, t := range c.VideoTypes {
+	for _, t := range types {
 		if slices.Contains(t.Extensions, ext) {
 			return t.Mime, true
 		}
@@ -271,24 +270,24 @@ func (c *MuseCapabilities) videoMime(ext string) (string, bool) {
 
 // videoExtensions lists every accepted video extension, sorted.
 func (c *MuseCapabilities) videoExtensions() []string {
-	var out []string
 	if c == nil {
-		return out
+		return nil
 	}
-	for _, t := range c.VideoTypes {
-		out = append(out, t.Extensions...)
-	}
-	slices.Sort(out)
-	return slices.Compact(out)
+	return extensionsOf(c.VideoTypes)
 }
 
 // extensions lists every accepted image extension, sorted.
 func (c *MuseCapabilities) extensions() []string {
-	var out []string
 	if c == nil {
-		return out
+		return nil
 	}
-	for _, t := range c.ImageTypes {
+	return extensionsOf(c.ImageTypes)
+}
+
+// extensionsOf lists every extension of types, sorted and without repeats.
+func extensionsOf(types []MuseFileType) []string {
+	var out []string
+	for _, t := range types {
 		out = append(out, t.Extensions...)
 	}
 	slices.Sort(out)

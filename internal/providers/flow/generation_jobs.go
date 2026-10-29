@@ -70,9 +70,16 @@ func requestFingerprint(value any) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
+// errJournalQuarantined is a request whose journal was moved aside as corrupt.
+// It is never "not found": Flow may already have taken that request.
+var errJournalQuarantined = errors.New("Nhật ký job tạo media bị hỏng và đã được tách riêng; kết quả của yêu cầu không xác định nên sẽ không gửi lại.")
+
 func (s *Provider) loadGenerationJob(id string) (generationJob, error) {
 	var job generationJob
 	if err := s.readState("generation-jobs", id, &job); err != nil {
+		if errors.Is(err, os.ErrNotExist) && s.journalQuarantined("generation-jobs", id) {
+			return generationJob{}, errJournalQuarantined
+		}
 		return generationJob{}, err
 	}
 	if err := checkGenerationJob(id, job); err != nil {

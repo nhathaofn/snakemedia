@@ -178,10 +178,12 @@ func (m *Manager) CheckAll(ctx context.Context) ([]CheckResult, error) {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, checkConcurrency)
 	for i, line := range lines {
+		// Taking a slot before starting the goroutine keeps at most
+		// checkConcurrency goroutines alive however long the list is.
+		sem <- struct{}{}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
 			defer func() { <-sem }()
 			defer logger.Recover("kiểm tra proxy")
 			parsed := Parse(line)
@@ -233,6 +235,27 @@ func (m *Manager) Usable(a Assignment, others []Assignment) error {
 	}
 	_, _, err = pick(a, others, text, m.deadSet(), m.now())
 	return err
+}
+
+// UsableEach is Usable for several accounts at once, reading the proxy list
+// and the dead marks once. The result holds one error (or nil) per account.
+func (m *Manager) UsableEach(as []Assignment, others []Assignment) []error {
+	errs := make([]error, len(as))
+	if len(as) == 0 {
+		return errs
+	}
+	text, err := m.Text()
+	if err != nil {
+		for i := range errs {
+			errs[i] = err
+		}
+		return errs
+	}
+	dead, now := m.deadSet(), m.now()
+	for i, a := range as {
+		_, _, errs[i] = pick(a, others, text, dead, now)
+	}
+	return errs
 }
 
 // Route picks the account's proxy and prepares its local bridge. Any failure

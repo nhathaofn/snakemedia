@@ -75,6 +75,17 @@ func testUpdater(t *testing.T, srv *httptest.Server, exe string) *Updater {
 	return u
 }
 
+// installedExe is Demo.exe in a folder the installer made: uninstall.exe
+// sits beside it.
+func installedExe(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "uninstall.exe"), []byte("MZ"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(dir, "Demo.exe")
+}
+
 func sumLine(data []byte, name string) string {
 	h := sha256.Sum256(data)
 	return hex.EncodeToString(h[:]) + "  " + name + "\n"
@@ -86,7 +97,7 @@ func TestCheckAndDownloadVerifiesTheInstaller(t *testing.T) {
 	}
 	installer := []byte("MZ fake installer")
 	rel := &fakeRelease{tag: "v1.2.0", installer: installer, sums: sumLine(installer, "Demo-1.2.0-windows-amd64-setup.exe")}
-	u := testUpdater(t, serve(t, rel), `C:\Apps\Demo\Demo.exe`)
+	u := testUpdater(t, serve(t, rel), installedExe(t))
 
 	got, err := u.Check(context.Background())
 	if err != nil {
@@ -114,7 +125,7 @@ func TestDownloadRefusesAMismatchedChecksum(t *testing.T) {
 		t.Skip("installs are Windows only")
 	}
 	rel := &fakeRelease{tag: "v1.2.0", installer: []byte("tampered"), sums: sumLine([]byte("original"), "Demo-1.2.0-windows-amd64-setup.exe")}
-	u := testUpdater(t, serve(t, rel), `C:\Apps\Demo\Demo.exe`)
+	u := testUpdater(t, serve(t, rel), installedExe(t))
 	if _, err := u.Check(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +138,7 @@ func TestDownloadRefusesAMismatchedChecksum(t *testing.T) {
 }
 
 func TestCheckSaysWhenThereIsNothingNew(t *testing.T) {
-	u := testUpdater(t, serve(t, &fakeRelease{tag: "v1.0.0"}), `C:\Apps\Demo\Demo.exe`)
+	u := testUpdater(t, serve(t, &fakeRelease{tag: "v1.0.0"}), installedExe(t))
 	got, err := u.Check(context.Background())
 	if err != nil || got.Available {
 		t.Fatalf("Check = %+v, %v", got, err)
@@ -138,7 +149,9 @@ func TestCheckSaysWhenThereIsNothingNew(t *testing.T) {
 }
 
 func TestDevAndPortableCopiesAreNotReplaced(t *testing.T) {
-	for _, exe := range []string{`C:\src\build\bin\Demo-dev.exe`, `C:\Downloads\Demo-1.0.0-windows-amd64-portable.exe`} {
+	// A portable copy renamed to Demo.exe has no uninstall.exe beside it.
+	renamed := filepath.Join(t.TempDir(), "Demo.exe")
+	for _, exe := range []string{`C:\src\build\bin\Demo-dev.exe`, `C:\Downloads\Demo-1.0.0-windows-amd64-portable.exe`, renamed} {
 		u := testUpdater(t, serve(t, &fakeRelease{tag: "v1.2.0"}), exe)
 		got, err := u.Check(context.Background())
 		if err != nil || got.CanInstall || got.Reason == "" {

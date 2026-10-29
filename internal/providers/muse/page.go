@@ -159,23 +159,36 @@ type pageReply struct {
 	Value   json.RawMessage `json:"v"`
 }
 
+// callForm wraps a call to window[pageKey][name]; its verbs are the page
+// object, the method name and the arguments, all as JS expressions.
+const callForm = `(async()=>{if(!(location.protocol==="https:"&&/^(www\.)?muse\.ai$/.test(location.host)))return '{"away":true}';const o=%s;if(!o)return '{"missing":true}';return JSON.stringify({v:await o[%s](...%s)})})()`
+
+// pageObjects are the page object expressions of the short and full forms.
+// The full one embeds page.js, so both are built once, not per call.
+var pageObjects = sync.OnceValues(func() (short, full string) {
+	key, _ := json.Marshal(pageKey)
+	short = fmt.Sprintf("window[%s]", key)
+	full = fmt.Sprintf("(window[%s]||(window[%s]=(%s)(%d)))", key, key, pageSource, chunkSize)
+	return short, full
+})
+
 // callExpressions are the two forms of a call to window[pageKey][name]: short
 // runs it only when the tab already has the page script, full injects the
 // script first (a fresh load or a navigation). Both run only on muse.ai: a
-// kept connection follows its tab wherever it goes.
-func callExpressions(name string, args []any) (short, full string, err error) {
+// kept connection follows its tab wherever it goes. full is built only when
+// asked for, as most calls find the script already there.
+func callExpressions(name string, args []any) (short string, full func() string, err error) {
 	if args == nil {
 		args = []any{}
 	}
 	encodedArgs, err := json.Marshal(args)
 	if err != nil {
-		return "", "", err
+		return "", nil, err
 	}
 	encodedName, _ := json.Marshal(name)
-	key, _ := json.Marshal(pageKey)
-	const form = `(async()=>{if(!(location.protocol==="https:"&&/^(www\.)?muse\.ai$/.test(location.host)))return '{"away":true}';const o=%s;if(!o)return '{"missing":true}';return JSON.stringify({v:await o[%s](...%s)})})()`
-	short = fmt.Sprintf(form, fmt.Sprintf("window[%s]", key), encodedName, encodedArgs)
-	full = fmt.Sprintf(form, fmt.Sprintf("(window[%s]||(window[%s]=(%s)(%d)))", key, key, pageSource, chunkSize), encodedName, encodedArgs)
+	shortObject, fullObject := pageObjects()
+	short = fmt.Sprintf(callForm, shortObject, encodedName, encodedArgs)
+	full = func() string { return fmt.Sprintf(callForm, fullObject, encodedName, encodedArgs) }
 	return short, full, nil
 }
 
@@ -185,10 +198,23 @@ func callExpressions(name string, args []any) (short, full string, err error) {
 // more on a new one. A send never uses the kept connection and is never asked
 // twice: Muse may have taken it.
 func (p *chromePage) invoke(ctx context.Context, timeout time.Duration, name string, out any, args ...any) error {
-	if p.nav != nil {
-		p.nav.RLock()
-		defer p.nav.RUnlock()
+	unlock := p.readNav()
+	defer unlock()
+	return p.call(ctx, timeout, name, out, args...)
+}
+
+// readNav holds the tab against Home until the returned func is called.
+func (p *chromePage) readNav() func() {
+	if p.nav == nil {
+		return func() {}
 	}
+	p.nav.RLock()
+	return p.nav.RUnlock
+}
+
+// call is invoke for a caller already holding readNav. The lock is not
+// taken again: a waiting Home would block a second RLock.
+func (p *chromePage) call(ctx context.Context, timeout time.Duration, name string, out any, args ...any) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	short, full, err := callExpressions(name, args)
@@ -215,14 +241,14 @@ func (p *chromePage) invoke(ctx context.Context, timeout time.Duration, name str
 
 // evaluateCall runs the short form of a call, then the full one when the tab
 // has no page script, and decodes the method's answer into out.
-func evaluateCall(ctx context.Context, conn *browser.Conn, short, full string, out any) error {
+func evaluateCall(ctx context.Context, conn *browser.Conn, short string, full func() string, out any) error {
 	var reply pageReply
 	if err := conn.Evaluate(ctx, short, &reply); err != nil {
 		return err
 	}
 	if reply.Missing {
 		reply = pageReply{}
-		if err := conn.Evaluate(ctx, full, &reply); err != nil {
+		if err := conn.Evaluate(ctx, full(), &reply); err != nil {
 			return err
 		}
 	}
@@ -244,25 +270,20 @@ func (p *chromePage) Login(ctx context.Context) (LoginState, error) {
 // Send starts a new chat. A page without Muse's chat client (an odd route the
 // user clicked to) is sent home and tried once more; nothing was sent then.
 func (p *chromePage) Send(ctx context.Context, text string, atts []Attachment) (SendResult, error) {
-	var r SendResult
-	if err := p.invoke(ctx, p.sendTimeout, "send", &r, text, atts, ""); err != nil {
-		return r, err
-	}
-	if !strings.HasPrefix(r.Reason, "not_ready") {
-		return r, nil
-	}
-	if err := p.Home(ctx); err != nil {
-		return r, nil
-	}
-	err := p.invoke(ctx, p.sendTimeout, "send", &r, text, atts, "")
-	return r, err
+	return p.send(ctx, text, atts, "")
 }
 
 // SendTo posts text into an existing chat. page.js routes the message to that
 // thread; a page without Muse's chat client is sent home and tried once more.
 func (p *chromePage) SendTo(ctx context.Context, sessionID, text string) (SendResult, error) {
+	return p.send(ctx, text, nil, sessionID)
+}
+
+// send posts text, in a new chat when sessionID is empty, retrying once from
+// Muse's home page when the page had no chat client (nothing was sent then).
+func (p *chromePage) send(ctx context.Context, text string, atts []Attachment, sessionID string) (SendResult, error) {
 	var r SendResult
-	if err := p.invoke(ctx, p.sendTimeout, "send", &r, text, []Attachment(nil), sessionID); err != nil {
+	if err := p.invoke(ctx, p.sendTimeout, "send", &r, text, atts, sessionID); err != nil {
 		return r, err
 	}
 	if !strings.HasPrefix(r.Reason, "not_ready") {
@@ -271,7 +292,7 @@ func (p *chromePage) SendTo(ctx context.Context, sessionID, text string) (SendRe
 	if err := p.Home(ctx); err != nil {
 		return r, nil
 	}
-	err := p.invoke(ctx, p.sendTimeout, "send", &r, text, []Attachment(nil), sessionID)
+	err := p.invoke(ctx, p.sendTimeout, "send", &r, text, atts, sessionID)
 	return r, err
 }
 
@@ -330,16 +351,20 @@ func (p *chromePage) Download(ctx context.Context, path string, sink io.Writer) 
 		ID   int   `json:"id"`
 		Size int64 `json:"size"`
 	}
-	if err := p.invoke(ctx, p.callTimeout, "open", &file, path); err != nil {
+	// The tab is held for the whole file: Home between two slices would
+	// reload the page and drop the open file.
+	unlock := p.readNav()
+	defer unlock()
+	if err := p.call(ctx, p.callTimeout, "open", &file, path); err != nil {
 		return 0, err
 	}
 	defer func() {
 		var ignored any
-		_ = p.invoke(context.WithoutCancel(ctx), p.callTimeout, "closeFile", &ignored, file.ID)
+		_ = p.call(context.WithoutCancel(ctx), p.callTimeout, "closeFile", &ignored, file.ID)
 	}()
 	for i := 0; int64(i)*chunkSize < file.Size; i++ {
 		var chunk string
-		if err := p.invoke(ctx, p.callTimeout, "slice", &chunk, file.ID, i); err != nil {
+		if err := p.call(ctx, p.callTimeout, "slice", &chunk, file.ID, i); err != nil {
 			return written, err
 		}
 		data, err := base64.StdEncoding.DecodeString(chunk)

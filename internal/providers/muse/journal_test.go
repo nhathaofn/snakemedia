@@ -15,7 +15,7 @@ func TestJournalIndexFollowsAddTrimAndRemove(t *testing.T) {
 		if id == "a" || id == "b" {
 			status = MuseJobSucceeded
 		}
-		if err := s.add(MuseJob{ID: id, Status: status}); err != nil {
+		if _, err := s.add(MuseJob{ID: id, Status: status}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -30,8 +30,8 @@ func TestJournalIndexFollowsAddTrimAndRemove(t *testing.T) {
 	if err := s.remove("c"); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := s.removeWhere(func(j MuseJob) bool { return j.ID == "b" }); n != 1 || err != nil {
-		t.Fatalf("removeWhere = %d, %v", n, err)
+	if ids, err := s.removeWhere(func(j MuseJob) bool { return j.ID == "b" }); len(ids) != 1 || err != nil {
+		t.Fatalf("removeWhere = %d, %v", len(ids), err)
 	}
 	if j, ok := s.get("d"); !ok || j.ID != "d" {
 		t.Fatalf("index not rebuilt after removal: %+v, %v", j, ok)
@@ -55,7 +55,7 @@ func TestJournalIndexFollowsAddTrimAndRemove(t *testing.T) {
 
 func TestStepOnlyUpdateIsNotWritten(t *testing.T) {
 	s := newJobStore(filepath.Join(t.TempDir(), "jobs.json"), func() int { return 100 })
-	if err := s.add(MuseJob{ID: "a", Status: MuseJobProcessing}); err != nil {
+	if _, err := s.add(MuseJob{ID: "a", Status: MuseJobProcessing}); err != nil {
 		t.Fatal(err)
 	}
 	stamp := time.Now().Add(-time.Hour)
@@ -105,7 +105,7 @@ func TestCorruptJournalIsReported(t *testing.T) {
 	if len(s.list()) != 0 {
 		t.Fatal("a corrupt journal starts an empty queue")
 	}
-	if err := s.add(MuseJob{ID: "a", Status: MuseJobQueued}); err != nil {
+	if _, err := s.add(MuseJob{ID: "a", Status: MuseJobQueued}); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := s.get("a"); !ok {
