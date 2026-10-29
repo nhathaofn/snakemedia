@@ -26,6 +26,13 @@ func sendSetup(ctx context.Context, page Page, cfg config.MuseConfig, sleep func
 	if text == "" {
 		return "", false, nil
 	}
+	return sendNote(ctx, page, text, time.Duration(cfg.ImageTimeoutMinutes)*time.Minute, cfg, sleep, now)
+}
+
+// sendNote sends text in a new chat of its own and waits up to limit for
+// Muse's text reply. sent reports whether Muse took the message (it opened a
+// chat for it).
+func sendNote(ctx context.Context, page Page, text string, limit time.Duration, cfg config.MuseConfig, sleep func(context.Context, time.Duration) error, now func() time.Time) (reply string, sent bool, err error) {
 	res, err := page.Send(ctx, text, nil)
 	if err != nil {
 		return "", false, fmt.Errorf("không gửi được: %w", err)
@@ -37,7 +44,6 @@ func sendSetup(ctx context.Context, page Page, cfg config.MuseConfig, sleep func
 		}
 		return "", false, fmt.Errorf("Muse không nhận tin nhắn (%s)", reason)
 	}
-	limit := time.Duration(cfg.ImageTimeoutMinutes) * time.Minute
 	deadline := now().Add(limit)
 	for {
 		if status, err := page.Status(ctx, res.SessionID); err == nil && status != sessionRunning {

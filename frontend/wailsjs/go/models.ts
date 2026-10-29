@@ -222,6 +222,7 @@ export namespace config {
 	    usagePauseMinutes: number;
 	    outputDir: string;
 	    setupMessage: string;
+	    cleanupMessage: string;
 	    imageFormat: ImageFormat;
 	
 	    static createFrom(source: any = {}) {
@@ -246,6 +247,7 @@ export namespace config {
 	        this.usagePauseMinutes = source["usagePauseMinutes"];
 	        this.outputDir = source["outputDir"];
 	        this.setupMessage = source["setupMessage"];
+	        this.cleanupMessage = source["cleanupMessage"];
 	        this.imageFormat = source["imageFormat"];
 	    }
 	}
@@ -2556,6 +2558,42 @@ export namespace models {
 		    return a;
 		}
 	}
+	export class Response___SnakeMedia_internal_providers_muse_MuseCleanResult_ {
+	    success: boolean;
+	    data: muse.MuseCleanResult[];
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response___SnakeMedia_internal_providers_muse_MuseCleanResult_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.MuseCleanResult);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Response___SnakeMedia_internal_providers_muse_MuseJob_ {
 	    success: boolean;
 	    data: muse.MuseJob[];
@@ -2846,6 +2884,24 @@ export namespace muse {
 	        this.lock = source["lock"];
 	        this.images = source["images"];
 	        this.createdAt = source["createdAt"];
+	    }
+	}
+	export class MuseCleanResult {
+	    accountId: string;
+	    account: string;
+	    reply?: string;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseCleanResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.accountId = source["accountId"];
+	        this.account = source["account"];
+	        this.reply = source["reply"];
+	        this.error = source["error"];
 	    }
 	}
 	export class MuseRefInfo {

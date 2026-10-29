@@ -53,7 +53,10 @@ type Provider struct {
 	ctx     context.Context
 	stop    context.CancelFunc
 	running map[string]string // job ID -> account ID
-	cancels map[string]context.CancelFunc
+	// cleaning holds the accounts "Dọn đoạn chat phụ" is working on; they
+	// take no job meanwhile (cleanup.go).
+	cleaning map[string]bool
+	cancels  map[string]context.CancelFunc
 	// sendSlots (one per account) lets one send at a time through, gap
 	// included; navs (one per account) guards its tab against navigation.
 	// journalWarning says the job journal could not be read on start and was
@@ -77,6 +80,7 @@ func New(dataDir, outputDir string, cfg *config.Manager, store *media.Store, acc
 		gap:       sendGap,
 		emit:      func(events.Event, any) {},
 		running:   make(map[string]string),
+		cleaning:  make(map[string]bool),
 		cancels:   make(map[string]context.CancelFunc),
 		sendSlots: make(map[string]chan struct{}),
 		navs:      make(map[string]*sync.RWMutex),
@@ -252,7 +256,8 @@ func (p *Provider) pump() {
 	// running, so no ended job is seen here as still to run.
 	jobs := p.jobs.list()
 	started := make(map[string]bool)
-	for _, a := range plan(due(jobs, now), views, p.cfg.Get().Muse, p.running, now) {
+	free := slices.DeleteFunc(slices.Clone(views), func(v MuseAccount) bool { return p.cleaning[v.ID] })
+	for _, a := range plan(due(jobs, now), free, p.cfg.Get().Muse, p.running, now) {
 		ctx, cancel := context.WithCancel(p.ctx)
 		p.running[a.jobID] = a.accountID
 		p.cancels[a.jobID] = cancel

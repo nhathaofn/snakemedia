@@ -751,6 +751,12 @@ func (a *App) RemoveMuseTemplate(id string) models.Response[bool] {
 	return logged("RemoveMuseTemplate", a.muse.RemoveTemplate(id))
 }
 
+// CleanMuseChats sends the cleanup message on every signed-in Muse account,
+// so Muse deletes its other chats; accounts with a job in progress are skipped.
+func (a *App) CleanMuseChats() models.Response[[]muse.MuseCleanResult] {
+	return logged("CleanMuseChats", a.muse.CleanChats(a.ctx))
+}
+
 // RemoveMuseLibraryItems forgets library items; their files stay on disk.
 func (a *App) RemoveMuseLibraryItems(ids []string) models.Response[int] {
 	return logged("RemoveMuseLibraryItems", a.muse.RemoveLibraryItems(ids))

@@ -1,0 +1,17 @@
+.muse-clean-chats {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.muse-clean-results {
+  margin: 0;
+  padding-left: var(--space-8);
+  font-size: var(--font-size-small);
+  white-space: pre-wrap;
+}
+
+.muse-clean-results .is-error {
+  color: var(--danger);
+}
