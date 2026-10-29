@@ -129,11 +129,12 @@ func (s *Provider) reconcileVideoGenerationWithClient(ctx context.Context, clien
 			listed = false
 			logger.Get().Warn("cannot list project to reconcile video job", "job", job.ID, "error", err)
 		} else {
+			workflows := parseWorkflows(listing)
 			for _, clientID := range job.ClientIDs {
 				if known[strings.ToLower(clientID)] {
 					continue
 				}
-				match := mediaForClient(listing, clientID)
+				match := workflows.forClient(clientID)
 				if match.name == "" && match.operation == "" {
 					continue
 				}
@@ -161,7 +162,12 @@ func (s *Provider) reconcileVideoGenerationWithClient(ctx context.Context, clien
 
 func (s *Provider) followGenerationVideos(ctx context.Context, client *chrome.FlowClient, job generationJob, started []pendingVideo, template GeneratedVideoItem) ([]GeneratedVideoItem, error) {
 	final, err := s.waitForVideos(ctx, client, job.ProjectID, started, s.cfg.Get().Flow.VideoPollIntervalMS, s.cfg.Get().Flow.VideoGenerationTimeoutSeconds, func(videos []pendingVideo) error {
-		job.Videos = trackVideos(videos)
+		// A round that changed nothing tracked leaves the saved journal as is.
+		tracked := trackVideos(videos)
+		if slices.Equal(tracked, job.Videos) {
+			return nil
+		}
+		job.Videos = tracked
 		return s.saveGenerationJob(job)
 	})
 	if len(final) > 0 {
@@ -357,12 +363,13 @@ func (s *Provider) waitForVideos(ctx context.Context, client *chrome.FlowClient,
 				listingOK = true
 				// GetProjectContents: field 3 (index 2) lists the project's media.
 				media, _ := parseVideoMedia(payload, 2)
+				workflows := parseWorkflows(payload)
 				for i, v := range videos {
 					if settled(v) {
 						continue
 					}
 					if v.clientID != "" && (v.name == "" || strings.EqualFold(v.name, v.clientID)) {
-						if found := mediaForClient(payload, v.clientID); found.name != "" {
+						if found := workflows.forClient(v.clientID); found.name != "" {
 							videos[i].name = found.name
 							videos[i].operation = found.operation
 						}

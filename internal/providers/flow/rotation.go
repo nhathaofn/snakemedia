@@ -337,6 +337,60 @@ func (s *Provider) recordVideoSpend(acc session.StoredAccount, cost int) {
 	s.rotationMu.Unlock()
 }
 
+// creditRefresh is the refresh state of one account: a query is running, and
+// pending holds the context of one more asked for while it ran.
+type creditRefresh struct {
+	pending context.Context
+}
+
+// coalesceCreditRefresh runs refreshAccountCredits in the background, at most
+// once at a time per account. Requests arriving while it runs fold into one
+// trailing run, so a burst of generations costs two Chrome balance queries
+// instead of one goroutine (and query) each.
+func (s *Provider) coalesceCreditRefresh(ctx context.Context, id string) {
+	ctx = context.WithoutCancel(ctx)
+	s.creditRefreshMu.Lock()
+	if s.creditRefreshes == nil {
+		s.creditRefreshes = make(map[string]*creditRefresh)
+	}
+	if running, ok := s.creditRefreshes[id]; ok {
+		running.pending = ctx
+		s.creditRefreshMu.Unlock()
+		return
+	}
+	state := &creditRefresh{}
+	s.creditRefreshes[id] = state
+	s.creditRefreshMu.Unlock()
+	go func() {
+		done := false
+		defer func() {
+			// A panic still frees the account for the next request.
+			if !done {
+				s.creditRefreshMu.Lock()
+				delete(s.creditRefreshes, id)
+				s.creditRefreshMu.Unlock()
+			}
+		}()
+		defer logger.Recover("cập nhật credit Flow")
+		for {
+			s.refreshAccountCredits(ctx, id)
+			s.creditRefreshMu.Lock()
+			next := state.pending
+			state.pending = nil
+			if next == nil {
+				// Ending under the lock: a request arriving now starts a new run.
+				delete(s.creditRefreshes, id)
+				done = true
+			}
+			s.creditRefreshMu.Unlock()
+			if next == nil {
+				return
+			}
+			ctx = next
+		}
+	}()
+}
+
 func (s *Provider) refreshAccountCredits(ctx context.Context, id string) {
 	if s.accounts == nil || s.cfg == nil {
 		return

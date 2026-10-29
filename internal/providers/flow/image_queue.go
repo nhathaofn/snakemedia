@@ -9,6 +9,7 @@ import (
 	"mime"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -150,9 +151,11 @@ type imageQueue struct {
 	wake       chan struct{}
 
 	// Seams replaced in tests.
-	generate     func(ctx context.Context, req GenerateImageRequest) models.Response[[]GeneratedImageItem]
-	resume       func(ctx context.Context, id string) models.Response[[]GeneratedImageItem]
-	requestPhase func(id string) (phase string, found bool)
+	generate func(ctx context.Context, req GenerateImageRequest) models.Response[[]GeneratedImageItem]
+	resume   func(ctx context.Context, id string) models.Response[[]GeneratedImageItem]
+	// requestPhase reads a request's journal. err is any failure other than
+	// "no journal": the request may have been sent, so it is never fresh.
+	requestPhase func(id string) (phase string, found bool, err error)
 	pendingJobs  func() ([]generationJob, error)
 	saveImage    func(localURL string, t ImageTask) (string, error)
 	now          func() time.Time
@@ -186,15 +189,19 @@ func newImageQueue(s *Provider) *imageQueue {
 				t.SavedFiles = []string{}
 			}
 		},
+		Transient: onlyImageStepChanged,
 	})
 	q.generate = s.GenerateImages
 	q.resume = s.ResumeImageGeneration
-	q.requestPhase = func(id string) (string, bool) {
+	q.requestPhase = func(id string) (string, bool, error) {
 		job, err := s.loadGenerationJob(id)
-		if err != nil {
-			return "", false
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false, nil
 		}
-		return job.Phase, true
+		if err != nil {
+			return "", false, err
+		}
+		return job.Phase, true, nil
 	}
 	q.pendingJobs = func() ([]generationJob, error) { return s.pendingGenerationJobs(generationJobImage) }
 	q.saveImage = func(localURL string, t ImageTask) (string, error) {
@@ -443,8 +450,8 @@ func (q *imageQueue) isFreshSend(t ImageTask) bool {
 	if t.RequestID == "" {
 		return true
 	}
-	_, found := q.requestPhase(t.RequestID)
-	return !found
+	_, found, err := q.requestPhase(t.RequestID)
+	return !found && err == nil
 }
 
 // onlySaving reports a task whose images were made but not all saved.
@@ -467,7 +474,12 @@ func (q *imageQueue) execute(ctx context.Context, t ImageTask) {
 		}
 	}
 	var res models.Response[[]GeneratedImageItem]
-	if _, found := q.requestPhase(t.RequestID); found {
+	_, found, err := q.requestPhase(t.RequestID)
+	if err != nil {
+		q.unknown(t.ID, err)
+		return
+	}
+	if found {
 		res = q.resume(ctx, t.RequestID)
 	} else {
 		req, err := q.request(t)
@@ -509,9 +521,13 @@ func (q *imageQueue) request(t ImageTask) (GenerateImageRequest, error) {
 // settle records Flow's answer. A request Flow may still hold keeps its ID
 // and is checked again later; only a definite answer frees the ID.
 func (q *imageQueue) settle(t ImageTask, res models.Response[[]GeneratedImageItem]) {
-	phase, found := q.requestPhase(t.RequestID)
+	phase, found, phaseErr := q.requestPhase(t.RequestID)
 	open := found && phase != generationComplete && phase != generationRejected
 	if !res.Success {
+		if phaseErr != nil {
+			q.unknown(t.ID, phaseErr)
+			return
+		}
 		if open {
 			q.recheck(t.ID, nil, res.Error)
 			return
@@ -614,6 +630,18 @@ func (q *imageQueue) recheck(id string, items []GeneratedImageItem, message stri
 	}
 }
 
+// unknown settles a task whose request journal cannot be read: the request
+// may have reached Flow, so its ID is kept and nothing is sent again. A
+// quarantined journal will not come back, so the task fails; any other read
+// error is checked again later.
+func (q *imageQueue) unknown(id string, err error) {
+	if errors.Is(err, errJournalQuarantined) {
+		q.fail(id, err.Error(), false)
+		return
+	}
+	q.recheck(id, nil, "Không đọc được nhật ký yêu cầu: "+err.Error())
+}
+
 // fail ends a task. definite means Flow answered (or nothing was sent), so
 // the request ID is freed and a retry sends a new request.
 func (q *imageQueue) fail(id, message string, definite bool) {
@@ -646,7 +674,7 @@ func (q *imageQueue) interrupted(id string) {
 			return
 		}
 		t.Status, t.Step, t.FinishedAt = ImageTaskCancelled, "", q.stamp()
-		if phase, found := q.requestPhase(t.RequestID); !found || phase == generationRejected {
+		if phase, found, err := q.requestPhase(t.RequestID); err == nil && (!found || phase == generationRejected) {
 			t.RequestID = ""
 		}
 	})
@@ -781,13 +809,43 @@ func (q *imageQueue) selected(ids []string) []ImageTask {
 	if len(ids) == 0 {
 		return all
 	}
+	want := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
 	out := make([]ImageTask, 0, len(ids))
 	for _, t := range all {
-		if slices.Contains(ids, t.ID) {
+		if want[t.ID] {
 			out = append(out, t)
 		}
 	}
 	return out
+}
+
+// updateSelected applies change to the tasks with ids (every task when ids is
+// empty, each once, in queue order) in one journal write and publishes each task change took. It returns
+// how many changed; a failed write publishes none.
+func (q *imageQueue) updateSelected(ids []string, change func(*ImageTask) bool) (int, error) {
+	tasks := q.selected(ids)
+	ordered := make([]string, len(tasks))
+	for i, t := range tasks {
+		ordered[i] = t.ID
+	}
+	updated, err := q.journal.UpdateMany(ordered, change)
+	if err != nil {
+		return 0, err
+	}
+	for _, t := range updated {
+		q.publish(t)
+	}
+	return len(updated), nil
+}
+
+// onlyImageStepChanged reports whether a and b differ in nothing but Step:
+// progress text stays in memory and reaches disk with the next real change.
+func onlyImageStepChanged(a, b ImageTask) bool {
+	a.Step, b.Step = "", ""
+	return reflect.DeepEqual(a, b)
 }
 
 // RunImageTasks releases held queued tasks (all when ids is empty).
@@ -803,18 +861,15 @@ func (s *Provider) HoldImageTasks(ids []string) models.Response[int] {
 
 func (s *Provider) setHeld(ids []string, held bool) models.Response[int] {
 	q := s.queue
-	n := 0
-	for _, t := range q.selected(ids) {
+	updated, _ := q.updateSelected(ids, func(t *ImageTask) bool {
 		if t.Status != ImageTaskQueued || t.Held == held {
-			continue
+			return false
 		}
-		if updated, err := q.journal.Update(t.ID, func(t *ImageTask) { t.Held = held }); err == nil {
-			q.publish(updated)
-			n++
-		}
-	}
+		t.Held = held
+		return true
+	})
 	q.trigger()
-	return models.SuccessResponse(n)
+	return models.SuccessResponse(updated)
 }
 
 // CancelImageTask stops a queued or running task. A request Flow may already
@@ -885,23 +940,17 @@ func (s *Provider) EditImageTask(id, prompt string) models.Response[ImageTask] {
 // Retrying never sends a request Flow may already have accepted.
 func (s *Provider) RetryImageTasks(ids []string) models.Response[int] {
 	q := s.queue
-	n := 0
-	for _, t := range q.selected(ids) {
+	n, _ := q.updateSelected(ids, func(t *ImageTask) bool {
 		if t.Status != ImageTaskFailed && t.Status != ImageTaskCancelled {
-			continue
+			return false
 		}
-		updated, err := q.journal.Update(t.ID, func(t *ImageTask) {
-			t.Status, t.Error, t.Step, t.NextCheckAt, t.FinishedAt = ImageTaskQueued, "", "", "", ""
-			t.Rechecks, t.Held = 0, false
-			if t.RequestID == "" && len(unsaved(*t)) == 0 {
-				t.Results, t.SavedFiles, t.SavedPaths = []GeneratedImageItem{}, []string{}, nil
-			}
-		})
-		if err == nil {
-			q.publish(updated)
-			n++
+		t.Status, t.Error, t.Step, t.NextCheckAt, t.FinishedAt = ImageTaskQueued, "", "", "", ""
+		t.Rechecks, t.Held = 0, false
+		if t.RequestID == "" && len(unsaved(*t)) == 0 {
+			t.Results, t.SavedFiles, t.SavedPaths = []GeneratedImageItem{}, []string{}, nil
 		}
-	}
+		return true
+	})
 	q.trigger()
 	return models.SuccessResponse(n)
 }
@@ -947,23 +996,17 @@ func (s *Provider) AddImageTaskReferences(ids []string, refs []ImageTaskReferenc
 	if err != nil {
 		return queueFail[int](err, models.CodeInvalidArgument)
 	}
-	n := 0
-	for _, t := range q.selected(ids) {
+	n, _ := q.updateSelected(ids, func(t *ImageTask) bool {
 		if t.Status == ImageTaskRunning || t.Status == ImageTaskSucceeded || t.RequestID != "" {
-			continue
+			return false
 		}
-		updated, err := q.journal.Update(t.ID, func(t *ImageTask) {
-			for _, ref := range checked {
-				if !slices.ContainsFunc(t.References, func(r ImageTaskReference) bool { return r.LocalURL == ref.LocalURL }) {
-					t.References = append(t.References, ref)
-				}
+		for _, ref := range checked {
+			if !slices.ContainsFunc(t.References, func(r ImageTaskReference) bool { return r.LocalURL == ref.LocalURL }) {
+				t.References = append(t.References, ref)
 			}
-		})
-		if err == nil {
-			q.publish(updated)
-			n++
 		}
-	}
+		return true
+	})
 	return models.SuccessResponse(n)
 }
 
