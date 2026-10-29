@@ -335,6 +335,8 @@ func (p *Provider) submitJobs(req MuseJobRequest, runKey string) models.Response
 		return base.Add(time.Duration(len(jobs)) * time.Millisecond).Format("2006-01-02T15:04:05.000Z07:00")
 	}
 	add := func(job MuseJob) error {
+		// A job without references goes to the UI as [] (never null).
+		normalizeJob(&job)
 		if err := p.jobs.add(job); err != nil {
 			return err
 		}

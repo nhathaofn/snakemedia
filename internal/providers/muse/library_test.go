@@ -2,9 +2,11 @@ package muse
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -179,4 +181,23 @@ func resolvedTempDir(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+// A job queued without references reaches the UI as [] both in the reply and
+// in the list, never null (the queue row slices it).
+func TestSubmitJobsWithoutReferencesSendsEmptyList(t *testing.T) {
+	p := testProvider(t, &fakePage{loggedIn: true})
+	dir := resolvedTempDir(t)
+	p.media.AllowRoot(dir)
+	res := p.SubmitJobs(MuseJobRequest{Kind: MuseJobImage, Mode: MuseJobBatch, Prompts: []string{"a"}, OutputDir: dir, Held: true})
+	if !res.Success {
+		t.Fatalf("submit: %s", res.Error)
+	}
+	listed := p.ListJobs()
+	for _, jobs := range [][]MuseJob{res.Data, listed.Data} {
+		raw, err := json.Marshal(jobs)
+		if err != nil || strings.Contains(string(raw), `"references":null`) {
+			t.Fatalf("references sent as null: %s %v", raw, err)
+		}
+	}
 }
