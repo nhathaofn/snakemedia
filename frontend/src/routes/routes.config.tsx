@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import { Navigate, useNavigate, useRouteError } from 'react-router-dom';
 import type { RouteObject } from 'react-router-dom';
 import { AppLayout } from '../components/layout';
@@ -46,7 +47,8 @@ function toRouteObject(section: AppSection): RouteObject {
       ...section.features.map((f) => ({
         path: f.path,
         caseSensitive: true,
-        element: f.element,
+        // Pages load in their own chunk (lazyPage); the shell stays while one arrives.
+        element: <Suspense fallback={null}>{f.element}</Suspense>,
         errorElement: <RouteErrorFallback />,
       })),
     ],

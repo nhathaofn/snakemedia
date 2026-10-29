@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { AccountWarning } from '../../../components/accounts';
 import { AccountProvider } from '../../../types';
 import { useRotationCount } from './hooks';
+import './FlowStudio.css';
 
 /**
  * Tools panel of one mode. Fields stack from the top; the account rotation status

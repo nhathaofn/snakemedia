@@ -1,7 +1,9 @@
 import { House, Shield, User } from 'lucide-react';
 import type { AppSection } from '../../types';
-import { AccountsPage } from './accounts';
-import { ProxyPage } from './proxy/ProxyPage';
+import { lazyPage } from '../../routes/lazyPage';
+
+const AccountsPage = lazyPage(() => import('./accounts').then((m) => m.AccountsPage));
+const ProxyPage = lazyPage(() => import('./proxy/ProxyPage').then((m) => m.ProxyPage));
 
 /** Home tab: every provider's accounts and the shared proxy list. */
 export const homeSection = {

@@ -1,10 +1,14 @@
 import { Clapperboard, Image, Scissors, Settings, Workflow } from 'lucide-react';
 import { FlowPreviousRunReport } from './shared/PreviousRunReport';
 import type { AppSection } from '../../types';
-import { FlowEditPage } from './edit/FlowEditPage';
-import { FlowImagePage } from './image/FlowImagePage';
-import { FlowSettingsPage } from './settings/FlowSettingsPage';
-import { FlowVideoPage } from './video/FlowVideoPage';
+import { lazyPage } from '../../routes/lazyPage';
+
+const FlowEditPage = lazyPage(() => import('./edit/FlowEditPage').then((m) => m.FlowEditPage));
+const FlowImagePage = lazyPage(() => import('./image/FlowImagePage').then((m) => m.FlowImagePage));
+const FlowSettingsPage = lazyPage(() =>
+  import('./settings/FlowSettingsPage').then((m) => m.FlowSettingsPage),
+);
+const FlowVideoPage = lazyPage(() => import('./video/FlowVideoPage').then((m) => m.FlowVideoPage));
 
 /** Flow tab: Google Flow workspace tools. */
 export const flowSection = {

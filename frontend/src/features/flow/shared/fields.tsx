@@ -1,5 +1,6 @@
 import { AlertCircle, ChevronDown, RefreshCw } from 'lucide-react';
 import { Icon } from '../../../components/ui';
+import './FlowStudio.css';
 
 export interface SelectOption<T extends string | number> {
   value: T;
