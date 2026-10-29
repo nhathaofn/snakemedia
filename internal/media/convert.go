@@ -45,10 +45,13 @@ func (s *Store) saveFormat(src string) string {
 	}
 	base := filepath.Base(src)
 	s.mu.Lock()
+	// The longest matching prefix wins, so overlapping prefixes pick the same
+	// format on every save.
 	var format func() string
+	best := -1
 	for prefix, fn := range s.formats {
-		if strings.HasPrefix(base, prefix) {
-			format = fn
+		if strings.HasPrefix(base, prefix) && len(prefix) > best {
+			format, best = fn, len(prefix)
 		}
 	}
 	s.mu.Unlock()
@@ -101,6 +104,15 @@ func decodeImage(path string) (image.Image, error) {
 
 // opaque lays an image on white, since JPG has no transparency.
 func opaque(img image.Image) image.Image {
+	// An RGBA or NRGBA image with no transparent pixel already encodes to the
+	// same JPG; other types (YCbCr, Gray) are kept on the RGBA path so the
+	// written file does not change.
+	switch img.(type) {
+	case *image.RGBA, *image.NRGBA:
+		if o, ok := img.(interface{ Opaque() bool }); ok && o.Opaque() {
+			return img
+		}
+	}
 	out := image.NewRGBA(img.Bounds())
 	draw.Draw(out, out.Bounds(), image.White, image.Point{}, draw.Src)
 	draw.Draw(out, out.Bounds(), img, img.Bounds().Min, draw.Over)

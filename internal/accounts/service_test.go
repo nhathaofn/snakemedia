@@ -3,6 +3,7 @@ package accounts
 import (
 	"context"
 	"errors"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -435,5 +436,21 @@ func TestSignInRunsFollowUpOnlyInTheWindow(t *testing.T) {
 	}
 	if res := s.Check(context.Background(), "a"); !res.Success || site.followed != 1 || res.Data.Message != "" {
 		t.Fatalf("check ran the follow-up: %d %+v", site.followed, res)
+	}
+}
+
+// Routes are compared by what they reach, not by pointer.
+func TestSameRoute(t *testing.T) {
+	a := proxy.Route{Key: "1.2.3.4:80", URL: &url.URL{Scheme: "http", Host: "127.0.0.1:5000"}}
+	b := proxy.Route{Key: "1.2.3.4:80", URL: &url.URL{Scheme: "http", Host: "127.0.0.1:5000"}}
+	if !sameRoute(a, b) {
+		t.Fatal("equal routes differ")
+	}
+	if !sameRoute(proxy.Route{Key: proxy.DirectRoute}, proxy.Route{Key: proxy.DirectRoute}) {
+		t.Fatal("direct routes differ")
+	}
+	b.URL = &url.URL{Scheme: "http", Host: "127.0.0.1:5001"}
+	if sameRoute(a, b) || sameRoute(a, proxy.Route{Key: a.Key}) || sameRoute(a, proxy.Route{Key: "x", URL: a.URL}) {
+		t.Fatal("different routes match")
 	}
 }

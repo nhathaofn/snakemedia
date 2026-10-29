@@ -236,15 +236,22 @@ func (s *Service) notifyNow() {
 }
 
 func (s *Service) public(provider Provider) ([]Account, error) {
-	records, err := s.Records(provider)
+	all, err := s.store.list()
 	if err != nil {
 		return nil, err
 	}
+	records := make([]Record, 0, len(all))
+	for _, rec := range all {
+		if provider == "" || rec.Provider == provider {
+			records = append(records, rec)
+		}
+	}
+	routeErrs := s.routeErrors(records, all)
 	out := make([]Account, len(records))
 	for i, rec := range records {
 		out[i] = rec.Account
 		out[i].NoRoute = ""
-		if err := s.RouteError(rec); err != nil {
+		if err := routeErrs[i]; err != nil {
 			out[i].NoRoute = err.Error()
 		}
 		if out[i].Usage == nil {
@@ -381,7 +388,7 @@ func (s *Service) open(ctx context.Context, rec Record, site Site, visible bool)
 	previous, had := s.routes[rec.ID]
 	s.routes[rec.ID] = route
 	s.mu.Unlock()
-	if had && previous.URL != route.URL {
+	if had && !sameRoute(previous, route) {
 		s.pruneBridges()
 	}
 	policy := s.cfg.Get().Accounts
@@ -429,6 +436,45 @@ func (s *Service) RouteError(rec Record) error {
 		others = append(others, assignment(other))
 	}
 	return s.proxies.Usable(assignment(rec), others)
+}
+
+// routeErrors is RouteError for each of records, with all the saved records
+// read once by the caller and the proxy list and dead marks read once here.
+func (s *Service) routeErrors(records, all []Record) []error {
+	errs := make([]error, len(records))
+	var check []int
+	for i, rec := range records {
+		s.mu.Lock()
+		_, ok := s.routes[rec.ID]
+		s.mu.Unlock()
+		if !ok || s.pool.Running(rec.ProfileDir) == nil {
+			check = append(check, i)
+		}
+	}
+	if len(check) == 0 {
+		return errs
+	}
+	others := make([]proxy.Assignment, 0, len(all))
+	for _, other := range all {
+		others = append(others, assignment(other))
+	}
+	wanted := make([]proxy.Assignment, len(check))
+	for j, i := range check {
+		wanted[j] = assignment(records[i])
+	}
+	for j, err := range s.proxies.UsableEach(wanted, others) {
+		errs[check[j]] = err
+	}
+	return errs
+}
+
+// sameRoute reports whether two routes reach the network the same way: same
+// proxy key and same local bridge address.
+func sameRoute(a, b proxy.Route) bool {
+	if a.Key != b.Key || (a.URL == nil) != (b.URL == nil) {
+		return false
+	}
+	return a.URL == nil || a.URL.String() == b.URL.String()
 }
 
 // route returns the proxy route the account's browser must use: the one it

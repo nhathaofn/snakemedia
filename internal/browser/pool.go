@@ -45,7 +45,7 @@ type Pool struct {
 	browsers map[string]*Browser
 	routes   map[string]string
 	inUse    map[string]int
-	launches map[string]*sync.Mutex
+	launches map[string]*launchLock
 	// lastUsed is when work last got or held each browser; idle headless
 	// browsers are closed after AccountConfig.IdleBrowserMinutes.
 	lastUsed map[string]time.Time
@@ -64,7 +64,7 @@ func NewPool(cfg *config.Manager, root string) *Pool {
 	return &Pool{
 		cfg: cfg, root: root,
 		browsers: make(map[string]*Browser), routes: make(map[string]string),
-		inUse: make(map[string]int), launches: make(map[string]*sync.Mutex),
+		inUse: make(map[string]int), launches: make(map[string]*launchLock),
 		lastUsed: make(map[string]time.Time), now: time.Now,
 		start: StartBrowser, findChrome: FindChrome,
 		validate: func(ctx context.Context, b *Browser, p config.AccountConfig) error { return b.Validate(ctx, p) },
@@ -75,16 +75,34 @@ func NewPool(cfg *config.Manager, root string) *Pool {
 // NewProfile returns a fresh profile directory under the root. Chrome creates it.
 func (p *Pool) NewProfile() string { return filepath.Join(p.root, uuid.NewString()) }
 
+// launchLock serialises launches and removal of one profile. refs counts the
+// callers holding or waiting for it, so a removed profile's entry is dropped
+// only once nobody can still be using it.
+type launchLock struct {
+	mu   sync.Mutex
+	refs int
+	drop bool // the profile was removed: forget the entry when unused
+}
+
 func (p *Pool) lockLaunch(path string) func() {
 	p.mu.Lock()
-	m := p.launches[path]
-	if m == nil {
-		m = &sync.Mutex{}
-		p.launches[path] = m
+	l := p.launches[path]
+	if l == nil {
+		l = &launchLock{}
+		p.launches[path] = l
 	}
+	l.refs++
 	p.mu.Unlock()
-	m.Lock()
-	return m.Unlock
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		l.refs--
+		if l.refs == 0 && l.drop && p.browsers[path] == nil && p.launches[path] == l {
+			delete(p.launches, path)
+		}
+	}
 }
 
 // Get returns the profile's running browser when it matches want, otherwise
@@ -368,6 +386,11 @@ func (p *Pool) RemoveIfIdle(profileDir string) error {
 	if err := os.RemoveAll(path); err != nil {
 		return fmt.Errorf("Không xóa được thư mục profile: %w", err)
 	}
+	p.mu.Lock()
+	if l := p.launches[path]; l != nil {
+		l.drop = true
+	}
+	p.mu.Unlock()
 	return nil
 }
 

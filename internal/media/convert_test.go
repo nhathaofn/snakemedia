@@ -3,6 +3,7 @@ package media
 import (
 	"encoding/base64"
 	"image"
+	"image/color"
 	"os"
 	"path/filepath"
 	"testing"
@@ -70,5 +71,42 @@ func TestSaveKeepsUndecodableImages(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(saved); string(got) != "not an image" {
 		t.Fatalf("content %q", got)
+	}
+}
+
+// Overlapping prefixes always pick the longest one.
+func TestSaveFormatPicksLongestPrefix(t *testing.T) {
+	store := NewStore(t.TempDir())
+	store.ConvertImages("muse-", func() string { return "png" })
+	store.ConvertImages("muse-video-", func() string { return "jpg" })
+	store.ConvertImages("m", func() string { return "original" })
+	for range 20 {
+		if got := store.saveFormat("muse-video-a.webp"); got != ".jpg" {
+			t.Fatalf("saveFormat = %q", got)
+		}
+		if got := store.saveFormat("muse-a.webp"); got != ".png" {
+			t.Fatalf("saveFormat = %q", got)
+		}
+	}
+}
+
+// An opaque RGBA image is used as it is; a transparent one is laid on white.
+func TestOpaqueSkipsCopyOnlyWhenOpaque(t *testing.T) {
+	img := image.NewNRGBA(image.Rect(0, 0, 2, 2))
+	for x := range 2 {
+		for y := range 2 {
+			img.Set(x, y, color.NRGBA{R: 10, G: 20, B: 30, A: 255})
+		}
+	}
+	if opaque(img) != image.Image(img) {
+		t.Fatal("opaque image copied")
+	}
+	img.Set(0, 0, color.NRGBA{A: 0})
+	out := opaque(img)
+	if out == image.Image(img) {
+		t.Fatal("transparent image not flattened")
+	}
+	if r, g, b, _ := out.At(0, 0).RGBA(); r != 0xffff || g != 0xffff || b != 0xffff {
+		t.Fatal("transparent pixel not white")
 	}
 }

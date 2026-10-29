@@ -453,3 +453,28 @@ func TestCheckAllMarksDeadAndAlive(t *testing.T) {
 		t.Fatal("a failing proxy is not marked dead")
 	}
 }
+
+// UsableEach answers exactly what Usable answers for each account.
+func TestUsableEachMatchesUsable(t *testing.T) {
+	m := NewManager(filepath.Join(t.TempDir(), "proxies.dat"))
+	if err := m.Save("1.2.3.4:8080\n2.3.4.5:8080"); err != nil {
+		t.Fatal(err)
+	}
+	m.MarkDead("1.2.3.4:8080")
+	as := []Assignment{
+		{Account: "a", Name: "A"},
+		{Account: "b", Name: "B", Proxy: None},
+		{Account: "c", Name: "C", Proxy: "bad line ::"},
+		{Account: "d", Name: "D", Auto: "1.2.3.4:8080", Keep: true},
+	}
+	got := m.UsableEach(as, as)
+	for i, a := range as {
+		want := m.Usable(a, as)
+		if (got[i] == nil) != (want == nil) || (want != nil && got[i].Error() != want.Error()) {
+			t.Fatalf("%s: UsableEach %v, Usable %v", a.Account, got[i], want)
+		}
+	}
+	if len(m.UsableEach(nil, as)) != 0 {
+		t.Fatal("no accounts, no answers")
+	}
+}

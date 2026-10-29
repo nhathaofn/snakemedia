@@ -1,6 +1,8 @@
 package logger
 
 import (
+	"bytes"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -113,5 +115,22 @@ func TestLogRotatesWhileRunning(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "app.log.3")); err == nil {
 		t.Fatal("more backups kept than configured")
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
+
+// A failing log file does not stop the stdout copy.
+func TestFanOutKeepsWritingAfterAFailure(t *testing.T) {
+	var out bytes.Buffer
+	n, err := fanOut{failingWriter{}, &out}.Write([]byte("line"))
+	if err == nil || n != 0 || out.String() != "line" {
+		t.Fatalf("n=%d err=%v out=%q", n, err, out.String())
+	}
+	var a, b bytes.Buffer
+	if n, err := (fanOut{&a, &b}).Write([]byte("ok")); err != nil || n != 2 || a.String() != "ok" || b.String() != "ok" {
+		t.Fatalf("n=%d err=%v", n, err)
 	}
 }
