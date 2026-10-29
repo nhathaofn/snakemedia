@@ -197,7 +197,7 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
   };
 
   // The backend reports bulk changes itself (MuseJobUpdated per job, or
-  // MuseJobsChanged), so no reload here.
+  // MuseJobsRemoved), so no reload here.
   const bulk = (run: () => Promise<number>, done: (n: number) => string) =>
     act(async () => {
       const n = await run();
@@ -370,7 +370,7 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
           {preview.job.kind === MuseJobKind.Video ? (
             <video src={preview.url} controls autoPlay />
           ) : (
-            <img src={preview.url} alt={preview.job.prompt} />
+            <img src={preview.url} alt={preview.job.prompt} decoding="async" />
           )}
         </Modal>
       )}

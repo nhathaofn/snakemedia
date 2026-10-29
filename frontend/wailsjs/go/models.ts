@@ -623,9 +623,10 @@ export namespace events {
 	    AppReady = "app:ready",
 	    ConfigUpdated = "config:updated",
 	    FlowImageTaskUpdated = "flow:image-task-updated",
-	    FlowImageTasksChanged = "flow:image-tasks-changed",
+	    FlowImageTasksAdded = "flow:image-tasks-added",
+	    FlowImageTasksRemoved = "flow:image-tasks-removed",
 	    MuseJobUpdated = "muse:job-updated",
-	    MuseJobsChanged = "muse:jobs-changed",
+	    MuseJobsRemoved = "muse:jobs-removed",
 	    UpdateAvailable = "update:available",
 	    UpdateProgress = "update:progress",
 	}

@@ -18,14 +18,16 @@ const (
 	EventConfigUpdated Event = "config:updated"
 	// EventMuseJobUpdated carries one muse.MuseJob whenever its state changes.
 	EventMuseJobUpdated Event = "muse:job-updated"
-	// EventMuseJobsChanged has no payload: several jobs changed at once (bulk
-	// removal), so listeners reload the job list.
-	EventMuseJobsChanged Event = "muse:jobs-changed"
+	// EventMuseJobsRemoved carries the []string IDs of jobs removed at once
+	// (bulk removal or trim), so listeners drop them without a reload.
+	EventMuseJobsRemoved Event = "muse:jobs-removed"
 	// EventFlowImageTaskUpdated carries one flow.ImageTask whenever its state changes.
 	EventFlowImageTaskUpdated Event = "flow:image-task-updated"
-	// EventFlowImageTasksChanged has no payload: tasks were added or removed,
-	// so listeners reload the image queue.
-	EventFlowImageTasksChanged Event = "flow:image-tasks-changed"
+	// EventFlowImageTasksAdded carries the []flow.ImageTask added at once.
+	EventFlowImageTasksAdded Event = "flow:image-tasks-added"
+	// EventFlowImageTasksRemoved carries the []string IDs of tasks removed or
+	// trimmed at once, so listeners drop them without reloading the queue.
+	EventFlowImageTasksRemoved Event = "flow:image-tasks-removed"
 	// EventAccountsUpdated carries the full []accounts.Account list.
 	EventAccountsUpdated Event = "accounts:updated"
 	// EventUpdateAvailable carries the updater.Release a startup check found.
@@ -42,9 +44,10 @@ var AllEvents = []struct {
 	{EventAppReady, "AppReady"},
 	{EventConfigUpdated, "ConfigUpdated"},
 	{EventMuseJobUpdated, "MuseJobUpdated"},
-	{EventMuseJobsChanged, "MuseJobsChanged"},
+	{EventMuseJobsRemoved, "MuseJobsRemoved"},
 	{EventFlowImageTaskUpdated, "FlowImageTaskUpdated"},
-	{EventFlowImageTasksChanged, "FlowImageTasksChanged"},
+	{EventFlowImageTasksAdded, "FlowImageTasksAdded"},
+	{EventFlowImageTasksRemoved, "FlowImageTasksRemoved"},
 	{EventAccountsUpdated, "AccountsUpdated"},
 	{EventUpdateAvailable, "UpdateAvailable"},
 	{EventUpdateProgress, "UpdateProgress"},

@@ -242,7 +242,9 @@ func (s *jobStore) get(id string) (MuseJob, bool) { return s.journal.Get(id) }
 // one lock.
 func (s *jobStore) snapshot(ids []string) map[string]MuseJob { return s.journal.Snapshot(ids) }
 
-func (s *jobStore) add(job MuseJob) error { return s.journal.Add(job) }
+// add appends jobs in one write and returns the IDs of finished jobs trimmed
+// to make room.
+func (s *jobStore) add(jobs ...MuseJob) ([]string, error) { return s.journal.AddTrimming(jobs...) }
 
 // update applies change to a job and persists the journal. A change of the
 // Step text alone (progress shown while a job runs) stays in memory: it is
@@ -261,9 +263,9 @@ func onlyStepChanged(a, b MuseJob) bool {
 	return reflect.DeepEqual(a, b)
 }
 
-// removeWhere deletes every job drop selects and returns how many went.
-func (s *jobStore) removeWhere(drop func(MuseJob) bool) (int, error) {
-	return s.journal.RemoveWhere(drop)
+// removeWhere deletes every job drop selects and returns their IDs.
+func (s *jobStore) removeWhere(drop func(MuseJob) bool) ([]string, error) {
+	return s.journal.RemoveWhereIDs(drop)
 }
 
 func (s *jobStore) remove(id string) error {

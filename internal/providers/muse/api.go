@@ -334,15 +334,14 @@ func (p *Provider) submitJobs(req MuseJobRequest, runKey string) models.Response
 	stamp := func() string {
 		return base.Add(time.Duration(len(jobs)) * time.Millisecond).Format("2006-01-02T15:04:05.000Z07:00")
 	}
-	add := func(job MuseJob) error {
+	// New jobs are written together once the batch is built: one journal
+	// write for the whole batch, and none of it if that write fails.
+	var fresh []MuseJob
+	add := func(job MuseJob) {
 		// A job without references goes to the UI as [] (never null).
 		normalizeJob(&job)
-		if err := p.jobs.add(job); err != nil {
-			return err
-		}
-		p.emit(events.EventMuseJobUpdated, job)
+		fresh = append(fresh, job)
 		jobs = append(jobs, job)
-		return nil
 	}
 	label := strings.TrimSpace(req.Label)
 	for pi, prompt := range prompts {
@@ -367,17 +366,25 @@ func (p *Provider) submitJobs(req MuseJobRequest, runKey string) models.Response
 			if board != nil {
 				boardJob := storyboardJob(job, board.Frames)
 				boardJob.CreatedAt = stamp()
-				if err := add(boardJob); err != nil {
-					return fail[[]MuseJob](err, models.CodeInternal)
-				}
+				add(boardJob)
 				job.After, job.BoardFrames, job.Review = boardJob.ID, board.Frames, board.Review
 				job.Held = req.Held || board.Review
 				job.Step = "Chờ storyboard"
 			}
 			job.CreatedAt = stamp()
-			if err := add(job); err != nil {
-				return fail[[]MuseJob](err, models.CodeInternal)
-			}
+			add(job)
+		}
+	}
+	if len(fresh) > 0 {
+		trimmed, err := p.jobs.add(fresh...)
+		if err != nil {
+			return fail[[]MuseJob](err, models.CodeInternal)
+		}
+		if len(trimmed) > 0 {
+			p.emit(events.EventMuseJobsRemoved, trimmed)
+		}
+		for _, job := range fresh {
+			p.emit(events.EventMuseJobUpdated, job)
 		}
 	}
 	p.trigger()
@@ -562,7 +569,7 @@ func (p *Provider) RetryFailed(kind MuseJobKind, mode MuseJobMode) models.Respon
 // ClearFinished deletes the succeeded jobs of kind and mode (all when empty) from the
 // journal. Their files stay in the media and output folders.
 func (p *Provider) ClearFinished(kind MuseJobKind, mode MuseJobMode) models.Response[int] {
-	n, err := p.jobs.removeWhere(func(j MuseJob) bool {
+	removed, err := p.jobs.removeWhere(func(j MuseJob) bool {
 		return j.Status == MuseJobSucceeded && inScope(j, kind, mode)
 	})
 	if err != nil {
@@ -571,8 +578,8 @@ func (p *Provider) ClearFinished(kind MuseJobKind, mode MuseJobMode) models.Resp
 	p.sweepReferences()
 	p.sweepAssetImages()
 	p.releaseWaiting()
-	p.emit(events.EventMuseJobsChanged, nil)
-	return models.SuccessResponse(n)
+	p.emit(events.EventMuseJobsRemoved, removed)
+	return models.SuccessResponse(len(removed))
 }
 
 // RemoveJobs deletes the specified jobs that are not actively processing.
@@ -581,7 +588,7 @@ func (p *Provider) RemoveJobs(ids []string) models.Response[int] {
 	for _, id := range ids {
 		idSet[id] = true
 	}
-	n, err := p.jobs.removeWhere(func(j MuseJob) bool {
+	removed, err := p.jobs.removeWhere(func(j MuseJob) bool {
 		return idSet[j.ID] && j.Status != MuseJobProcessing
 	})
 	if err != nil {
@@ -590,8 +597,8 @@ func (p *Provider) RemoveJobs(ids []string) models.Response[int] {
 	p.sweepReferences()
 	p.sweepAssetImages()
 	p.releaseWaiting()
-	p.emit(events.EventMuseJobsChanged, nil)
-	return models.SuccessResponse(n)
+	p.emit(events.EventMuseJobsRemoved, removed)
+	return models.SuccessResponse(len(removed))
 }
 
 // EditAndRetry updates the prompt of an unstarted or ended job and queues it.

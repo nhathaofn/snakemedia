@@ -20,7 +20,7 @@ func TestUpdateOverCapKeepsUnfinishedJobs(t *testing.T) {
 		if id == "done1" {
 			status = MuseJobSucceeded
 		}
-		if err := s.add(MuseJob{ID: id, Status: status}); err != nil {
+		if _, err := s.add(MuseJob{ID: id, Status: status}); err != nil {
 			t.Fatal(err)
 		}
 	}

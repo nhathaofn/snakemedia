@@ -63,7 +63,7 @@ func TestSweepReferencesKeepsUsedAndYoungFiles(t *testing.T) {
 	write(referencePrefix+"old.png", old)
 	write("muse-job-result.png", old)    // a result, not a reference
 	write("flow-ref-something.png", old) // another provider's file
-	if err := p.jobs.add(MuseJob{ID: "j1", Kind: MuseJobImage, Status: MuseJobFailed, Prompt: "x",
+	if _, err := p.jobs.add(MuseJob{ID: "j1", Kind: MuseJobImage, Status: MuseJobFailed, Prompt: "x",
 		References: []string{media.Route + referencePrefix + "used.png"}}); err != nil {
 		t.Fatal(err)
 	}

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { useWailsEvent } from '../../../hooks';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { onNextFrame, useWailsEvent } from '../../../hooks';
 import { api, unwrapList } from '../../../services';
 import { AppEvent, MuseJobStatus } from '../../../types';
 import type { MuseJob, MuseLibraryItem } from '../../../types';
@@ -33,8 +33,15 @@ export function useMuseLibrary() {
     void apply(fetchLibrary());
   }, [apply]);
 
+  // Jobs finishing in a burst share one reload.
+  const reloadQueued = useRef(false);
   useWailsEvent<MuseJob | null>(AppEvent.MuseJobUpdated, (job) => {
-    if (job?.status === MuseJobStatus.Succeeded) void reload();
+    if (job?.status !== MuseJobStatus.Succeeded || reloadQueued.current) return;
+    reloadQueued.current = true;
+    onNextFrame(() => {
+      reloadQueued.current = false;
+      void reload();
+    });
   });
 
   return { items, loading, error, reload };

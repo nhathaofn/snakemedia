@@ -72,6 +72,10 @@ interface QueueState {
   /** Loads the queue; calls made while one is running share it. */
   load: () => Promise<void>;
   setTask: (task: FlowImageTask | null) => void;
+  /** Applies tasks added at once (FlowImageTasksAdded). */
+  addTasks: (tasks: readonly FlowImageTask[] | null) => void;
+  /** Drops tasks removed or trimmed at once (FlowImageTasksRemoved). */
+  removeTasks: (ids: readonly string[] | null) => void;
   dismissWarning: () => void;
 }
 
@@ -108,6 +112,17 @@ export const useImageQueueStore = create<QueueState>((set) => ({
     if (!task?.id) return;
     if (reload) touched.set(task.id, task);
     set((state) => ({ tasks: upsertTask(state.tasks, task) }));
+  },
+  addTasks: (added) => {
+    if (!added?.length) return;
+    if (reload) added.forEach((task) => touched.set(task.id, task));
+    set((state) => ({ tasks: added.reduce(upsertTask, state.tasks) }));
+  },
+  removeTasks: (ids) => {
+    if (!ids?.length) return;
+    const gone = new Set(ids);
+    if (reload) gone.forEach((id) => touched.set(id, null));
+    set((state) => ({ tasks: state.tasks.filter((task) => !gone.has(task.id)) }));
   },
   dismissWarning: () => set({ warning: '' }),
 }));

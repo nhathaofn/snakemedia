@@ -664,11 +664,18 @@ func (q *imageQueue) publish(t ImageTask) {
 	emit(events.EventFlowImageTaskUpdated, t)
 }
 
-func (q *imageQueue) changed() {
+// changed reports tasks added and removed at once: listeners apply them to
+// their copy instead of reloading the whole queue.
+func (q *imageQueue) changed(added []ImageTask, removed []string) {
 	q.mu.Lock()
 	emit := q.emit
 	q.mu.Unlock()
-	emit(events.EventFlowImageTasksChanged, nil)
+	if len(removed) > 0 {
+		emit(events.EventFlowImageTasksRemoved, removed)
+	}
+	if len(added) > 0 {
+		emit(events.EventFlowImageTasksAdded, added)
+	}
 	q.trigger()
 }
 
@@ -726,10 +733,11 @@ func (s *Provider) SubmitImageTasks(req ImageTaskRequest) models.Response[[]Imag
 			Status: ImageTaskQueued, Results: []GeneratedImageItem{}, SavedFiles: []string{}, CreatedAt: now,
 		}
 	}
-	if err := q.journal.Add(tasks...); err != nil {
+	trimmed, err := q.journal.AddTrimming(tasks...)
+	if err != nil {
 		return queueFail[[]ImageTask](err, models.CodeInternal)
 	}
-	q.changed()
+	q.changed(tasks, trimmed)
 	return models.SuccessResponse(tasks)
 }
 
@@ -908,26 +916,26 @@ func (s *Provider) RemoveImageTasks(ids []string) models.Response[int] {
 		running[id] = true
 	}
 	q.mu.Unlock()
-	n, err := q.journal.RemoveWhere(func(t ImageTask) bool {
+	removed, err := q.journal.RemoveWhereIDs(func(t ImageTask) bool {
 		return slices.Contains(ids, t.ID) && !running[t.ID] && t.Status != ImageTaskRunning
 	})
 	if err != nil {
 		return queueFail[int](err, models.CodeInternal)
 	}
-	q.changed()
-	return models.SuccessResponse(n)
+	q.changed(nil, removed)
+	return models.SuccessResponse(len(removed))
 }
 
 // ClearFinishedImageTasks deletes the succeeded tasks. Their images stay in
 // their folders.
 func (s *Provider) ClearFinishedImageTasks() models.Response[int] {
 	q := s.queue
-	n, err := q.journal.RemoveWhere(func(t ImageTask) bool { return t.Status == ImageTaskSucceeded })
+	removed, err := q.journal.RemoveWhereIDs(func(t ImageTask) bool { return t.Status == ImageTaskSucceeded })
 	if err != nil {
 		return queueFail[int](err, models.CodeInternal)
 	}
-	q.changed()
-	return models.SuccessResponse(n)
+	q.changed(nil, removed)
+	return models.SuccessResponse(len(removed))
 }
 
 // AddImageTaskReferences appends references to tasks that have not started a
