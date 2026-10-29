@@ -73,7 +73,13 @@ func buildVideoRequest(prompt, projectID, variantKey string, aspect, resolution,
 		}
 		items = append(items, item)
 	}
-	return json.Marshal([]any{items, flowContext(projectID, recaptchaToken), []any{newClientID(), 2}})
+	// Flow keeps the batch ID as the seed of every workflow it creates, so a
+	// saved client ID doubles as the batch ID and a lost reply can be found.
+	batchID := newClientID()
+	if len(clientIDs) > 0 {
+		batchID = strings.ToUpper(clientIDs[0])
+	}
+	return json.Marshal([]any{items, flowContext(projectID, recaptchaToken), []any{batchID, 2}})
 }
 
 type pendingVideo struct {

@@ -26,11 +26,13 @@ func (s *Provider) resumeVideoGeneration(ctx context.Context, job generationJob,
 	}
 	acc, release, err := s.readyOwnedAccount(ctx, job.AccountID)
 	if err != nil {
+		logger.Get().Warn("video job stays pending: account not ready", "job", job.ID, "error", err)
 		return models.SuccessResponse(pending)
 	}
 	defer release()
-	client, err := s.flowClient(ctx, *acc, chrome.MethodProjectContents, chrome.MethodMedia, chrome.MethodVideoStatus)
+	client, err := s.projectPageClient(ctx, *acc, chrome.MethodProjectContents, chrome.MethodMedia, chrome.MethodVideoStatus)
 	if err != nil {
+		logger.Get().Warn("video job stays pending: Flow client not ready", "job", job.ID, "error", err)
 		return models.SuccessResponse(pending)
 	}
 	defer s.keepCredentials(*acc, client)
@@ -43,6 +45,7 @@ func (s *Provider) resumeVideoGeneration(ctx context.Context, job generationJob,
 		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeUnavailable)
 	}
 	if err != nil {
+		logger.Get().Warn("video job stays pending: cannot check it", "job", job.ID, "error", err)
 		return models.SuccessResponse(pending)
 	}
 	return models.SuccessResponse(items)
@@ -71,6 +74,38 @@ func (s *Provider) videoBillable(ctx context.Context, req GenerateVideoRequest) 
 			return s.resumeVideoGeneration(ctx, job, r)
 		},
 	}
+}
+
+// adoptBatchVideos gives the client IDs no workflow names the videos carrying
+// the request's batch ID, the first client ID (buildVideoRequest), in listing
+// order. They all come from the same request, so the order does not matter.
+func adoptBatchVideos(listing string, clientIDs []string, started []pendingVideo, known map[string]bool) []pendingVideo {
+	if len(clientIDs) == 0 {
+		return started
+	}
+	taken := make(map[string]bool, len(started))
+	for _, v := range started {
+		taken[v.name+"|"+v.operation] = true
+	}
+	batch := mediaForSeed(listing, clientIDs[0])
+	for _, clientID := range clientIDs {
+		if known[strings.ToLower(clientID)] {
+			continue
+		}
+		for len(batch) > 0 && taken[batch[0].name+"|"+batch[0].operation] {
+			batch = batch[1:]
+		}
+		if len(batch) == 0 {
+			break
+		}
+		match := batch[0]
+		batch = batch[1:]
+		match.clientID = clientID
+		taken[match.name+"|"+match.operation] = true
+		started = append(started, match)
+		known[strings.ToLower(clientID)] = true
+	}
+	return started
 }
 
 func (s *Provider) reconcileVideoGenerationWithClient(ctx context.Context, client *chrome.FlowClient, job generationJob, template GeneratedVideoItem) ([]GeneratedVideoItem, error) {
@@ -106,6 +141,7 @@ func (s *Provider) reconcileVideoGenerationWithClient(ctx context.Context, clien
 				started = append(started, match)
 				known[strings.ToLower(clientID)] = true
 			}
+			started = adoptBatchVideos(listing, job.ClientIDs, started, known)
 		}
 	}
 	if len(started) == 0 && listed && s.submissionLost(job) {

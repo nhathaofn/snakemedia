@@ -16,10 +16,21 @@ func sameEditRequest(a, b EditVideoRequest) bool {
 // Matching the submitted seed avoids adopting an older version of a workflow
 // when a mutation response was lost after reaching Google's server.
 func mediaForClient(payload, clientID string) pendingVideo {
-	var root []any
-	if json.Unmarshal([]byte(payload), &root) != nil || len(root) < 2 {
-		return pendingVideo{}
+	if matches := mediaForSeed(payload, clientID); len(matches) > 0 {
+		return matches[0]
 	}
+	return pendingVideo{}
+}
+
+// mediaForSeed lists every workflow carrying seed. Flow records a video
+// request's batch ID (the last tuple of the request) as the seed of each of
+// its workflows, so one seed can name several videos.
+func mediaForSeed(payload, seed string) []pendingVideo {
+	var root []any
+	if seed == "" || json.Unmarshal([]byte(payload), &root) != nil || len(root) < 2 {
+		return nil
+	}
+	var matches []pendingVideo
 	for _, value := range asList(root[1]) {
 		row := asList(value)
 		if len(row) < 4 {
@@ -29,13 +40,12 @@ func mediaForClient(payload, clientID string) pendingVideo {
 		if len(metadata) < 6 {
 			continue
 		}
-		seed, _ := metadata[5].(string)
-		if !strings.EqualFold(seed, clientID) {
+		if found, _ := metadata[5].(string); !strings.EqualFold(found, seed) {
 			continue
 		}
 		name, _ := metadata[4].(string)
 		workflow, _ := row[0].(string)
-		return pendingVideo{name: name, operation: workflow, clientID: clientID}
+		matches = append(matches, pendingVideo{name: name, operation: workflow, clientID: seed})
 	}
-	return pendingVideo{}
+	return matches
 }

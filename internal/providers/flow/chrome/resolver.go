@@ -66,9 +66,15 @@ var fallbackRPCs = map[string]string{
 	MethodMedia:           "as29s",
 	MethodUploadImage:     "maseQ",
 	MethodGenerateImages:  "ogiZ0b",
+	MethodUpsampleImage:   "SPrCad",
 	MethodEditVideo:       "jIps6",
-	creditsMethod:         "nzlxg",
-	availabilityMethod:    "rThb8d",
+	MethodVideoStatus:     "jwpduf",
+	// Video generation descriptors live in the project bundle; their names were
+	// last seen in references/flow-research/observations/bundles.
+	MethodGenerateVideoText:       "YhhmEf",
+	MethodGenerateVideoReferences: "MZZa6b",
+	creditsMethod:                 "nzlxg",
+	availabilityMethod:            "rThb8d",
 }
 
 var fallbackRPCsUsed sync.Map
@@ -345,6 +351,12 @@ func DiscoverFlowRPCs(ctx context.Context, port int, build string, policy config
 	if err := localJSON(ctx, port, "/json", policy, &pages); err != nil {
 		return RPCRegistry{}, err
 	}
+	// A project tab loads the home bundles and the lazy project bundle, so it is
+	// read first: OpenProject leaves an already open project tab as it is, even
+	// when a home tab comes before it.
+	sort.SliceStable(pages, func(i, j int) bool {
+		return pages[i].projectPage() && !pages[j].projectPage()
+	})
 	for _, page := range pages {
 		if _, ok := page.flowPage(); !ok {
 			continue

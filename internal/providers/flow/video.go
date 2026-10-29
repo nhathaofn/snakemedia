@@ -292,7 +292,8 @@ func (s *Provider) generateVideosFromAccount(ctx context.Context, acc session.St
 	if len(req.References) > 0 {
 		methods = append(methods, chrome.MethodUploadImage)
 	}
-	client, err := s.flowClient(ctx, acc, methods...)
+	// Video descriptors are only in the project page's lazy bundle.
+	client, err := s.projectPageClient(ctx, acc, methods...)
 	if err != nil {
 		return nil, err
 	}
