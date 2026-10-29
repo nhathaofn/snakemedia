@@ -1,3 +1,4 @@
+import { thumbUrl } from '../../../services';
 import { useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { ImagePlus, X } from 'lucide-react';
@@ -95,7 +96,7 @@ export function ReferencesField({
       <div className="muse-references">
         {references.map((ref) => (
           <div key={ref.localUrl} className="muse-thumb" title={ref.fileName}>
-            <img src={ref.localUrl} alt={ref.fileName} />
+            <img src={thumbUrl(ref.localUrl)} alt={ref.fileName} loading="lazy" decoding="async" />
             <button
               type="button"
               className="muse-thumb-remove"

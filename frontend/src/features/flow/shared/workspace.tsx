@@ -5,6 +5,7 @@ import { Icon, Modal } from '../../../components/ui';
 import { cssAspectRatio } from './format';
 import { conversationItemKey } from './studioStore';
 import type { ConversationAttachment, ConversationTurn, StudioResult } from './studioStore';
+import './FlowStudio.css';
 
 /** How close to the end (px) still counts as "at the bottom" of the conversation. */
 const BOTTOM_SLACK_PX = 48;
@@ -81,7 +82,12 @@ export function ConversationGallery<TItem extends StudioResult>({
                           >
                             <span className="flow-chat-attachment-preview">
                               {attachment.kind === 'image' ? (
-                                <img src={attachment.url} alt={attachment.name} />
+                                <img
+                                  src={attachment.url}
+                                  alt={attachment.name}
+                                  loading="lazy"
+                                  decoding="async"
+                                />
                               ) : (
                                 <>
                                   <video src={attachment.url} muted preload="metadata" />
@@ -158,7 +164,7 @@ export function ConversationGallery<TItem extends StudioResult>({
       {preview && (
         <Modal variant="lightbox" label={preview.name} onClose={() => setPreview(null)}>
           {preview.kind === 'image' ? (
-            <img src={preview.url} alt={preview.name} />
+            <img src={preview.url} alt={preview.name} decoding="async" />
           ) : (
             <video src={preview.url} controls preload="metadata" />
           )}

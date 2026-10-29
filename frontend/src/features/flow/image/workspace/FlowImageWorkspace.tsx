@@ -114,7 +114,7 @@ export const FlowImageWorkspace: React.FC = () => {
                 </button>
               </div>
             ) : img.localUrl ? (
-              <img src={img.localUrl} alt={img.prompt} loading="lazy" />
+              <img src={img.localUrl} alt={img.prompt} loading="lazy" decoding="async" />
             ) : (
               <div className="flow-media-error" role="alert">
                 <Icon icon={AlertCircle} size="xl" />
@@ -167,7 +167,7 @@ export const FlowImageWorkspace: React.FC = () => {
 
       {previewImage && (
         <Modal variant="lightbox" label="Ảnh phóng to" onClose={() => store.setPreviewImage(null)}>
-          <img src={previewImage.localUrl} alt={previewImage.prompt} />
+          <img src={previewImage.localUrl} alt={previewImage.prompt} decoding="async" />
           <div className="flow-lightbox-footer">
             <p>{previewImage.prompt}</p>
             <div className="flow-lightbox-meta">

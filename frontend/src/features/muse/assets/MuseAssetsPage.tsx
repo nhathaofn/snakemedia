@@ -1,3 +1,4 @@
+import { thumbUrl } from '../../../services';
 import { useState } from 'react';
 import { FileText, ImagePlus, Pencil, Plus, Trash2, Users, X } from 'lucide-react';
 import '../shared/Muse.css';
@@ -121,7 +122,13 @@ export function MuseAssetsPage() {
               <article key={a.id} className="muse-asset-card">
                 <div className={`muse-asset-cover is-${Math.min(a.images.length, 3)}`}>
                   {a.images.map((img) => (
-                    <img key={img} src={img} alt={a.tag} />
+                    <img
+                      key={img}
+                      src={thumbUrl(img)}
+                      alt={a.tag}
+                      loading="lazy"
+                      decoding="async"
+                    />
                   ))}
                   <span className={`muse-role-badge is-${a.role || 'none'}`}>
                     {roles[a.role].label}
@@ -286,7 +293,7 @@ function AssetDialog({
         <div className="muse-asset-images">
           {draft.images.map((img) => (
             <div key={img} className="muse-asset-image">
-              <img src={img} alt="" />
+              <img src={img} alt="" decoding="async" />
               <button
                 type="button"
                 className="muse-thumb-remove"

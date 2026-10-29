@@ -1,3 +1,4 @@
+import { thumbUrl } from '../../../../services';
 import { useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import { QueueFilterBar, QueueTable } from '../../../../components/batch';
@@ -283,7 +284,12 @@ export function AllWorkspace() {
           <div className="flow-image-all-gallery-grid">
             {gallery.task.references.map((reference) => (
               <figure className="flow-image-all-gallery-item" key={reference.localUrl}>
-                <img src={reference.localUrl} alt={reference.fileName} loading="lazy" />
+                <img
+                  src={thumbUrl(reference.localUrl)}
+                  alt={reference.fileName}
+                  loading="lazy"
+                  decoding="async"
+                />
                 <figcaption title={reference.fileName}>{reference.fileName}</figcaption>
               </figure>
             ))}
@@ -297,7 +303,7 @@ export function AllWorkspace() {
           label="Ảnh kết quả phóng to"
           onClose={() => setPreviewImage(null)}
         >
-          <img src={previewImage.localUrl} alt={previewImage.prompt} />
+          <img src={previewImage.localUrl} alt={previewImage.prompt} decoding="async" />
         </Modal>
       )}
     </div>

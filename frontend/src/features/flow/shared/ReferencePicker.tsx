@@ -1,3 +1,4 @@
+import { thumbUrl } from '../../../services';
 import { useRef } from 'react';
 import { ImagePlus, X } from 'lucide-react';
 import { useAppStore } from '../../../stores';
@@ -5,6 +6,7 @@ import type { StudioConfig } from '../../../types';
 import { formatBytes } from '../../../utils';
 import type { ConversationTurn } from './studioStore';
 import { Icon } from '../../../components/ui';
+import './FlowStudio.css';
 
 /** A local file picked as reference, kept until generation uploads it. */
 export interface ReferenceImage {
@@ -134,7 +136,7 @@ export function ReferencePicker({
         <div className="reference-grid">
           {images.map((img) => (
             <div key={img.previewUrl} className="reference-thumb" title={img.name}>
-              <img src={img.previewUrl} alt={img.name} />
+              <img src={thumbUrl(img.previewUrl)} alt={img.name} loading="lazy" decoding="async" />
               <button
                 type="button"
                 className="reference-thumb-remove"

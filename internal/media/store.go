@@ -224,6 +224,9 @@ func (s *Store) Middleware(next http.Handler) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
+		if r.URL.Query().Has(ThumbQuery) && s.serveThumb(w, r, strings.TrimPrefix(r.URL.Path, Route)) {
+			return
+		}
 		if contentType, ok := contentTypes[strings.ToLower(filepath.Ext(r.URL.Path))]; ok {
 			w.Header().Set("Content-Type", contentType)
 		}
