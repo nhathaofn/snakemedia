@@ -144,7 +144,7 @@ func (s *Provider) catalogueClient(ctx context.Context, acc session.StoredAccoun
 	if err != nil {
 		return nil, err
 	}
-	return s.editClient(ctx, acc, project)
+	return s.projectClient(ctx, acc, project, chrome.MethodModels)
 }
 
 // pageLock guards the Flow tab of the account browser on port: opening a
