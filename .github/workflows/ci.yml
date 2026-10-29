@@ -67,10 +67,22 @@ jobs:
         run: go build ./...
 
       # The CLI matches the wails module in go.mod, so a build never rewrites go.mod.
-      - name: Install Wails CLI
+      - name: Wails version
+        id: wails
         run: |
           $version = go list -m -f '{{.Version}}' github.com/wailsapp/wails/v2
-          go install "github.com/wailsapp/wails/v2/cmd/wails@$version"
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Cache Wails CLI
+        id: wails-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/wails.exe
+          key: wails-cli-${{ runner.os }}-${{ steps.wails.outputs.version }}
+
+      - name: Install Wails CLI
+        if: steps.wails-cache.outputs.cache-hit != 'true'
+        run: go install "github.com/wailsapp/wails/v2/cmd/wails@${{ steps.wails.outputs.version }}"
 
       - name: Bindings are up to date
         run: |
