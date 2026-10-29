@@ -227,6 +227,36 @@ func (j *Journal[T]) update(id string, change func(*T), persist bool) (T, error)
 	return record, j.saveLocked()
 }
 
+// UpdateMany applies change to each listed record (unknown IDs are skipped)
+// and persists the journal once, so a bulk action on N records is one write
+// instead of N. change reports whether it changed the record; only those
+// are returned, in the order of ids.
+func (j *Journal[T]) UpdateMany(ids []string, change func(*T) bool) ([]T, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	var changed []T
+	persist := false
+	for _, id := range ids {
+		i, ok := j.byID[id]
+		if !ok {
+			continue
+		}
+		before := j.items[i]
+		if !change(&j.items[i]) {
+			continue
+		}
+		record := j.items[i]
+		changed = append(changed, record)
+		if j.transient == nil || !j.transient(before, record) {
+			persist = true
+		}
+	}
+	if !persist {
+		return changed, nil
+	}
+	return changed, j.saveLocked()
+}
+
 // RemoveWhere deletes every record drop selects and returns how many went.
 func (j *Journal[T]) RemoveWhere(drop func(T) bool) (int, error) {
 	ids, err := j.RemoveWhereIDs(drop)
