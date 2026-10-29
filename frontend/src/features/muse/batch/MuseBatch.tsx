@@ -163,8 +163,16 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
     }
     return byFilter;
   }, [jobs]);
-  const queuedCount = jobs.filter((j) => j.status === MuseJobStatus.Queued && !j.held).length;
-  const endedCount = jobs.filter(isEnded).length;
+  const queuedCount = useMemo(
+    () => jobs.filter((j) => j.status === MuseJobStatus.Queued && !j.held).length,
+    [jobs],
+  );
+  const endedCount = useMemo(() => jobs.filter(isEnded).length, [jobs]);
+  // A job's number is its prompt's place in its batch, else its place in the queue.
+  const numbers = useMemo(
+    () => new Map(jobs.map((job, index) => [job.id, job.index || index + 1])),
+    [jobs],
+  );
   const finishedCount = counts.get(MuseJobStatus.Succeeded) ?? 0;
   const accountNames = useMemo(
     () =>
@@ -349,7 +357,7 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
         render={(job) => (
           <JobRow
             job={job}
-            number={job.index || jobs.indexOf(job) + 1}
+            number={numbers.get(job.id) ?? 0}
             selected={selectedIds.has(job.id)}
             accountName={accountNames.get(job.accountId ?? '') ?? ''}
             actions={jobActions}
