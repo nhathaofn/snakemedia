@@ -1,5 +1,7 @@
 import { MuseJobKind, MuseJobMode, MuseJobStatus } from '../../../types';
 import type { MuseJob } from '../../../types';
+import { latestOfPreviousRun, runAge } from '../../../stores';
+import type { RunAge, RunItemOf } from '../../../stores';
 
 export const jobStatusLabels: Record<MuseJobStatus, string> = {
   [MuseJobStatus.Queued]: 'Chờ chạy',
@@ -85,18 +87,39 @@ export function mayBePaid(job: MuseJob): boolean {
 }
 
 /**
- * Whether a job belongs to an earlier run of the app: it ended before this
- * run started (made before it, for a job without an end time). Jobs still
+ * Which run of the app a job belongs to: the run in which it ended (was made,
+ * for a job without an end time). Jobs still
  * waiting or running, and older jobs resumed or retried that ended in this
- * run, count as this run's, so hiding the earlier run never hides them.
+ * run, count as this run's, so hiding earlier runs never hides them.
  */
-export function fromPreviousRun(job: MuseJob, runStart: string): boolean {
-  const finished =
+export function jobRunAge(job: MuseJob, runStart?: string, previousStart?: string): RunAge {
+  return runAge(museRunItem.time(job), museRunItem.finished(job), runStart, previousStart);
+}
+
+/**
+ * A Muse job's screen (kind and mode) and task: a Hàng loạt job belongs to its
+ * batch folder, a Đơn job to itself (a storyboard's video to its image job).
+ */
+const museRunItem: RunItemOf<MuseJob> = {
+  id: (job) => job.id,
+  time: (job) => job.finishedAt || job.createdAt,
+  made: (job) => job.createdAt,
+  finished: (job) =>
     job.status === MuseJobStatus.Succeeded ||
     job.status === MuseJobStatus.Failed ||
-    job.status === MuseJobStatus.Cancelled;
-  const made = Date.parse(job.finishedAt || job.createdAt);
-  return finished && !Number.isNaN(made) && made < Date.parse(runStart);
+    job.status === MuseJobStatus.Cancelled,
+  screen: (job) => `${screenKind(job)}:${jobMode(job)}`,
+  task: (job) =>
+    jobMode(job) === MuseJobMode.Batch ? `batch:${job.outputDir ?? ''}` : job.after || job.id,
+};
+
+/** The IDs of the Muse jobs the start question offers again (latestOfPreviousRun). */
+export function offeredMuseJobs(
+  jobs: readonly MuseJob[],
+  runStart?: string,
+  previousStart?: string,
+): Set<string> {
+  return latestOfPreviousRun(jobs, museRunItem, runStart, previousStart);
 }
 
 /** Whether the job ended without files (failed or cancelled). */

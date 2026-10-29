@@ -1,18 +1,19 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { PreviousRunToggle } from '../../../components/feedback';
-import { RUN_START, usePreviousRunStore } from '../../../stores';
+import { usePreviousRunStore } from '../../../stores';
 import { MuseJobKind } from '../../../types';
-import { fromPreviousRun, screenKind } from './format';
+import { offeredMuseJobs, screenKind } from './format';
 import { useMuseStore } from './museStore';
 
 /**
- * How many jobs, images and videos earlier runs of the app left in the Muse
+ * How many jobs, images and videos the start question offers again in the Muse
  * queue. A storyboard's frames count with the video they open, as on screen.
  */
 function useMusePreviousRun() {
   const jobs = useMuseStore((s) => s.jobs);
   return useMemo(() => {
-    const previous = jobs.filter((job) => fromPreviousRun(job, RUN_START));
+    const offered = offeredMuseJobs(jobs);
+    const previous = jobs.filter((job) => offered.has(job.id));
     return {
       total: previous.length,
       images: previous.filter((j) => screenKind(j) === MuseJobKind.Image).length,

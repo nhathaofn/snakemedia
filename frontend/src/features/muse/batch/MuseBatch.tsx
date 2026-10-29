@@ -10,7 +10,7 @@ import {
 } from '../../../components/batch';
 import { Button, Icon, IconAction, Modal } from '../../../components/ui';
 import { api, unwrap } from '../../../services';
-import { useAccountsStore, useAppStore, usePreviousRunStore } from '../../../stores';
+import { useAccountsStore, useAppStore } from '../../../stores';
 import { AccountProvider, MuseJobKind, MuseJobMode, MuseJobStatus } from '../../../types';
 import type { MuseJob } from '../../../types';
 import {
@@ -143,7 +143,6 @@ export function MuseBatchPanel({ kind }: { kind: MuseJobKind }) {
 export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
   const allJobs = useVisibleMuseJobs();
   const loaded = useMuseStore((s) => s.loaded);
-  const showPrevious = usePreviousRunStore((s) => s.showPrevious);
   const accounts = useAccountsStore((s) => s.accounts);
   const addToast = useAppStore((s) => s.addToast);
   const { act, jobActions } = useMuseActions();
@@ -269,10 +268,7 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
                   onClick={() =>
                     void bulk(
                       async () => {
-                        if (showPrevious) {
-                          return unwrap(await api.retryMuseFailed(kind, MuseJobMode.Batch));
-                        }
-                        // Earlier runs are hidden: retry only the failed jobs shown, never
+                        // Older runs are always hidden: retry only the failed jobs shown, never
                         // ones Muse may already have taken (the backend's bulk rule).
                         // A refused retry does not stop the others; the count says how many went.
                         const shownFailed = jobs.filter((j) => isEnded(j) && !mayBePaid(j));
@@ -299,16 +295,14 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
                       return;
                     void bulk(
                       async () =>
-                        // Earlier runs are hidden: clear only the finished jobs shown.
-                        showPrevious
-                          ? unwrap(await api.clearMuseFinished(kind, MuseJobMode.Batch))
-                          : unwrap(
-                              await api.removeMuseJobs(
-                                jobs
-                                  .filter((j) => j.status === MuseJobStatus.Succeeded)
-                                  .map((j) => j.id),
-                              ),
-                            ),
+                        // Older runs are always hidden: clear only the finished jobs shown.
+                        unwrap(
+                          await api.removeMuseJobs(
+                            jobs
+                              .filter((j) => j.status === MuseJobStatus.Succeeded)
+                              .map((j) => j.id),
+                          ),
+                        ),
                       (n) => `Đã dọn ${n} tác vụ xong.`,
                     );
                   }}

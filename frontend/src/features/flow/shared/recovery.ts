@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../../services/api';
-import { RUN_START, useAppStore, usePreviousRunStore } from '../../../stores';
+import {
+  latestOfPreviousRun,
+  runAge,
+  shownForRun,
+  useAppStore,
+  usePreviousRunStore,
+} from '../../../stores';
+import type { RunAge } from '../../../stores';
 import type { ApiResponse } from '../../../types';
 import { clearGenerationAttempt } from './hooks';
 import type { ConversationTurn, RestoredTurn, StudioResult } from './studioStore';
@@ -76,16 +83,32 @@ export function useRestoreJobs<TItem extends RecoverableItem>(
  */
 const resumedThisRun = new Set<string>();
 
-/** Whether a listed job result is a finished one made before this run of the app. */
-export function fromPreviousRun(item: RecoverableItem): boolean {
-  const made = Date.parse(item.createdAt ?? '');
-  return !item.pending && !Number.isNaN(made) && made < Date.parse(RUN_START);
+/** Which run of the app a listed job result was made in; pending ones are this run's. */
+export function itemRunAge(item: RecoverableItem): RunAge {
+  return runAge(item.createdAt, !item.pending);
+}
+
+/**
+ * The jobs the start question offers again on a screen of single jobs: only
+ * the last one the run before this one finished.
+ */
+export function offeredJobs(items: readonly RecoverableItem[]): Set<string> {
+  return latestOfPreviousRun(
+    items.filter((i) => i.jobId),
+    {
+      id: (i) => i.jobId ?? '',
+      time: (i) => i.createdAt,
+      finished: (i) => !i.pending,
+      screen: () => '',
+      task: (i) => i.jobId ?? '',
+    },
+  );
 }
 
 /**
  * Restores a studio's saved jobs like useRestoreJobs, but finished jobs from
- * an earlier run of the app only while the user shows the earlier run
- * (usePreviousRunStore). Jobs still pending always come back, so a paid job is
+ * the run before this one only while the user shows it (usePreviousRunStore)
+ * and only the last of them (offeredJobs); other earlier jobs never. Jobs still pending always come back, so a paid job is
  * never lost from view. Switching the earlier run off takes its turns out of
  * the conversation again; nothing is deleted. Returns how many earlier jobs
  * there are, for the screen's "Phiên cũ" button.
@@ -102,16 +125,15 @@ export function useRestoreJobsOfRun<TItem extends RecoverableItem>(
     void list().then((response) => {
       if (!active || !response.success || !response.data?.length) return;
       const items = response.data;
-      const old = new Set(items.filter(fromPreviousRun).map((i) => i.jobId ?? ''));
-      old.delete('');
-      for (const id of resumedThisRun) old.delete(id);
-      setPreviousJobs([...old]);
-      const shown = showPrevious ? items : items.filter((i) => !old.has(i.jobId ?? ''));
+      const ageOf = (i: TItem): RunAge =>
+        resumedThisRun.has(i.jobId ?? '') ? 'current' : itemRunAge(i);
+      const offered = offeredJobs(items.filter((i) => ageOf(i) !== 'current'));
+      const isShown = (i: TItem) => shownForRun(ageOf(i), i.jobId ?? '', offered, showPrevious);
+      setPreviousJobs([...offered]);
+      const shown = items.filter(isShown);
       if (shown.length) store.getState().restoreTurns(turnsFromJobs(shown, pendingLabel));
-      if (!showPrevious) {
-        const state = store.getState();
-        for (const id of old) state.removeTurn?.(id);
-      }
+      const state = store.getState();
+      for (const i of items) if (i.jobId && !isShown(i)) state.removeTurn?.(i.jobId);
     });
     return () => {
       active = false;
@@ -130,7 +152,7 @@ export function useReportPreviousEdits(): void {
       .listVideoEditJobs()
       .then((res) => {
         const items = res.success ? (res.data ?? []) : [];
-        const jobs = new Set(items.filter(fromPreviousRun).map((i) => i.jobId));
+        const jobs = offeredJobs(items);
         if (active) report('flow-edit', jobs.size > 0 ? [`${jobs.size} video chỉnh sửa Flow`] : []);
       })
       .catch(() => active && report('flow-edit', []));
