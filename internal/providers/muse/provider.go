@@ -19,6 +19,7 @@ import (
 	"SnakeMedia/internal/jobs"
 	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/media"
+	"SnakeMedia/internal/models"
 )
 
 // pumpInterval is how often the queue is re-planned without any trigger, so
@@ -174,8 +175,7 @@ func (p *Provider) Start(ctx context.Context, emit func(events.Event, any)) {
 			}
 		})
 	}
-	p.sweepReferences()
-	p.sweepAssetImages()
+	p.sweepUnused()
 	p.releaseWaiting()
 	p.wg.Add(1)
 	go p.loop()
@@ -354,12 +354,58 @@ func (p *Provider) navLock(accountID string) *sync.RWMutex {
 // still finishing (a send in flight runs to its own end).
 var errRunStopping = errors.New("Tác vụ đang dừng, thử lại sau vài giây.")
 
+// errJobEnded refuses to cancel a job that has already ended.
+var errJobEnded = errors.New("Tác vụ đã kết thúc.")
+
 // runActive reports whether a run of the job has not ended yet.
 func (p *Provider) runActive(jobID string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	_, ok := p.running[jobID]
 	return ok
+}
+
+// errJobChanged refuses a change to a job that started or ended after the
+// caller looked at it.
+var errJobChanged = errors.New("Tác vụ vừa đổi trạng thái; hãy thử lại.")
+
+// updateIdle changes a job no run holds, but only while allowed still holds
+// for its saved state. p.mu is held across the check and the save, so pump
+// (which starts runs under p.mu) cannot start the job in between and have
+// its run reset under it.
+func (p *Provider) updateIdle(id string, allowed func(MuseJob) bool, change func(*MuseJob)) (MuseJob, error) {
+	p.mu.Lock()
+	if _, ok := p.running[id]; ok {
+		p.mu.Unlock()
+		return MuseJob{}, errRunStopping
+	}
+	refused := false
+	job, err := p.jobs.update(id, func(j *MuseJob) {
+		if refused = !allowed(*j); !refused {
+			change(j)
+		}
+	})
+	p.mu.Unlock()
+	if err != nil {
+		logger.Get().Warn("cannot save muse job", "job", id, "error", err)
+		return job, err
+	}
+	if refused {
+		return job, errJobChanged
+	}
+	p.emit(events.EventMuseJobUpdated, job)
+	return job, nil
+}
+
+// idleCode is the response code of an updateIdle error.
+func idleCode(err error) models.Code {
+	switch {
+	case errors.Is(err, errJobNotFound):
+		return models.CodeNotFound
+	case errors.Is(err, errRunStopping), errors.Is(err, errJobChanged):
+		return models.CodeInvalidArgument
+	}
+	return models.CodeInternal
 }
 
 func (p *Provider) finishRun(jobID string) {
@@ -393,6 +439,25 @@ func (p *Provider) updateJob(id string, change func(*MuseJob)) (MuseJob, error) 
 	}
 	p.emit(events.EventMuseJobUpdated, job)
 	return job, nil
+}
+
+// updateJobs is updateJob for many jobs in one journal write: change runs
+// under the journal's lock and reports whether it changed the job, so it
+// re-checks the job's state itself. Each changed job is emitted as updateJob
+// would; on a failed write nothing is emitted, like a failed updateJob.
+func (p *Provider) updateJobs(ids []string, change func(*MuseJob) bool) []MuseJob {
+	if len(ids) == 0 {
+		return nil
+	}
+	changed, err := p.jobs.updateMany(ids, change)
+	if err != nil {
+		logger.Get().Warn("cannot save muse jobs", "jobs", len(ids), "error", err)
+		return nil
+	}
+	for _, job := range changed {
+		p.emit(events.EventMuseJobUpdated, job)
+	}
+	return changed
 }
 
 // updateAccount changes an account's shared fields and Muse data together,

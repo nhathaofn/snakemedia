@@ -257,6 +257,12 @@ func (s *jobStore) update(id string, change func(*MuseJob)) (MuseJob, error) {
 	return job, err
 }
 
+// updateMany applies change to each listed job and persists the journal
+// once. change reports whether it changed the job; only those are returned.
+func (s *jobStore) updateMany(ids []string, change func(*MuseJob) bool) ([]MuseJob, error) {
+	return s.journal.UpdateMany(ids, change)
+}
+
 // onlyStepChanged reports whether a and b differ in nothing but Step.
 func onlyStepChanged(a, b MuseJob) bool {
 	a.Step, b.Step = "", ""

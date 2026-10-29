@@ -418,7 +418,7 @@ func (p *Provider) CancelJob(id string) models.Response[MuseJob] {
 		return fail[MuseJob](errJobNotFound, models.CodeNotFound)
 	}
 	if job.Status != MuseJobQueued && job.Status != MuseJobProcessing {
-		return fail[MuseJob](errors.New("Tác vụ đã kết thúc."), models.CodeInvalidArgument)
+		return fail[MuseJob](errJobEnded, models.CodeInvalidArgument)
 	}
 	p.mu.Lock()
 	cancel := p.cancels[id]
@@ -443,12 +443,20 @@ func (p *Provider) CancelJob(id string) models.Response[MuseJob] {
 			}()
 		}
 	}
+	ended := false
 	updated, err := p.updateJob(id, func(j *MuseJob) {
+		// The run may have finished since the check above: its answer stands.
+		if ended = j.finished(); ended {
+			return
+		}
 		j.Status, j.Step, j.Error, j.Sending = MuseJobCancelled, "", "Đã huỷ", false
 		j.FinishedAt = p.now().UTC().Format(time.RFC3339)
 	})
 	if err != nil {
 		return fail[MuseJob](err, models.CodeInternal)
+	}
+	if ended {
+		return fail[MuseJob](errJobEnded, models.CodeInvalidArgument)
 	}
 	return models.SuccessResponse(updated)
 }
@@ -462,17 +470,16 @@ func (p *Provider) RetryJob(id string) models.Response[MuseJob] {
 	if job.Status != MuseJobFailed && job.Status != MuseJobCancelled {
 		return fail[MuseJob](errors.New("Chỉ chạy lại được tác vụ lỗi hoặc đã huỷ."), models.CodeInvalidArgument)
 	}
-	if p.runActive(id) {
-		// The cancelled run may still be sending: its answer must land on
-		// this job before the job starts over.
-		return fail[MuseJob](errRunStopping, models.CodeInvalidArgument)
-	}
-	updated, err := p.updateJob(id, func(j *MuseJob) {
+	// A cancelled run may still be sending: its answer must land on this job
+	// before the job starts over.
+	updated, err := p.updateIdle(id, func(j MuseJob) bool {
+		return j.Status == MuseJobFailed || j.Status == MuseJobCancelled
+	}, func(j *MuseJob) {
 		resetForRetry(j)
 		j.Attempts = 0
 	})
 	if err != nil {
-		return fail[MuseJob](err, models.CodeInternal)
+		return fail[MuseJob](err, idleCode(err))
 	}
 	p.trigger()
 	return models.SuccessResponse(updated)
@@ -491,29 +498,24 @@ func (p *Provider) RemoveJob(id string) models.Response[bool] {
 	if err := p.jobs.remove(id); err != nil {
 		return fail[bool](err, models.CodeInternal)
 	}
-	p.sweepReferences()
-	p.sweepAssetImages()
+	p.sweepUnused()
 	p.releaseWaiting()
 	return models.SuccessResponse(true)
 }
 
 // RunJobs removes the Held flag from queued jobs so the scheduler picks them up.
 func (p *Provider) RunJobs(ids []string) models.Response[int] {
-	count := 0
-	for _, id := range ids {
-		if j, ok := p.jobs.get(id); ok && j.Held {
-			_, err := p.updateJob(id, func(job *MuseJob) {
-				job.Held = false
-			})
-			if err == nil {
-				count++
-			}
+	changed := p.updateJobs(ids, func(job *MuseJob) bool {
+		if !job.Held {
+			return false
 		}
-	}
-	if count > 0 {
+		job.Held = false
+		return true
+	})
+	if len(changed) > 0 {
 		p.trigger()
 	}
-	return models.SuccessResponse(count)
+	return models.SuccessResponse(len(changed))
 }
 
 // inScope reports whether job is of kind and mode; an empty kind or mode
@@ -528,18 +530,23 @@ func inScope(job MuseJob, kind MuseJobKind, mode MuseJobMode) bool {
 
 // HoldQueued puts every unstarted queued job of kind and mode (all when empty) on hold.
 func (p *Provider) HoldQueued(kind MuseJobKind, mode MuseJobMode) models.Response[int] {
-	count := 0
+	holdable := func(j MuseJob) bool {
+		return j.Status == MuseJobQueued && !j.Held && inScope(j, kind, mode)
+	}
+	var ids []string
 	for _, j := range p.jobs.list() {
-		if j.Status == MuseJobQueued && !j.Held && inScope(j, kind, mode) {
-			_, err := p.updateJob(j.ID, func(job *MuseJob) {
-				job.Held = true
-			})
-			if err == nil {
-				count++
-			}
+		if holdable(j) {
+			ids = append(ids, j.ID)
 		}
 	}
-	return models.SuccessResponse(count)
+	changed := p.updateJobs(ids, func(job *MuseJob) bool {
+		if !holdable(*job) {
+			return false
+		}
+		job.Held = true
+		return true
+	})
+	return models.SuccessResponse(len(changed))
 }
 
 // RetryFailed queues every failed or cancelled job of kind and mode (all when empty)
@@ -548,22 +555,27 @@ func (p *Provider) HoldQueued(kind MuseJobKind, mode MuseJobMode) models.Respons
 // them again could pay a second time, so only an explicit RetryJob on one of
 // them sends it again.
 func (p *Provider) RetryFailed(kind MuseJobKind, mode MuseJobMode) models.Response[int] {
-	count := 0
+	retryable := func(j MuseJob) bool {
+		return (j.Status == MuseJobFailed || j.Status == MuseJobCancelled) && !j.mayBePaid() && inScope(j, kind, mode)
+	}
+	var ids []string
 	for _, j := range p.jobs.list() {
-		if (j.Status == MuseJobFailed || j.Status == MuseJobCancelled) && !j.mayBePaid() && inScope(j, kind, mode) && !p.runActive(j.ID) {
-			_, err := p.updateJob(j.ID, func(job *MuseJob) {
-				resetForRetry(job)
-				job.Attempts, job.Held = 0, false
-			})
-			if err == nil {
-				count++
-			}
+		if retryable(j) && !p.runActive(j.ID) {
+			ids = append(ids, j.ID)
 		}
 	}
-	if count > 0 {
+	changed := p.updateJobs(ids, func(job *MuseJob) bool {
+		if !retryable(*job) {
+			return false
+		}
+		resetForRetry(job)
+		job.Attempts, job.Held = 0, false
+		return true
+	})
+	if len(changed) > 0 {
 		p.trigger()
 	}
-	return models.SuccessResponse(count)
+	return models.SuccessResponse(len(changed))
 }
 
 // ClearFinished deletes the succeeded jobs of kind and mode (all when empty) from the
@@ -575,8 +587,7 @@ func (p *Provider) ClearFinished(kind MuseJobKind, mode MuseJobMode) models.Resp
 	if err != nil {
 		return fail[int](err, models.CodeInternal)
 	}
-	p.sweepReferences()
-	p.sweepAssetImages()
+	p.sweepUnused()
 	p.releaseWaiting()
 	p.emit(events.EventMuseJobsRemoved, removed)
 	return models.SuccessResponse(len(removed))
@@ -594,8 +605,7 @@ func (p *Provider) RemoveJobs(ids []string) models.Response[int] {
 	if err != nil {
 		return fail[int](err, models.CodeInternal)
 	}
-	p.sweepReferences()
-	p.sweepAssetImages()
+	p.sweepUnused()
 	p.releaseWaiting()
 	p.emit(events.EventMuseJobsRemoved, removed)
 	return models.SuccessResponse(len(removed))
@@ -614,17 +624,17 @@ func (p *Provider) EditAndRetry(id, prompt string) models.Response[MuseJob] {
 	if job.Status == MuseJobProcessing {
 		return fail[MuseJob](errors.New("Tác vụ đang chạy, hãy huỷ trước khi sửa."), models.CodeInvalidArgument)
 	}
-	if p.runActive(id) {
-		return fail[MuseJob](errRunStopping, models.CodeInvalidArgument)
-	}
-	// A job still waiting keeps its hold; an ended one runs again.
-	held := job.Status == MuseJobQueued && job.Held
-	updated, err := p.updateJob(id, func(j *MuseJob) {
+	// A job still waiting keeps its hold; an ended one runs again. A job the
+	// scheduler started since the check above is left to its run.
+	updated, err := p.updateIdle(id, func(j MuseJob) bool {
+		return j.Status == MuseJobQueued || j.finished()
+	}, func(j *MuseJob) {
+		held := j.Status == MuseJobQueued && j.Held
 		resetForRetry(j)
 		j.Prompt, j.Attempts, j.Held = prompt, 0, held
 	})
 	if err != nil {
-		return fail[MuseJob](err, models.CodeInternal)
+		return fail[MuseJob](err, idleCode(err))
 	}
 	p.trigger()
 	return models.SuccessResponse(updated)
