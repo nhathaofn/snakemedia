@@ -555,10 +555,13 @@ func (p *Provider) collect(ctx context.Context, job MuseJob, accountID string, p
 		if long, err = p.longOutcome(ctx, job, accountID, page, replies); err != nil {
 			return err
 		}
-		// The chat holds every clip; the joined video is the last one Muse sent.
-		if len(wanted) > 1 {
-			wanted = wanted[len(wanted)-1:]
-		}
+	}
+	// A video job asks for one file. A long video's chat holds every clip
+	// before the joined one, and a short one may hold a cut Muse replaced
+	// ("here's the exact-cut version, replacing the 5.08s cut"): the last
+	// video Muse sent is the result either way.
+	if job.Kind == MuseJobVideo && len(wanted) > 1 {
+		wanted = wanted[len(wanted)-1:]
 	}
 	if len(wanted) == 0 && missing {
 		// Muse made the file but cannot hand it over right now: read the chat

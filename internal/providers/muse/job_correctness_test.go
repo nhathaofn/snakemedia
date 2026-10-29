@@ -3,6 +3,7 @@ package muse
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,38 @@ func TestCompletedWithFileAndQuestionSucceeds(t *testing.T) {
 
 	if got := mustJob(t, p, job.ID); got.Status != MuseJobSucceeded || len(got.Files) != 1 {
 		t.Fatalf("job = %+v", got)
+	}
+}
+
+// Muse may send a video and then a corrected cut of it (seen on muse.ai:
+// "here's the exact-cut version, verified at 5.000 seconds, replacing the
+// 5.08s cut I just sent"). The job asked for one video: only the last one is
+// kept.
+func TestReplacedVideoKeepsOnlyTheLastCut(t *testing.T) {
+	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"running", "completed"},
+		events: []AssistantEvent{
+			{Text: "Done — 1 clip."},
+			{Text: "5 seconds", Videos: []ResultMedia{{Path: "/out/new.mp4", Mime: "video/mp4", ByteLen: 5}}},
+			{Text: "Quick correction — here's the exact-cut version, replacing the 5.08s cut I just sent."},
+			{Text: "exactly 5.000 seconds", Videos: []ResultMedia{{Path: "/out/final.mp4", Mime: "video/mp4", ByteLen: 5}}},
+		}, files: map[string][]byte{"/out/new.mp4": []byte("first"), "/out/final.mp4": []byte("final")}}
+	p := testProvider(t, page)
+	acc := addSignedIn(t, p, "A")
+	job := submit(t, p, MuseJobVideo, "x")[0]
+
+	p.runOne(context.Background(), job.ID, acc.ID)
+	p.wg.Wait()
+
+	got := mustJob(t, p, job.ID)
+	if got.Status != MuseJobSucceeded || len(got.Files) != 1 {
+		t.Fatalf("job = %+v", got)
+	}
+	path, err := p.media.Path(got.Files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "final" {
+		t.Fatalf("kept %q %v, want the corrected cut", data, err)
 	}
 }
 
