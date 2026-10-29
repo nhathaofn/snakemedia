@@ -82,3 +82,24 @@ func TestResolveImageGenerationDescriptorFromProjectBundle(t *testing.T) {
 		t.Fatalf("image RPCs not resolved: %+v %v", registry, err)
 	}
 }
+
+func TestResolveNamelessDescriptorsFromFallbackIDs(t *testing.T) {
+	// Snippet shape captured from the boq_labs-ai-sandbox-frontend_20261028 home bundle:
+	// descriptors carry only the ID, no method name.
+	content := `var rYa=_.Hd(_.XM),xYa={Wa:"UpteDb",hb:void 0,Za:!0,Xa:class extends _.m{constructor(a){super(a)}},kb:_.xA};xYa[_.Nz]=!0;yYa={Wa:"jHPbke",hb:void 0,Za:!1,Xa:_.RM,kb:_.QA};`
+	load := func(string) ([]byte, error) { return []byte(content), nil }
+	registry, err := resolveRPCs([]string{"https://www.gstatic.com/home.js"}, 5, 10240, load, MethodProjects, MethodCreateProject)
+	if err != nil || registry.ID(MethodProjects) != "UpteDb" || registry.ID(MethodCreateProject) != "jHPbke" {
+		t.Fatalf("nameless descriptors not resolved: %+v %v", registry, err)
+	}
+	// An ID the loaded scripts do not declare is never assumed.
+	if _, err := resolveRPCs([]string{"https://www.gstatic.com/home.js"}, 5, 10240, load, MethodModels); err == nil {
+		t.Fatal("GetModels resolved without its descriptor")
+	}
+	// A named descriptor wins over the fallback ID.
+	named := content + `z={Wa:"newID",hb:"/FlowService.GetProjects",kb:!1};`
+	registry, err = resolveRPCs([]string{"https://www.gstatic.com/a.js"}, 5, 10240, func(string) ([]byte, error) { return []byte(named), nil }, MethodProjects)
+	if err != nil || registry.ID(MethodProjects) != "newID" {
+		t.Fatalf("named descriptor did not win: %+v %v", registry, err)
+	}
+}

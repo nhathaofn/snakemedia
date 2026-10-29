@@ -1,6 +1,7 @@
 package chrome
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"SnakeMedia/internal/config"
+	"SnakeMedia/internal/logger"
 	"github.com/gorilla/websocket"
 )
 
@@ -50,6 +52,42 @@ type RPCRegistry struct {
 	EditVideo               string `json:"editVideo,omitempty"`
 	Credits                 string `json:"credits"`
 	Availability            string `json:"availability"`
+}
+
+// fallbackRPCs are the last verified IDs of methods whose descriptors no longer
+// carry a method name (Flow builds since boq_labs-ai-sandbox-frontend_20261028
+// ship only {Wa:"<id>",...}). An ID is used only while a loaded script still
+// declares it, and its first use per run is logged.
+var fallbackRPCs = map[string]string{
+	MethodModels:          "HTrJv",
+	MethodProjects:        "UpteDb",
+	MethodCreateProject:   "jHPbke",
+	MethodProjectContents: "Zzl0ze",
+	MethodMedia:           "as29s",
+	MethodUploadImage:     "maseQ",
+	MethodGenerateImages:  "ogiZ0b",
+	MethodEditVideo:       "jIps6",
+	creditsMethod:         "nzlxg",
+	availabilityMethod:    "rThb8d",
+}
+
+var fallbackRPCsUsed sync.Map
+
+// applyFallbackRPCs fills methods the registry lacks with their fallback ID
+// when data declares that ID, recording them in filled so a named descriptor
+// found later still wins.
+func (r *RPCRegistry) applyFallbackRPCs(data []byte, filled map[string]bool) {
+	for method, id := range fallbackRPCs {
+		field := r.field(method)
+		if field == nil || *field != "" || !bytes.Contains(data, []byte(`"`+id+`"`)) {
+			continue
+		}
+		*field = id
+		filled[method] = true
+		if _, seen := fallbackRPCsUsed.LoadOrStore(method, true); !seen {
+			logger.Get().Info("flow RPC descriptor has no method name; using built-in ID", "method", method, "id", id)
+		}
+	}
 }
 
 var rpcIDPattern = regexp.MustCompile(`^[A-Za-z0-9_]{3,30}$`)
@@ -178,6 +216,7 @@ func discoverRPCs(ctx context.Context, conn *websocket.Conn, build string, polic
 func resolveRPCs(sources []string, maxScripts int, budget int64, load func(string) ([]byte, error), required ...string) (RPCRegistry, error) {
 	var registry RPCRegistry
 	seen := make(map[string]bool)
+	fromFallback := make(map[string]bool)
 	for _, source := range sources {
 		if seen[source] || !scriptOrigin(source) {
 			continue
@@ -216,12 +255,14 @@ func resolveRPCs(sources []string, maxScripts int, budget int64, load func(strin
 			}
 			field := registry.field(method)
 			if field != nil {
-				if *field != "" && *field != candidateID {
+				if *field != "" && *field != candidateID && !fromFallback[method] {
 					return RPCRegistry{}, fmt.Errorf("ambiguous Flow RPC: %s", method)
 				}
 				*field = candidateID
+				delete(fromFallback, method)
 			}
 		}
+		registry.applyFallbackRPCs(data, fromFallback)
 		if (len(required) == 0 && registry.valid() && registry.Availability != "") || (len(required) > 0 && registry.Has(required...)) {
 			return registry, nil
 		}
