@@ -27,6 +27,14 @@ func BuildArgs(opts LaunchOptions) []string {
 		"--remote-debugging-address=127.0.0.1",
 		"--no-first-run",
 		"--no-default-browser-check",
+		// Google background features the app never uses: they cost memory and
+		// proxy traffic. Safe Browsing and other background networking stay on,
+		// so the profile still looks like an ordinary browser to reCAPTCHA.
+		"--disable-sync",
+		"--disable-default-apps",
+		"--disable-component-update",
+		// The only --disable-features flag: Chrome keeps just the last one given.
+		"--disable-features=Translate,OptimizationHints,MediaRouter",
 	}
 	if opts.Headless {
 		args = append(args, "--headless=new", "--hide-scrollbars", "--mute-audio")
