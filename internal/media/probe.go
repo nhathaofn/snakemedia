@@ -25,28 +25,58 @@ type VideoMetadata struct {
 // from showing.
 func HideWindow(cmd *exec.Cmd) { hideProbeWindow(cmd) }
 
-// FFprobe is ffprobe from configuration or PATH.
+// FFprobe is ffprobe from configuration, next to a configured ffmpeg, or PATH.
 func FFprobe(policy config.FlowConfig) (string, error) {
-	if policy.ProbePath != "" {
-		return policy.ProbePath, nil
-	}
-	program, err := exec.LookPath("ffprobe")
+	program, err := findTool("ffprobe", policy.ProbePath, policy.FFmpegPath)
 	if err != nil {
 		return "", errors.New("Không tìm thấy ffprobe; cài FFmpeg vào PATH hoặc cấu hình flow.probePath.")
 	}
 	return program, nil
 }
 
-// FFmpeg is ffmpeg from configuration or PATH.
+// FFmpeg is ffmpeg from configuration, next to a configured ffprobe, or PATH.
 func FFmpeg(policy config.FlowConfig) (string, error) {
-	if policy.FFmpegPath != "" {
-		return policy.FFmpegPath, nil
-	}
-	program, err := exec.LookPath("ffmpeg")
+	program, err := findTool("ffmpeg", policy.FFmpegPath, policy.ProbePath)
 	if err != nil {
 		return "", errors.New("Không tìm thấy ffmpeg; cài FFmpeg vào PATH hoặc cấu hình flow.ffmpegPath.")
 	}
 	return program, nil
+}
+
+// findTool returns the configured path (when it exists), else the program in
+// the folder of its configured sibling (FFmpeg ships both in one bin
+// folder), else PATH.
+func findTool(name, configured, sibling string) (string, error) {
+	if configured != "" {
+		return exec.LookPath(configured)
+	}
+	if sibling != "" {
+		if path, err := exec.LookPath(filepath.Join(filepath.Dir(sibling), name)); err == nil {
+			return path, nil
+		}
+	}
+	return exec.LookPath(name)
+}
+
+// VideoTools is what the video watermark removal finds on this machine.
+// Missing lists the programs it could not find ("ffmpeg", "ffprobe").
+type VideoTools struct {
+	FFmpeg  string   `json:"ffmpeg"`
+	FFprobe string   `json:"ffprobe"`
+	Missing []string `json:"missing"`
+}
+
+// CheckVideoTools looks for ffmpeg and ffprobe the way the removal does.
+func CheckVideoTools(policy config.FlowConfig) VideoTools {
+	tools := VideoTools{Missing: []string{}}
+	var err error
+	if tools.FFmpeg, err = FFmpeg(policy); err != nil {
+		tools.Missing = append(tools.Missing, "ffmpeg")
+	}
+	if tools.FFprobe, err = FFprobe(policy); err != nil {
+		tools.Missing = append(tools.Missing, "ffprobe")
+	}
+	return tools
 }
 
 // ProbeVideo reads MP4, MOV and M4V headers directly, so the common formats

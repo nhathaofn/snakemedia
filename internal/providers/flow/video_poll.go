@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"SnakeMedia/internal/events"
 	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/models"
 	"SnakeMedia/internal/providers/flow/chrome"
@@ -488,16 +489,13 @@ func (s *Provider) removeVideoWatermark(ctx context.Context, mediaID, localURL s
 		keep("path", err)
 		return
 	}
-	ffmpeg, err := media.FFmpeg(policy)
-	if err != nil {
-		keep("ffmpeg", err)
+	tools := media.CheckVideoTools(policy)
+	if len(tools.Missing) > 0 {
+		keep("missing "+strings.Join(tools.Missing, ", "), nil)
+		s.queue.notify(events.EventFlowVideoToolsMissing, tools)
 		return
 	}
-	ffprobe, err := media.FFprobe(policy)
-	if err != nil {
-		keep("ffprobe", err)
-		return
-	}
+	ffmpeg, ffprobe := tools.FFmpeg, tools.FFprobe
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(policy.VideoGenerationTimeoutSeconds)*time.Second)
 	defer cancel()
 	tmp := file + ".clean.mp4"

@@ -45,6 +45,7 @@ export type GeneratedVideoItem = flow.GeneratedVideoItem;
 export type SaveMediaResult = media.SaveResult;
 export type MediaDirectoryResult = media.DirectoryResult;
 export type ImportVideoResult = media.ImportResult;
+export type VideoTools = media.VideoTools;
 export type FlowEditModel = flow.FlowEditModel;
 export type EditVideoRequest = flow.EditVideoRequest;
 export const EditVideoRequest = flow.EditVideoRequest;
