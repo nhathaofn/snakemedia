@@ -7,7 +7,10 @@ import "fmt"
 // kept as logged fallbacks in the provider. Keys of removed fields in a saved
 // file are ignored on load.
 type FlowConfig struct {
-	ProbePath          string `json:"probePath"`
+	ProbePath string `json:"probePath"`
+	// FFmpegPath is the ffmpeg used to remove the video watermark; empty
+	// means PATH. Nothing is bundled with the app.
+	FFmpegPath         string `json:"ffmpegPath"`
 	UploadAttempts     int    `json:"uploadAttempts"`
 	UploadRetryDelayMS int    `json:"uploadRetryDelayMs"`
 	MaxPollFailures    int    `json:"maxPollFailures"`
@@ -51,6 +54,9 @@ type FlowConfig struct {
 	// AutoRemoveWatermark automatically strips the visible Gemini/Flow watermark
 	// from generated images using reverse alpha blending.
 	AutoRemoveWatermark bool `json:"autoRemoveWatermark"`
+	// AutoRemoveVideoWatermark does the same for downloaded videos. It needs
+	// ffmpeg and ffprobe; without them the video is kept as Flow sent it.
+	AutoRemoveVideoWatermark bool `json:"autoRemoveVideoWatermark"`
 }
 
 func DefaultFlowConfig() FlowConfig {
@@ -59,7 +65,7 @@ func DefaultFlowConfig() FlowConfig {
 		MaxConcurrentRequestsPerAccount: 2, SignedOutReads: 3,
 		QueueThreads: 1, QueueGapMinSeconds: 5, QueueGapMaxSeconds: 10, QueueMaxTasks: 2000,
 		MaxDiscoveryScripts: 16, MaxDiscoveryBytes: 16 << 20, RPCCacheSeconds: 15,
-		AutoRemoveWatermark: true}
+		AutoRemoveWatermark: true, AutoRemoveVideoWatermark: true}
 }
 
 func (c FlowConfig) Validate() error {

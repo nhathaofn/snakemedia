@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/models"
 	"SnakeMedia/internal/providers/flow/chrome"
+	"SnakeMedia/pkg/watermark"
 )
 
 // Following accepted video jobs: resume, polling, collecting and downloading.
@@ -263,6 +265,7 @@ func (s *Provider) collectVideoItems(ctx context.Context, client *chrome.FlowCli
 				logger.Get().Warn("cannot download generated video", "media", v.name, "error", dlErr)
 			} else {
 				item.LocalURL = local
+				s.removeVideoWatermark(ctx, v.name, local)
 				if edit {
 					file, pathErr := s.media.Path(local)
 					probeCtx, cancel := context.WithTimeout(ctx, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
@@ -467,6 +470,51 @@ func (s *Provider) downloadVideo(ctx context.Context, client *chrome.FlowClient,
 		return err
 	})
 	return local, err
+}
+
+// removeVideoWatermark strips Flow's mark from a downloaded video in place
+// when the setting is on. Any failure (no ffmpeg, no mark, a bad file) keeps
+// the video as Flow sent it.
+func (s *Provider) removeVideoWatermark(ctx context.Context, mediaID, localURL string) {
+	policy := s.cfg.Get().Flow
+	if !policy.AutoRemoveVideoWatermark {
+		return
+	}
+	keep := func(reason string, err error) {
+		logger.Get().Warn("cannot remove Flow video watermark; keeping the original", "media", mediaID, "reason", reason, "error", err)
+	}
+	file, err := s.media.Path(localURL)
+	if err != nil {
+		keep("path", err)
+		return
+	}
+	ffmpeg, err := media.FFmpeg(policy)
+	if err != nil {
+		keep("ffmpeg", err)
+		return
+	}
+	ffprobe, err := media.FFprobe(policy)
+	if err != nil {
+		keep("ffprobe", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(policy.VideoGenerationTimeoutSeconds)*time.Second)
+	defer cancel()
+	tmp := file + ".clean.mp4"
+	removed, err := watermark.Video{FFmpeg: ffmpeg, FFprobe: ffprobe, Prepare: media.HideWindow}.RemoveVideo(ctx, file, tmp)
+	if err != nil {
+		keep("ffmpeg run", err)
+		return
+	}
+	if !removed {
+		return
+	}
+	if err := os.Rename(tmp, file); err != nil {
+		_ = os.Remove(tmp)
+		keep("replace", err)
+		return
+	}
+	logger.Get().Info("removed Flow video watermark", "media", mediaID)
 }
 
 func videoFailed(v pendingVideo) bool {

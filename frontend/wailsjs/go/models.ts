@@ -253,6 +253,7 @@ export namespace config {
 	}
 	export class FlowConfig {
 	    probePath: string;
+	    ffmpegPath: string;
 	    uploadAttempts: number;
 	    uploadRetryDelayMs: number;
 	    maxPollFailures: number;
@@ -274,6 +275,7 @@ export namespace config {
 	    maxDiscoveryScripts: number;
 	    rpcCacheSeconds: number;
 	    autoRemoveWatermark: boolean;
+	    autoRemoveVideoWatermark: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new FlowConfig(source);
@@ -282,6 +284,7 @@ export namespace config {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.probePath = source["probePath"];
+	        this.ffmpegPath = source["ffmpegPath"];
 	        this.uploadAttempts = source["uploadAttempts"];
 	        this.uploadRetryDelayMs = source["uploadRetryDelayMs"];
 	        this.maxPollFailures = source["maxPollFailures"];
@@ -303,6 +306,7 @@ export namespace config {
 	        this.maxDiscoveryScripts = source["maxDiscoveryScripts"];
 	        this.rpcCacheSeconds = source["rpcCacheSeconds"];
 	        this.autoRemoveWatermark = source["autoRemoveWatermark"];
+	        this.autoRemoveVideoWatermark = source["autoRemoveVideoWatermark"];
 	    }
 	}
 	export class AppConfig {

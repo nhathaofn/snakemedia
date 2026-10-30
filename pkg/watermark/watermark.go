@@ -25,6 +25,14 @@ var bg48Data []byte
 //go:embed assets/bg_96.png
 var bg96Data []byte
 
+// video_48.png is the mark of Flow's 720p videos, measured on a real video
+// (the mark stays still while the picture moves). It has the image mark's
+// shape but a flat, stronger fill and a brighter rim, so the image alpha maps
+// over-correct videos.
+//
+//go:embed assets/video_48.png
+var video48Data []byte
+
 // Info holds details about the detected watermark location and size.
 type Info struct {
 	Size     int
@@ -37,51 +45,107 @@ type template struct {
 	sumAlpha float64
 	denAlpha float64
 	// minMargin and maxMargin bound the gap between the mark and the right and
-	// bottom edges. Flow places the 48 px mark 73-78 px in; the 96 px mark of
-	// large images sits proportionally further in.
+	// bottom edges. Flow places the 48 px image mark 73-78 px in and the video
+	// mark 94-96 px in (24 px, 46-48 px in at 360p).
 	minMargin int
 	maxMargin int
+	// minGain and maxGain bound the strength the template is blended at
+	// (see blendGain).
+	minGain float64
+	maxGain float64
+	// edgeBand widens the smoothed contour: video stores colour at half
+	// resolution, so its mark leaves a colour fringe a pixel past the edge.
+	edgeBand int
+	// colour is the overlay's colour. Images are marked in white; the video
+	// mark is a warm white, and unblending it as white leaves an orange tint.
+	colour [3]float64
+	// denoise scales how strongly amplified noise inside the star is evened
+	// out (see denoiseInside); video noise is mostly fine detail worth keeping.
+	denoise float64
 }
 
 var (
-	templatesOnce sync.Once
-	cachedTmpls   []template
+	templatesOnce  sync.Once
+	imageTemplates []template
+	videoTemplates []template
 )
 
 // initTemplates reads the alpha maps captured from the real marks. They are
-// used at their own size only: a rescaled star does not match Flow's
-// rendering, and small stand-ins correlate with ordinary picture detail.
+// used at the sizes Flow renders: small stand-ins correlate with ordinary
+// picture detail. Flow blends the image maps at 0.57-0.65 of their alpha; the
+// video map is the measured alpha itself.
 func initTemplates() {
 	templatesOnce.Do(func() {
-		for _, src := range []struct {
-			data     []byte
-			min, max int
-		}{{bg48Data, 56, 104}, {bg96Data, 112, 208}} {
-			img, err := png.Decode(bytes.NewReader(src.data))
-			if err != nil {
-				panic(fmt.Sprintf("watermark: decode embedded template: %v", err))
-			}
-			b := img.Bounds()
-			sz := b.Dx()
-			alpha := make([]float32, sz*sz)
-			var sum float64
-			for y := 0; y < sz; y++ {
-				for x := 0; x < sz; x++ {
-					c := color.RGBAModel.Convert(img.At(b.Min.X+x, b.Min.Y+y)).(color.RGBA)
-					a := float32(max(c.R, c.G, c.B)) / 255
-					alpha[y*sz+x] = a
-					sum += float64(a)
-				}
-			}
-			mean := sum / float64(len(alpha))
-			var sumSq float64
-			for _, a := range alpha {
-				d := float64(a) - mean
-				sumSq += d * d
-			}
-			cachedTmpls = append(cachedTmpls, template{size: sz, alpha: alpha, sumAlpha: sum, denAlpha: math.Sqrt(sumSq), minMargin: src.min, maxMargin: src.max})
+		img48, img96, vid48 := decodeAlpha(bg48Data), decodeAlpha(bg96Data), decodeAlpha(video48Data)
+		imageTemplates = []template{
+			newTemplate(img48, 56, 104, 0.4, 0.9, 0, 4, white),
+			newTemplate(img96, 112, 208, 0.4, 0.9, 0, 4, white),
+		}
+		videoTemplates = []template{
+			newTemplate(vid48, 80, 112, 0.5, 1.4, 1, 1.5, videoColour),
+			newTemplate(halve(vid48), 36, 60, 0.5, 1.4, 1, 1.5, videoColour),
+			// Some videos carry the soft-edged image mark at the video's place.
+			newTemplate(img48, 80, 112, 0.4, 0.9, 1, 1.5, white),
+			newTemplate(halve(img48), 36, 60, 0.4, 0.9, 1, 1.5, white),
 		}
 	})
+}
+
+var (
+	white = [3]float64{255, 255, 255}
+	// videoColour is the video mark's colour, measured on the luma (235, the
+	// top of video range) and colour planes of a real video.
+	videoColour = [3]float64{255, 253, 243}
+)
+
+// decodeAlpha reads a square alpha map stored as max(R, G, B) / 255.
+func decodeAlpha(data []byte) [][]float32 {
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		panic(fmt.Sprintf("watermark: decode embedded template: %v", err))
+	}
+	b := img.Bounds()
+	rows := make([][]float32, b.Dy())
+	for y := range rows {
+		rows[y] = make([]float32, b.Dx())
+		for x := range rows[y] {
+			c := color.RGBAModel.Convert(img.At(b.Min.X+x, b.Min.Y+y)).(color.RGBA)
+			rows[y][x] = float32(max(c.R, c.G, c.B)) / 255
+		}
+	}
+	return rows
+}
+
+// halve averages 2x2 blocks: the 360p video mark is the 720p one at half size.
+func halve(rows [][]float32) [][]float32 {
+	out := make([][]float32, len(rows)/2)
+	for y := range out {
+		out[y] = make([]float32, len(rows[0])/2)
+		for x := range out[y] {
+			out[y][x] = (rows[2*y][2*x] + rows[2*y][2*x+1] + rows[2*y+1][2*x] + rows[2*y+1][2*x+1]) / 4
+		}
+	}
+	return out
+}
+
+func newTemplate(rows [][]float32, minMargin, maxMargin int, minGain, maxGain float64, edgeBand int, denoise float64, colour [3]float64) template {
+	sz := len(rows)
+	alpha := make([]float32, 0, sz*sz)
+	var sum float64
+	for _, row := range rows {
+		for _, a := range row {
+			alpha = append(alpha, a)
+			sum += float64(a)
+		}
+	}
+	mean := sum / float64(len(alpha))
+	var sumSq float64
+	for _, a := range alpha {
+		d := float64(a) - mean
+		sumSq += d * d
+	}
+	return template{size: sz, alpha: alpha, sumAlpha: sum, denAlpha: math.Sqrt(sumSq),
+		minMargin: minMargin, maxMargin: maxMargin, minGain: minGain, maxGain: maxGain, edgeBand: edgeBand, denoise: denoise, colour: colour}
 }
 
 // Detect checks if the given image data contains a visible Gemini/Flow watermark.
@@ -171,11 +235,15 @@ const (
 // blend, so it is left alone.
 func findWatermark(img image.Image) matchResult {
 	initTemplates()
+	return findWith(img, imageTemplates)
+}
+
+func findWith(img image.Image, templates []template) matchResult {
 	bounds := img.Bounds()
 	w, h := bounds.Dx(), bounds.Dy()
 
 	best := matchResult{}
-	for _, tmpl := range cachedTmpls {
+	for _, tmpl := range templates {
 		sz := tmpl.size
 		if sz+tmpl.maxMargin > w/2 || sz+tmpl.maxMargin > h/2 {
 			continue
@@ -232,7 +300,7 @@ func findWatermark(img image.Image) matchResult {
 }
 
 // reconstructWatermark removes the watermark by reverse alpha blending with the
-// template's own alpha map: original = (marked - a*255) / (1 - a). The overlay's
+// template's own alpha map: original = (marked - a*colour) / (1 - a). The overlay's
 // strength varies between images, so it is measured on the image (blendGain)
 // instead of fixed. Only the contour, where JPEG ringing does not follow the
 // alpha map, is smoothed afterwards; the rest keeps its real texture.
@@ -245,6 +313,7 @@ func reconstructWatermark(rgba *image.RGBA, match matchResult) {
 	}
 	alpha := match.template.alpha
 	gain := match.gain
+	col := match.template.colour
 
 	for y := 0; y < sz; y++ {
 		for x := 0; x < sz; x++ {
@@ -256,33 +325,26 @@ func reconstructWatermark(rgba *image.RGBA, match matchResult) {
 				a = 0.95
 			}
 			c := rgba.RGBAAt(wmX+x, wmY+y)
-			rgba.SetRGBA(wmX+x, wmY+y, color.RGBA{R: unblend(c.R, a), G: unblend(c.G, a), B: unblend(c.B, a), A: 255})
+			rgba.SetRGBA(wmX+x, wmY+y, color.RGBA{R: unblend(c.R, a, col[0]), G: unblend(c.G, a, col[1]), B: unblend(c.B, a, col[2]), A: 255})
 		}
 	}
 	smoothContour(rgba, match)
 	denoiseInside(rgba, match, gain)
 }
 
-func unblend(c uint8, a float64) uint8 {
-	return clamp8((float64(c) - a*255) / (1 - a))
+func unblend(c uint8, a, colour float64) uint8 {
+	return clamp8((float64(c) - a*colour) / (1 - a))
 }
 
 func clamp8(v float64) uint8 {
 	return uint8(math.Round(math.Max(0, math.Min(255, v))))
 }
 
-// Flow blends the mark at 0.57-0.65 of the template's alpha. A patch that
-// needs a gain outside this range to lose the star is not the mark.
-const (
-	minGain = 0.4
-	maxGain = 0.9
-)
-
 // blendGain finds how strongly the template was blended into this image: the
 // gain at which the unblended patch keeps no trace of the template's edges
 // (its gradient no longer correlates with the template's gradient). Scene
 // edges do not follow the star's contour, so they barely move the result.
-// ok is false when no gain in [minGain, maxGain] does that.
+// ok is false when no gain in the template's range does that.
 func blendGain(img image.Image, match matchResult) (gain float64, ok bool) {
 	sz := match.size
 	alpha := match.template.alpha
@@ -305,7 +367,7 @@ func blendGain(img image.Image, match matchResult) (gain float64, ok bool) {
 		}
 		return sum
 	}
-	lo, hi := minGain, maxGain
+	lo, hi := match.template.minGain, match.template.maxGain
 	if residual(lo) <= 0 || residual(hi) >= 0 {
 		return 0, false
 	}
@@ -384,7 +446,7 @@ func refineGainOnFlat(img image.Image, match matchResult, gain float64) float64 
 	if _, spread, ok := coreGap(img, match, gain); !ok || spread > flatSpread {
 		return gain
 	}
-	lo, hi := minGain, maxGain
+	lo, hi := match.template.minGain, match.template.maxGain
 	if gap(lo) <= 0 || gap(hi) >= 0 {
 		return gain
 	}
@@ -411,13 +473,26 @@ func smoothContour(rgba *image.RGBA, match matchResult) {
 		}
 		return float64(alpha[y*sz+x])
 	}
-	src := image.NewRGBA(rgba.Bounds())
-	draw.Draw(src, src.Bounds(), rgba, rgba.Bounds().Min, draw.Src)
+	edge := func(x, y int) bool {
+		gx, gy := at(x+1, y)-at(x-1, y), at(x, y+1)-at(x, y-1)
+		return gx*gx+gy*gy >= 0.004
+	}
+	band := match.template.edgeBand
+	nearEdge := func(x, y int) bool {
+		for dy := -band; dy <= band; dy++ {
+			for dx := -band; dx <= band; dx++ {
+				if edge(x+dx, y+dy) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	src := copyAround(rgba, match)
 	var r, g, b [25]uint8
-	for y := 0; y < sz; y++ {
-		for x := 0; x < sz; x++ {
-			gx, gy := at(x+1, y)-at(x-1, y), at(x, y+1)-at(x, y-1)
-			if gx*gx+gy*gy < 0.004 {
+	for y := -band; y < sz+band; y++ {
+		for x := -band; x < sz+band; x++ {
+			if !nearEdge(x, y) {
 				continue
 			}
 			n := 0
@@ -441,18 +516,16 @@ const (
 	denoiseRadius = 3
 	spaceSigma    = 1.5
 	rangeSigma    = 14.0
-	denoiseScale  = 4.0
 )
 
 func denoiseInside(rgba *image.RGBA, match matchResult, gain float64) {
 	sz := match.size
-	src := image.NewRGBA(rgba.Bounds())
-	draw.Draw(src, src.Bounds(), rgba, rgba.Bounds().Min, draw.Src)
-	b := rgba.Bounds()
+	src := copyAround(rgba, match)
+	b := src.Bounds()
 	for y := 0; y < sz; y++ {
 		for x := 0; x < sz; x++ {
 			a := math.Min(float64(match.template.alpha[y*sz+x])*gain, 0.95)
-			w := math.Min(1, a/(1-a)*denoiseScale)
+			w := math.Min(1, a/(1-a)*match.template.denoise)
 			if w < 0.02 {
 				continue
 			}
@@ -478,6 +551,16 @@ func denoiseInside(rgba *image.RGBA, match matchResult, gain float64) {
 			rgba.SetRGBA(px, py, color.RGBA{R: mix(c.R, sr), G: mix(c.G, sg), B: mix(c.B, sb), A: 255})
 		}
 	}
+}
+
+// copyAround copies the template box and a margin wide enough for the
+// filters, so a video frame is not copied whole for every frame.
+func copyAround(rgba *image.RGBA, match matchResult) *image.RGBA {
+	const margin = 4
+	r := image.Rect(match.x-margin, match.y-margin, match.x+match.size+margin, match.y+match.size+margin).Intersect(rgba.Bounds())
+	src := image.NewRGBA(r)
+	draw.Draw(src, r, rgba, r.Min, draw.Src)
+	return src
 }
 
 func median(v [25]uint8) uint8 {
