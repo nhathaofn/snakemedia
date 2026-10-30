@@ -253,6 +253,7 @@ export namespace config {
 	}
 	export class FlowConfig {
 	    probePath: string;
+	    ffmpegPath: string;
 	    uploadAttempts: number;
 	    uploadRetryDelayMs: number;
 	    maxPollFailures: number;
@@ -273,6 +274,8 @@ export namespace config {
 	    maxDiscoveryBytes: number;
 	    maxDiscoveryScripts: number;
 	    rpcCacheSeconds: number;
+	    autoRemoveWatermark: boolean;
+	    autoRemoveVideoWatermark: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new FlowConfig(source);
@@ -281,6 +284,7 @@ export namespace config {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.probePath = source["probePath"];
+	        this.ffmpegPath = source["ffmpegPath"];
 	        this.uploadAttempts = source["uploadAttempts"];
 	        this.uploadRetryDelayMs = source["uploadRetryDelayMs"];
 	        this.maxPollFailures = source["maxPollFailures"];
@@ -301,6 +305,8 @@ export namespace config {
 	        this.maxDiscoveryBytes = source["maxDiscoveryBytes"];
 	        this.maxDiscoveryScripts = source["maxDiscoveryScripts"];
 	        this.rpcCacheSeconds = source["rpcCacheSeconds"];
+	        this.autoRemoveWatermark = source["autoRemoveWatermark"];
+	        this.autoRemoveVideoWatermark = source["autoRemoveVideoWatermark"];
 	    }
 	}
 	export class AppConfig {
@@ -627,6 +633,7 @@ export namespace events {
 	    FlowImageTaskUpdated = "flow:image-task-updated",
 	    FlowImageTasksAdded = "flow:image-tasks-added",
 	    FlowImageTasksRemoved = "flow:image-tasks-removed",
+	    FlowVideoToolsMissing = "flow:video-tools-missing",
 	    MuseJobUpdated = "muse:job-updated",
 	    MuseJobsRemoved = "muse:jobs-removed",
 	    UpdateAvailable = "update:available",
@@ -1285,6 +1292,22 @@ export namespace media {
 	        this.canceled = source["canceled"];
 	    }
 	}
+	export class VideoTools {
+	    ffmpeg: string;
+	    ffprobe: string;
+	    missing: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new VideoTools(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ffmpeg = source["ffmpeg"];
+	        this.ffprobe = source["ffprobe"];
+	        this.missing = source["missing"];
+	    }
+	}
 
 }
 
@@ -1528,6 +1551,42 @@ export namespace models {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
 	        this.data = this.convertValues(source["data"], media.SaveResult);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_media_VideoTools_ {
+	    success: boolean;
+	    data: media.VideoTools;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_media_VideoTools_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], media.VideoTools);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }

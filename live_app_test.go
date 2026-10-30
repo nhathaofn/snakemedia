@@ -150,6 +150,13 @@ func liveFlowImage(t *testing.T, a *App) {
 		RequestID: uuid.NewString(), Prompt: "a small red paper boat on a calm lake, morning light",
 		ModelID: model.ID, AspectRatio: "1:1", Count: 1,
 	}
+	// SNAKEMEDIA_LIVE_IMAGE_PROMPT and _RATIO replace the default prompt and ratio.
+	if env := os.Getenv("SNAKEMEDIA_LIVE_IMAGE_PROMPT"); env != "" {
+		req.Prompt = env
+	}
+	if env := os.Getenv("SNAKEMEDIA_LIVE_IMAGE_RATIO"); env != "" {
+		req.AspectRatio = env
+	}
 	t.Logf("image request %s model=%s", req.RequestID, model.ID)
 	first := a.GenerateImages(req)
 	t.Logf("first: ok=%v code=%v err=%q items=%s", first.Success, first.Code, first.Error, dump(first.Data))

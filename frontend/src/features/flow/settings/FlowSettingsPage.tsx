@@ -5,6 +5,7 @@ import {
   SettingsSection,
   SettingsShell,
   TextSetting,
+  ToggleSetting,
 } from '../../../components/settings';
 import { useConfigSection } from '../../../hooks';
 
@@ -99,6 +100,28 @@ export const FlowSettingsPage: React.FC = () => {
           </>
         }
       >
+        <SettingRow
+          label="Tự động xóa watermark"
+          hint="Đảo ngược watermark ngôi sao góc phải của Flow (Reverse Alpha Blending) không làm suy giảm chất lượng ảnh."
+        >
+          <ToggleSetting
+            aria-label="Tự động xóa watermark"
+            value={flow.autoRemoveWatermark ?? true}
+            disabled={saving}
+            onChange={(autoRemoveWatermark) => patchFlow({ autoRemoveWatermark })}
+          />
+        </SettingRow>
+        <SettingRow
+          label="Tự động xóa watermark video"
+          hint="Xóa ngôi sao góc phải của video Flow sau khi tải về. Cần FFmpeg trên máy; không có thì giữ nguyên video."
+        >
+          <ToggleSetting
+            aria-label="Tự động xóa watermark video"
+            value={flow.autoRemoveVideoWatermark}
+            disabled={saving}
+            onChange={(autoRemoveVideoWatermark) => patchFlow({ autoRemoveVideoWatermark })}
+          />
+        </SettingRow>
         <SettingRow
           label="Yêu cầu cùng lúc mỗi tài khoản"
           hint="Số ảnh/video một tài khoản chạy song song."
@@ -243,6 +266,15 @@ export const FlowSettingsPage: React.FC = () => {
             placeholder="Tự tìm"
             disabled={saving}
             onCommit={(probePath) => patchFlow({ probePath })}
+          />
+        </SettingRow>
+        <SettingRow label="ffmpeg" hint="Để trống: tìm trong PATH. Cần để xóa watermark video.">
+          <TextSetting
+            aria-label="Đường dẫn ffmpeg"
+            value={flow.ffmpegPath}
+            placeholder="Tự tìm"
+            disabled={saving}
+            onCommit={(ffmpegPath) => patchFlow({ ffmpegPath })}
           />
         </SettingRow>
       </SettingsSection>

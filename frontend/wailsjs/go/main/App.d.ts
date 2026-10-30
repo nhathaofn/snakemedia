@@ -25,6 +25,8 @@ export function CheckMusePrompt(arg1:string,arg2:Array<string>):Promise<models.R
 
 export function CheckProxies():Promise<models.Response___SnakeMedia_internal_proxy_CheckResult_>;
 
+export function CheckVideoTools():Promise<models.Response_SnakeMedia_internal_media_VideoTools_>;
+
 export function ChooseBatchOutputDirectory(arg1:accounts.Provider):Promise<models.Response_SnakeMedia_internal_media_DirectoryResult_>;
 
 export function CleanMuseChats():Promise<models.Response___SnakeMedia_internal_providers_muse_MuseCleanResult_>;

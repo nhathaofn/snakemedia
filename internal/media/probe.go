@@ -21,6 +21,64 @@ type VideoMetadata struct {
 	DurationSeconds float64 `json:"durationSeconds"`
 }
 
+// HideWindow keeps the console window of a helper program (ffmpeg, ffprobe)
+// from showing.
+func HideWindow(cmd *exec.Cmd) { hideProbeWindow(cmd) }
+
+// FFprobe is ffprobe from configuration, next to a configured ffmpeg, or PATH.
+func FFprobe(policy config.FlowConfig) (string, error) {
+	program, err := findTool("ffprobe", policy.ProbePath, policy.FFmpegPath)
+	if err != nil {
+		return "", errors.New("Không tìm thấy ffprobe; cài FFmpeg vào PATH hoặc cấu hình flow.probePath.")
+	}
+	return program, nil
+}
+
+// FFmpeg is ffmpeg from configuration, next to a configured ffprobe, or PATH.
+func FFmpeg(policy config.FlowConfig) (string, error) {
+	program, err := findTool("ffmpeg", policy.FFmpegPath, policy.ProbePath)
+	if err != nil {
+		return "", errors.New("Không tìm thấy ffmpeg; cài FFmpeg vào PATH hoặc cấu hình flow.ffmpegPath.")
+	}
+	return program, nil
+}
+
+// findTool returns the configured path (when it exists), else the program in
+// the folder of its configured sibling (FFmpeg ships both in one bin
+// folder), else PATH.
+func findTool(name, configured, sibling string) (string, error) {
+	if configured != "" {
+		return exec.LookPath(configured)
+	}
+	if sibling != "" {
+		if path, err := exec.LookPath(filepath.Join(filepath.Dir(sibling), name)); err == nil {
+			return path, nil
+		}
+	}
+	return exec.LookPath(name)
+}
+
+// VideoTools is what the video watermark removal finds on this machine.
+// Missing lists the programs it could not find ("ffmpeg", "ffprobe").
+type VideoTools struct {
+	FFmpeg  string   `json:"ffmpeg"`
+	FFprobe string   `json:"ffprobe"`
+	Missing []string `json:"missing"`
+}
+
+// CheckVideoTools looks for ffmpeg and ffprobe the way the removal does.
+func CheckVideoTools(policy config.FlowConfig) VideoTools {
+	tools := VideoTools{Missing: []string{}}
+	var err error
+	if tools.FFmpeg, err = FFmpeg(policy); err != nil {
+		tools.Missing = append(tools.Missing, "ffmpeg")
+	}
+	if tools.FFprobe, err = FFprobe(policy); err != nil {
+		tools.Missing = append(tools.Missing, "ffprobe")
+	}
+	return tools
+}
+
 // ProbeVideo reads MP4, MOV and M4V headers directly, so the common formats
 // work without FFmpeg; other files (WebM) and unreadable headers fall back to
 // ffprobe from configuration or PATH. There are no machine paths or assumed
@@ -32,13 +90,9 @@ func ProbeVideo(ctx context.Context, file string, policy config.FlowConfig) (Vid
 			return meta, nil
 		}
 	}
-	program := policy.ProbePath
-	if program == "" {
-		var err error
-		program, err = exec.LookPath("ffprobe")
-		if err != nil {
-			return VideoMetadata{}, errors.New("Không tìm thấy ffprobe; cài FFmpeg vào PATH hoặc cấu hình flow.probePath.")
-		}
+	program, err := FFprobe(policy)
+	if err != nil {
+		return VideoMetadata{}, err
 	}
 	cmd := exec.CommandContext(ctx, program, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,duration:stream_side_data=rotation:format=duration", "-of", "json", file)
 	hideProbeWindow(cmd)

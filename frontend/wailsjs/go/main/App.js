@@ -38,6 +38,10 @@ export function CheckProxies() {
   return window['go']['main']['App']['CheckProxies']();
 }
 
+export function CheckVideoTools() {
+  return window['go']['main']['App']['CheckVideoTools']();
+}
+
 export function ChooseBatchOutputDirectory(arg1) {
   return window['go']['main']['App']['ChooseBatchOutputDirectory'](arg1);
 }

@@ -1,5 +1,6 @@
 import { Clapperboard, Image, Scissors, Settings, Workflow } from 'lucide-react';
 import { FlowPreviousRunReport } from './shared/PreviousRunReport';
+import { VideoToolsPrompt } from './shared/VideoToolsPrompt';
 import type { AppSection } from '../../types';
 import { lazyPage } from '../../routes/lazyPage';
 
@@ -16,8 +17,14 @@ export const flowSection = {
   path: '/flow',
   label: 'Flow',
   icon: Workflow,
-  // Tells the start question what the earlier run left in Chỉnh sửa video.
-  startup: <FlowPreviousRunReport />,
+  // Tells the start question what the earlier run left in Chỉnh sửa video,
+  // and asks for FFmpeg when the video watermark removal cannot run.
+  startup: (
+    <>
+      <FlowPreviousRunReport />
+      <VideoToolsPrompt />
+    </>
+  ),
   features: [
     {
       id: 'image',

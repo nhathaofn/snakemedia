@@ -683,6 +683,14 @@ func (q *imageQueue) interrupted(id string) {
 	}
 }
 
+// notify sends an event through the emitter the provider was started with.
+func (q *imageQueue) notify(event events.Event, payload any) {
+	q.mu.Lock()
+	emit := q.emit
+	q.mu.Unlock()
+	emit(event, payload)
+}
+
 func (q *imageQueue) stamp() string { return q.now().UTC().Format(time.RFC3339) }
 
 func (q *imageQueue) publish(t ImageTask) {

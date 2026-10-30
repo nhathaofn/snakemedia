@@ -224,6 +224,12 @@ func (a *App) OpenLogFolder() models.Response[bool] {
 	return logged("OpenLogFolder", a.updates.OpenLogFolder())
 }
 
+// CheckVideoTools reports whether ffmpeg and ffprobe, which the video
+// watermark removal needs, are found (Flow settings path or PATH).
+func (a *App) CheckVideoTools() models.Response[media.VideoTools] {
+	return models.SuccessResponse(media.CheckVideoTools(a.cfg.Get().Flow))
+}
+
 // GetSystemInfo exposes host runtime information.
 func (a *App) GetSystemInfo() models.Response[services.SystemInfo] {
 	return a.system.GetSystemInfo(a.ctx)
