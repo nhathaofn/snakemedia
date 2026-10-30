@@ -16,6 +16,7 @@ import (
 	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/models"
 	"SnakeMedia/internal/providers/flow/chrome"
+	"SnakeMedia/pkg/watermark"
 	"github.com/google/uuid"
 )
 
@@ -477,6 +478,7 @@ func (s *Provider) materializeGeneratedImages(ctx context.Context, client *chrom
 	for i := range images {
 		data, contentType, err := client.FetchMedia(ctx, images[i].URL, []string{"image/"}, s.cfg.Get().Flow.MaxImageBytes, time.Duration(s.cfg.Get().Flow.GenerationTimeoutSeconds)*time.Second)
 		if err == nil {
+			data, contentType = s.removeWatermark(images[i].ID, data, contentType)
 			images[i].LocalURL, err = s.media.Put(images[i].ID, contentType, ".png", data)
 		}
 		if err != nil {
@@ -536,11 +538,30 @@ func (s *Provider) upsampleGeneratedImage(ctx context.Context, client *chrome.Fl
 	if err != nil {
 		return "", err
 	}
+	data, contentType = s.removeWatermark(mediaID, data, contentType)
 	localURL, err := s.media.Put(mediaID, contentType, ".png", data)
 	if err != nil {
 		return "", fmt.Errorf("không lưu được ảnh đã nâng độ phân giải: %w", err)
 	}
 	return localURL, nil
+}
+
+// removeWatermark strips Flow's visible mark when the setting is on. An image
+// without the mark, or one that cannot be read, is kept as Flow sent it.
+func (s *Provider) removeWatermark(mediaID string, data []byte, contentType string) ([]byte, string) {
+	if !s.cfg.Get().Flow.AutoRemoveWatermark {
+		return data, contentType
+	}
+	cleaned, removed, err := watermark.Remove(data)
+	if err != nil {
+		logger.Get().Warn("cannot remove Flow watermark; keeping the original", "media", mediaID, "error", err)
+		return data, contentType
+	}
+	if !removed {
+		return data, contentType
+	}
+	logger.Get().Info("removed Flow watermark", "media", mediaID)
+	return cleaned, "image/png"
 }
 
 // validateReferences checks reference images before anything is uploaded.

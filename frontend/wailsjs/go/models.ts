@@ -273,6 +273,7 @@ export namespace config {
 	    maxDiscoveryBytes: number;
 	    maxDiscoveryScripts: number;
 	    rpcCacheSeconds: number;
+	    autoRemoveWatermark: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new FlowConfig(source);
@@ -301,6 +302,7 @@ export namespace config {
 	        this.maxDiscoveryBytes = source["maxDiscoveryBytes"];
 	        this.maxDiscoveryScripts = source["maxDiscoveryScripts"];
 	        this.rpcCacheSeconds = source["rpcCacheSeconds"];
+	        this.autoRemoveWatermark = source["autoRemoveWatermark"];
 	    }
 	}
 	export class AppConfig {

@@ -5,6 +5,7 @@ import {
   SettingsSection,
   SettingsShell,
   TextSetting,
+  ToggleSetting,
 } from '../../../components/settings';
 import { useConfigSection } from '../../../hooks';
 
@@ -99,6 +100,17 @@ export const FlowSettingsPage: React.FC = () => {
           </>
         }
       >
+        <SettingRow
+          label="Tự động xóa watermark"
+          hint="Đảo ngược watermark ngôi sao góc phải của Flow (Reverse Alpha Blending) không làm suy giảm chất lượng ảnh."
+        >
+          <ToggleSetting
+            aria-label="Tự động xóa watermark"
+            value={flow.autoRemoveWatermark ?? true}
+            disabled={saving}
+            onChange={(autoRemoveWatermark) => patchFlow({ autoRemoveWatermark })}
+          />
+        </SettingRow>
         <SettingRow
           label="Yêu cầu cùng lúc mỗi tài khoản"
           hint="Số ảnh/video một tài khoản chạy song song."

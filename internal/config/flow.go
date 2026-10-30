@@ -48,6 +48,9 @@ type FlowConfig struct {
 	MaxDiscoveryBytes   int64 `json:"maxDiscoveryBytes"`
 	MaxDiscoveryScripts int   `json:"maxDiscoveryScripts"`
 	RPCCacheSeconds     int   `json:"rpcCacheSeconds"`
+	// AutoRemoveWatermark automatically strips the visible Gemini/Flow watermark
+	// from generated images using reverse alpha blending.
+	AutoRemoveWatermark bool `json:"autoRemoveWatermark"`
 }
 
 func DefaultFlowConfig() FlowConfig {
@@ -55,7 +58,8 @@ func DefaultFlowConfig() FlowConfig {
 		GenerationTimeoutSeconds: 120, VideoGenerationTimeoutSeconds: 600, VideoPollIntervalMS: 5000,
 		MaxConcurrentRequestsPerAccount: 2, SignedOutReads: 3,
 		QueueThreads: 1, QueueGapMinSeconds: 5, QueueGapMaxSeconds: 10, QueueMaxTasks: 2000,
-		MaxDiscoveryScripts: 16, MaxDiscoveryBytes: 16 << 20, RPCCacheSeconds: 15}
+		MaxDiscoveryScripts: 16, MaxDiscoveryBytes: 16 << 20, RPCCacheSeconds: 15,
+		AutoRemoveWatermark: true}
 }
 
 func (c FlowConfig) Validate() error {
