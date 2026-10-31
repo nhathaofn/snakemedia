@@ -1046,6 +1046,7 @@ export namespace flow {
 	    step?: string;
 	    requestId?: string;
 	    rechecks?: number;
+	    refusedBy?: string[];
 	    nextCheckAt?: string;
 	    results: GeneratedImageItem[];
 	    savedFiles: string[];
@@ -1076,6 +1077,7 @@ export namespace flow {
 	        this.step = source["step"];
 	        this.requestId = source["requestId"];
 	        this.rechecks = source["rechecks"];
+	        this.refusedBy = source["refusedBy"];
 	        this.nextCheckAt = source["nextCheckAt"];
 	        this.results = this.convertValues(source["results"], GeneratedImageItem);
 	        this.savedFiles = source["savedFiles"];
