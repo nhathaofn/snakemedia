@@ -247,7 +247,10 @@ func (s *Provider) GenerateVideos(ctx context.Context, req GenerateVideoRequest)
 			for i := range pending {
 				pending[i].ModelName = displayName(chosen.family.name)
 			}
-			job.Phase, job.VideoResult = generationAccepted, append([]GeneratedVideoItem(nil), pending...)
+			// The phase stays as reconciliation left it: an unknown outcome is not
+			// proof Flow accepted the job, and only a submitting job can later be
+			// closed as lost (submissionLost).
+			job.VideoResult = append([]GeneratedVideoItem(nil), pending...)
 			_ = s.saveGenerationJob(job)
 			return models.SuccessResponse(pending)
 		}

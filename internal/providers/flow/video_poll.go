@@ -123,6 +123,12 @@ func (s *Provider) reconcileVideoGenerationWithClient(ctx context.Context, clien
 			known[strings.ToLower(record.ClientID)] = true
 		}
 	}
+	if job.Phase == generationAccepted && len(job.Videos) == 0 {
+		// Older builds marked a job accepted after a send whose answer was lost,
+		// with no video seen. Nothing proves Flow took it, so it is checked as an
+		// unconfirmed submission and closed once Flow still lists nothing.
+		job.Phase = generationSubmitting
+	}
 	listed := true
 	if len(known) < len(job.ClientIDs) {
 		listing, err := s.projectContentsPayload(ctx, client, job.ProjectID)

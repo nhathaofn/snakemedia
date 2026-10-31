@@ -33,8 +33,15 @@ export const FlowVideoWorkspace: React.FC = () => {
   const saveMedia = useSaveMedia();
   const { prompt, items, referenceImages, turns } = store;
 
-  useRestoreJobs(useFlowVideoStore, api.listPendingVideoGenerations, 'Đang đối soát job tạo video');
   const { resuming, resumeJob } = useResumeJob(useFlowVideoStore, api.resumeVideoGeneration);
+  // Jobs left unfinished are checked again on open, so one Flow settled shows
+  // its result or error instead of waiting for "Kiểm tra tiếp".
+  useRestoreJobs(
+    useFlowVideoStore,
+    api.listPendingVideoGenerations,
+    'Đang đối soát job tạo video',
+    (jobIds) => jobIds.forEach((id) => void resumeJob(id)),
+  );
   const stopGeneration = useStopGeneration();
 
   const referenceLimit = model?.maxReferenceImages ?? 0;
