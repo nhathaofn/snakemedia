@@ -5,6 +5,7 @@ import (
 	"SnakeMedia/internal/config"
 	"SnakeMedia/internal/media"
 	"SnakeMedia/internal/providers/flow/session"
+	"SnakeMedia/internal/tools"
 	"context"
 	"errors"
 	"fmt"
@@ -39,6 +40,8 @@ type Provider struct {
 	accounts Accounts
 	cfg      *config.Manager
 	media    *media.Store
+	// tools finds ffmpeg and ffprobe; nil in tests, where none is found.
+	tools *tools.Service
 	// jobLocks holds the request IDs a call is working on (tryJobLock).
 	jobLocksMu sync.Mutex
 	jobLocks   map[string]struct{}
@@ -259,4 +262,18 @@ func (s *Provider) GetStudioConfig(_ context.Context) models.Response[StudioConf
 		MaxReferenceBytes:  maxReferenceImageBytes(),
 		ReferenceMimeTypes: referenceMimeTypes(),
 	})
+}
+
+// program finds an external program for feature (internal/tools); a missing
+// one asks the user to download it.
+func (s *Provider) program(feature, name string) (string, error) {
+	if s.tools == nil {
+		return "", tools.ErrMissing
+	}
+	return s.tools.Program(feature, name)
+}
+
+// prober is ProbeVideo's ffprobe lookup for feature.
+func (s *Provider) prober(feature string) func() (string, error) {
+	return func() (string, error) { return s.program(feature, "ffprobe") }
 }

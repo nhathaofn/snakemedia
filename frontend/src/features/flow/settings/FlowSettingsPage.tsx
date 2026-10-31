@@ -4,7 +4,6 @@ import {
   SettingRow,
   SettingsSection,
   SettingsShell,
-  TextSetting,
   ToggleSetting,
 } from '../../../components/settings';
 import { useConfigSection } from '../../../hooks';
@@ -230,51 +229,27 @@ export const FlowSettingsPage: React.FC = () => {
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection
-        title="Chỉnh sửa video"
-        advanced={
-          <>
-            <SettingRow label="Số lần tải lên">
-              <NumberSetting
-                aria-label="Số lần tải lên"
-                value={flow.uploadAttempts}
-                min={1}
-                max={10}
-                disabled={saving}
-                onCommit={(uploadAttempts) => patchFlow({ uploadAttempts })}
-              />
-            </SettingRow>
-            <SettingRow label="Nghỉ giữa hai lần tải lên">
-              <NumberSetting
-                aria-label="Nghỉ giữa hai lần tải lên"
-                value={flow.uploadRetryDelayMs}
-                min={0}
-                max={60000}
-                step={100}
-                unit="ms"
-                disabled={saving}
-                onCommit={(uploadRetryDelayMs) => patchFlow({ uploadRetryDelayMs })}
-              />
-            </SettingRow>
-          </>
-        }
-      >
-        <SettingRow label="ffprobe" hint="Để trống: tìm trong PATH. Chỉ cần cho WebM hoặc file lạ.">
-          <TextSetting
-            aria-label="Đường dẫn ffprobe"
-            value={flow.probePath}
-            placeholder="Tự tìm"
+      <SettingsSection title="Chỉnh sửa video">
+        <SettingRow label="Số lần tải lên">
+          <NumberSetting
+            aria-label="Số lần tải lên"
+            value={flow.uploadAttempts}
+            min={1}
+            max={10}
             disabled={saving}
-            onCommit={(probePath) => patchFlow({ probePath })}
+            onCommit={(uploadAttempts) => patchFlow({ uploadAttempts })}
           />
         </SettingRow>
-        <SettingRow label="ffmpeg" hint="Để trống: tìm trong PATH. Cần để xóa watermark video.">
-          <TextSetting
-            aria-label="Đường dẫn ffmpeg"
-            value={flow.ffmpegPath}
-            placeholder="Tự tìm"
+        <SettingRow label="Nghỉ giữa hai lần tải lên">
+          <NumberSetting
+            aria-label="Nghỉ giữa hai lần tải lên"
+            value={flow.uploadRetryDelayMs}
+            min={0}
+            max={60000}
+            step={100}
+            unit="ms"
             disabled={saving}
-            onCommit={(ffmpegPath) => patchFlow({ ffmpegPath })}
+            onCommit={(uploadRetryDelayMs) => patchFlow({ uploadRetryDelayMs })}
           />
         </SettingRow>
       </SettingsSection>

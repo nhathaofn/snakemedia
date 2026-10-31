@@ -18,6 +18,7 @@ import (
 	"SnakeMedia/internal/providers/flow"
 	"SnakeMedia/internal/providers/flow/chrome"
 	"SnakeMedia/internal/providers/muse"
+	"SnakeMedia/internal/tools"
 )
 
 //go:embed all:frontend/dist
@@ -83,6 +84,7 @@ func run() error {
 			app.providerEnum,
 			accounts.AllStatuses,
 			accounts.AllSources,
+			tools.AllOrigins,
 			engine.AllPortTypes,
 			engine.AllParamKinds,
 			chrome.AllTiers,

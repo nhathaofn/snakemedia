@@ -25,8 +25,6 @@ export function CheckMusePrompt(arg1:string,arg2:Array<string>):Promise<models.R
 
 export function CheckProxies():Promise<models.Response___SnakeMedia_internal_proxy_CheckResult_>;
 
-export function CheckVideoTools():Promise<models.Response_SnakeMedia_internal_media_VideoTools_>;
-
 export function ChooseBatchOutputDirectory(arg1:accounts.Provider):Promise<models.Response_SnakeMedia_internal_media_DirectoryResult_>;
 
 export function CleanMuseChats():Promise<models.Response___SnakeMedia_internal_providers_muse_MuseCleanResult_>;
@@ -71,6 +69,8 @@ export function GetStudioConfig():Promise<models.Response_SnakeMedia_internal_pr
 
 export function GetSystemInfo():Promise<models.Response_SnakeMedia_internal_services_SystemInfo_>;
 
+export function GetToolActivity():Promise<models.Response_SnakeMedia_internal_tools_Activity_>;
+
 export function GetUpdateProgress():Promise<models.Response_SnakeMedia_internal_updater_Progress_>;
 
 export function GetVideoModels():Promise<models.Response___SnakeMedia_internal_providers_flow_FlowVideoModel_>;
@@ -82,6 +82,8 @@ export function HoldMuseQueued(arg1:muse.MuseJobKind,arg2:muse.MuseJobMode):Prom
 export function ImportAccountCookies(arg1:accounts.Provider,arg2:string,arg3:string):Promise<models.Response_SnakeMedia_internal_accounts_Account_>;
 
 export function ImportFlowProjectImageReference(arg1:string,arg2:string,arg3:flow.ImageProjectMode,arg4:string):Promise<models.Response_SnakeMedia_internal_providers_flow_ImageTaskReference_>;
+
+export function InstallTool(arg1:string):Promise<models.Response_SnakeMedia_internal_tools_Tool_>;
 
 export function InstallUpdate():Promise<models.Response_bool_>;
 
@@ -103,6 +105,8 @@ export function ListPendingImageGenerations(arg1:flow.ImageProjectMode):Promise<
 
 export function ListPendingVideoGenerations():Promise<models.Response___SnakeMedia_internal_providers_flow_GeneratedVideoItem_>;
 
+export function ListTools():Promise<models.Response___SnakeMedia_internal_tools_Tool_>;
+
 export function ListVideoEditJobs():Promise<models.Response___SnakeMedia_internal_providers_flow_GeneratedVideoItem_>;
 
 export function OpenAccountBrowser(arg1:string):Promise<models.Response_SnakeMedia_internal_accounts_Account_>;
@@ -121,6 +125,8 @@ export function PickMuseSourceVideo():Promise<models.Response_SnakeMedia_interna
 
 export function PickVideo():Promise<models.Response_SnakeMedia_internal_media_ImportResult_>;
 
+export function PostponeTool(arg1:string):Promise<models.Response_bool_>;
+
 export function RemoveAccount(arg1:string):Promise<models.Response_bool_>;
 
 export function RemoveFlowImageTasks(arg1:Array<string>):Promise<models.Response_int_>;
@@ -134,6 +140,8 @@ export function RemoveMuseJobs(arg1:Array<string>):Promise<models.Response_int_>
 export function RemoveMuseLibraryItems(arg1:Array<string>):Promise<models.Response_int_>;
 
 export function RemoveMuseTemplate(arg1:string):Promise<models.Response_bool_>;
+
+export function RemoveTool(arg1:string):Promise<models.Response_bool_>;
 
 export function RenameAccount(arg1:string,arg2:string):Promise<models.Response_SnakeMedia_internal_accounts_Account_>;
 

@@ -24,6 +24,7 @@ import (
 	"SnakeMedia/internal/providers/muse"
 	"SnakeMedia/internal/proxy"
 	"SnakeMedia/internal/services"
+	"SnakeMedia/internal/tools"
 	"SnakeMedia/internal/updater"
 	"SnakeMedia/internal/window"
 )
@@ -42,6 +43,7 @@ type App struct {
 	flow                *flow.Provider
 	muse                *muse.Provider
 	media               *media.Store
+	tools               *tools.Service
 	batchOutputDefaults map[accounts.Provider]string
 	nodes               *engine.Registry
 	dispatcher          *events.Dispatcher
@@ -86,7 +88,11 @@ func NewApp(info buildinfo.Info) (*App, error) {
 	// remembered in the settings.
 	store.AllowRoot(p.ImageOutputDir)
 	store.AllowRootsFrom(func() []string { return []string{cfgManager.Get().Flow.BatchOutputDir} })
-	set.Build(providers.Deps{Paths: p, Config: cfgManager, Media: store, Accounts: accts, ProductName: info.ProductName})
+	toolSet, err := tools.New(p.ToolsDir, info.Name+"/"+info.Version, func() map[string]string { return cfgManager.Get().Tools.Paths })
+	if err != nil {
+		return nil, err
+	}
+	set.Build(providers.Deps{Paths: p, Config: cfgManager, Media: store, Accounts: accts, Tools: toolSet, ProductName: info.ProductName})
 	nodes := engine.NewRegistry()
 	if err := set.Register(nodes, store.SaveNode()); err != nil {
 		return nil, err
@@ -102,6 +108,7 @@ func NewApp(info buildinfo.Info) (*App, error) {
 		flow:                providers.Find[*flow.Provider](set),
 		muse:                providers.Find[*muse.Provider](set),
 		media:               store,
+		tools:               toolSet,
 		batchOutputDefaults: map[accounts.Provider]string{accounts.ProviderFlow: p.ImageOutputDir, accounts.ProviderMuse: p.MuseOutputDir},
 		nodes:               nodes,
 		requests:            services.NewRequestRegistry(),
@@ -129,6 +136,7 @@ func (a *App) startup(ctx context.Context) {
 	a.dispatcher = events.NewDispatcher(ctx)
 	emit := func(event events.Event, data any) { a.dispatcher.Emit(event, data) }
 	a.updates.Start(emit, func() { runtime.Quit(ctx) })
+	a.tools.Start(emit)
 	a.accounts.Start(ctx, emit)
 	a.providers.Start(ctx, emit)
 }
@@ -224,10 +232,41 @@ func (a *App) OpenLogFolder() models.Response[bool] {
 	return logged("OpenLogFolder", a.updates.OpenLogFolder())
 }
 
-// CheckVideoTools reports whether ffmpeg and ffprobe, which the video
-// watermark removal needs, are found (Flow settings path or PATH).
-func (a *App) CheckVideoTools() models.Response[media.VideoTools] {
-	return models.SuccessResponse(media.CheckVideoTools(a.cfg.Get().Flow))
+// ListTools reports every external tool (internal/tools) and where its
+// programs were found.
+func (a *App) ListTools() models.Response[[]tools.Tool] {
+	return models.SuccessResponse(a.tools.List())
+}
+
+// InstallTool downloads a tool into the app's tools folder after the user
+// chose to; progress arrives as events.EventToolProgress.
+func (a *App) InstallTool(id string) models.Response[tools.Tool] {
+	tool, err := a.tools.Install(a.ctx, id)
+	if err != nil {
+		return logged("InstallTool", models.ErrorResponse[tools.Tool](err.Error(), models.CodeUnavailable))
+	}
+	return models.SuccessResponse(tool)
+}
+
+// GetToolActivity returns the tool asks the user has not answered and the
+// running downloads, for a screen opened after they started.
+func (a *App) GetToolActivity() models.Response[tools.Activity] {
+	return models.SuccessResponse(tools.Activity{Requests: a.tools.Requests(), Downloads: a.tools.Progress()})
+}
+
+// PostponeTool answers a tool ask with "later": it is not asked again in
+// this run.
+func (a *App) PostponeTool(id string) models.Response[bool] {
+	a.tools.Postpone(id)
+	return models.SuccessResponse(true)
+}
+
+// RemoveTool deletes the app's own copy of a tool.
+func (a *App) RemoveTool(id string) models.Response[bool] {
+	if err := a.tools.Remove(id); err != nil {
+		return logged("RemoveTool", models.ErrorResponse[bool](err.Error(), models.CodeUnavailable))
+	}
+	return models.SuccessResponse(true)
 }
 
 // GetSystemInfo exposes host runtime information.

@@ -11,6 +11,7 @@ import { LOG_LEVEL_OPTIONS, THEME_OPTIONS, WINDOW_SCALE_OPTIONS } from '../../..
 import { useConfigSection, useConfigUpdate } from '../../../hooks';
 import { api } from '../../../services';
 import { useAppStore } from '../../../stores';
+import { ToolsSection } from './ToolsSection';
 import { UpdateSection } from './UpdateSection';
 
 const MB = 1 << 20;
@@ -173,6 +174,8 @@ export const SettingsPage: React.FC = () => {
           </SettingRow>
         </SettingsSection>
       )}
+
+      <ToolsSection />
 
       <SettingsSection title="Chẩn đoán">
         <SettingRow

@@ -5,7 +5,7 @@
  * Never redeclare these shapes by hand: change the Go type, then run `wails dev`,
  * `wails build` or `wails generate module` to regenerate.
  */
-import { accounts, config, events, flow, models, muse } from '../../wailsjs/go/models';
+import { accounts, config, events, flow, models, muse, tools } from '../../wailsjs/go/models';
 import type { buildinfo, media, proxy, updater } from '../../wailsjs/go/models';
 
 export type AppInfo = buildinfo.Info;
@@ -45,7 +45,6 @@ export type GeneratedVideoItem = flow.GeneratedVideoItem;
 export type SaveMediaResult = media.SaveResult;
 export type MediaDirectoryResult = media.DirectoryResult;
 export type ImportVideoResult = media.ImportResult;
-export type VideoTools = media.VideoTools;
 export type FlowEditModel = flow.FlowEditModel;
 export type EditVideoRequest = flow.EditVideoRequest;
 export const EditVideoRequest = flow.EditVideoRequest;
@@ -81,6 +80,14 @@ export type MuseRefMode = muse.MuseRefMode;
 export type UpdateRelease = updater.Release;
 export type UpdateProgress = updater.Progress;
 export type UpdateConfig = config.UpdateConfig;
+
+export type Tool = tools.Tool;
+export type ToolProgram = tools.Program;
+export type ToolRequest = tools.Request;
+export type ToolProgress = tools.Progress;
+export type ToolActivity = tools.Activity;
+export const ToolOrigin = tools.Origin;
+export type ToolOrigin = tools.Origin;
 
 export type MuseConfig = config.MuseConfig;
 export const MuseConfig = config.MuseConfig;

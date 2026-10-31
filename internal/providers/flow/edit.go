@@ -511,7 +511,7 @@ func (s *Provider) prepareSourceVideo(ctx context.Context, acc session.StoredAcc
 	}
 
 	probeCtx, cancel := context.WithTimeout(ctx, time.Duration(s.cfg.Get().FlowPagePolicy().RequestTimeoutSeconds)*time.Second)
-	metadata, err := media.ProbeVideo(probeCtx, source.path, s.cfg.Get().Flow)
+	metadata, err := media.ProbeVideo(probeCtx, source.path, s.prober(featureVideoEdit))
 	cancel()
 	if err != nil {
 		return sourceRecord{}, err

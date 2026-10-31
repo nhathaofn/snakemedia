@@ -12,7 +12,9 @@ func Plugin() providers.Plugin {
 	return providers.Plugin{
 		Site: func(cfg *config.Manager) accounts.Site { return session.NewSite(cfg) },
 		New: func(d providers.Deps) providers.Provider {
-			return New(session.NewService(d.Accounts, d.Config), d.Config, d.Media, d.ProductName)
+			p := New(session.NewService(d.Accounts, d.Config), d.Config, d.Media, d.ProductName)
+			p.tools = d.Tools
+			return p
 		},
 	}
 }

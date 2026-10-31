@@ -193,6 +193,18 @@ export namespace config {
 	        this.idleBrowserMinutes = source["idleBrowserMinutes"];
 	    }
 	}
+	export class ToolsConfig {
+	    paths: Record<string, string>;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolsConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.paths = source["paths"];
+	    }
+	}
 	export class UpdateConfig {
 	    checkOnStartup: boolean;
 	
@@ -252,8 +264,6 @@ export namespace config {
 	    }
 	}
 	export class FlowConfig {
-	    probePath: string;
-	    ffmpegPath: string;
 	    uploadAttempts: number;
 	    uploadRetryDelayMs: number;
 	    maxPollFailures: number;
@@ -283,8 +293,6 @@ export namespace config {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.probePath = source["probePath"];
-	        this.ffmpegPath = source["ffmpegPath"];
 	        this.uploadAttempts = source["uploadAttempts"];
 	        this.uploadRetryDelayMs = source["uploadRetryDelayMs"];
 	        this.maxPollFailures = source["maxPollFailures"];
@@ -317,6 +325,7 @@ export namespace config {
 	    flow: FlowConfig;
 	    muse: MuseConfig;
 	    updates: UpdateConfig;
+	    tools: ToolsConfig;
 	    revision: number;
 	
 	    static createFrom(source: any = {}) {
@@ -332,6 +341,7 @@ export namespace config {
 	        this.flow = this.convertValues(source["flow"], FlowConfig);
 	        this.muse = this.convertValues(source["muse"], MuseConfig);
 	        this.updates = this.convertValues(source["updates"], UpdateConfig);
+	        this.tools = this.convertValues(source["tools"], ToolsConfig);
 	        this.revision = source["revision"];
 	    }
 	
@@ -353,6 +363,7 @@ export namespace config {
 		    return a;
 		}
 	}
+	
 	
 	
 
@@ -633,9 +644,10 @@ export namespace events {
 	    FlowImageTaskUpdated = "flow:image-task-updated",
 	    FlowImageTasksAdded = "flow:image-tasks-added",
 	    FlowImageTasksRemoved = "flow:image-tasks-removed",
-	    FlowVideoToolsMissing = "flow:video-tools-missing",
 	    MuseJobUpdated = "muse:job-updated",
 	    MuseJobsRemoved = "muse:jobs-removed",
+	    ToolMissing = "tools:missing",
+	    ToolProgress = "tools:progress",
 	    UpdateAvailable = "update:available",
 	    UpdateProgress = "update:progress",
 	}
@@ -1292,22 +1304,6 @@ export namespace media {
 	        this.canceled = source["canceled"];
 	    }
 	}
-	export class VideoTools {
-	    ffmpeg: string;
-	    ffprobe: string;
-	    missing: string[];
-	
-	    static createFrom(source: any = {}) {
-	        return new VideoTools(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.ffmpeg = source["ffmpeg"];
-	        this.ffprobe = source["ffprobe"];
-	        this.missing = source["missing"];
-	    }
-	}
 
 }
 
@@ -1551,42 +1547,6 @@ export namespace models {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
 	        this.data = this.convertValues(source["data"], media.SaveResult);
-	        this.error = source["error"];
-	        this.code = source["code"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class Response_SnakeMedia_internal_media_VideoTools_ {
-	    success: boolean;
-	    data: media.VideoTools;
-	    error?: string;
-	    code: Code;
-	
-	    static createFrom(source: any = {}) {
-	        return new Response_SnakeMedia_internal_media_VideoTools_(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], media.VideoTools);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }
@@ -2055,6 +2015,78 @@ export namespace models {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
 	        this.data = this.convertValues(source["data"], services.SystemInfo);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_tools_Activity_ {
+	    success: boolean;
+	    data: tools.Activity;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_tools_Activity_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], tools.Activity);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_tools_Tool_ {
+	    success: boolean;
+	    data: tools.Tool;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_tools_Tool_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], tools.Tool);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }
@@ -2833,6 +2865,42 @@ export namespace models {
 		    return a;
 		}
 	}
+	export class Response___SnakeMedia_internal_tools_Tool_ {
+	    success: boolean;
+	    data: tools.Tool[];
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response___SnakeMedia_internal_tools_Tool_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], tools.Tool);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Response_bool_ {
 	    success: boolean;
 	    data: boolean;
@@ -3371,6 +3439,160 @@ export namespace services {
 	        this.uptime = source["uptime"];
 	    }
 	}
+
+}
+
+export namespace tools {
+	
+	export enum Origin {
+	    App = "app",
+	    Config = "config",
+	    None = "none",
+	    System = "system",
+	}
+	export class Progress {
+	    tool: string;
+	    done: number;
+	    total: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Progress(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tool = source["tool"];
+	        this.done = source["done"];
+	        this.total = source["total"];
+	    }
+	}
+	export class Program {
+	    name: string;
+	    path: string;
+	    origin: Origin;
+	
+	    static createFrom(source: any = {}) {
+	        return new Program(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.path = source["path"];
+	        this.origin = source["origin"];
+	    }
+	}
+	export class Tool {
+	    id: string;
+	    name: string;
+	    homepage: string;
+	    programs: Program[];
+	    ready: boolean;
+	    downloadable: boolean;
+	    version: string;
+	    installing: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Tool(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.homepage = source["homepage"];
+	        this.programs = this.convertValues(source["programs"], Program);
+	        this.ready = source["ready"];
+	        this.downloadable = source["downloadable"];
+	        this.version = source["version"];
+	        this.installing = source["installing"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Request {
+	    tool: Tool;
+	    feature: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Request(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tool = this.convertValues(source["tool"], Tool);
+	        this.feature = source["feature"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Activity {
+	    requests: Request[];
+	    downloads: Progress[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Activity(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.requests = this.convertValues(source["requests"], Request);
+	        this.downloads = this.convertValues(source["downloads"], Progress);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	
 
 }
 

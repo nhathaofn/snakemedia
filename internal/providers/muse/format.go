@@ -152,7 +152,7 @@ func (p *Provider) measureNote(ctx context.Context, job MuseJob, files []string)
 		return ""
 	}
 	if job.Kind == MuseJobVideo {
-		meta, err := media.ProbeVideo(ctx, path, p.cfg.Get().Flow)
+		meta, err := media.ProbeVideo(ctx, path, p.ffprobe)
 		if err != nil {
 			return ""
 		}

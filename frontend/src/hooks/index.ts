@@ -8,3 +8,4 @@ export * from './useWailsEvent';
 export * from './useNow';
 export * from './useUpdateNotice';
 export * from './frameBatch';
+export * from './useToolsLive';

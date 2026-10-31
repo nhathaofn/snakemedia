@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"SnakeMedia/internal/events"
 	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/models"
 	"SnakeMedia/internal/providers/flow/chrome"
@@ -276,7 +275,7 @@ func (s *Provider) collectVideoItems(ctx context.Context, client *chrome.FlowCli
 				if edit {
 					file, pathErr := s.media.Path(local)
 					probeCtx, cancel := context.WithTimeout(ctx, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
-					metadata, probeErr := media.ProbeVideo(probeCtx, file, s.cfg.Get().Flow)
+					metadata, probeErr := media.ProbeVideo(probeCtx, file, s.prober(featureVideoEdit))
 					cancel()
 					if pathErr != nil || probeErr != nil {
 						item.LocalURL = ""
@@ -479,6 +478,12 @@ func (s *Provider) downloadVideo(ctx context.Context, client *chrome.FlowClient,
 	return local, err
 }
 
+// Features named to the user when they need a tool the machine lacks.
+const (
+	featureVideoWatermark = "Xóa watermark video"
+	featureVideoEdit      = "Chỉnh sửa video"
+)
+
 // removeVideoWatermark strips Flow's mark from a downloaded video in place
 // when the setting is on. Any failure (no ffmpeg, no mark, a bad file) keeps
 // the video as Flow sent it.
@@ -495,13 +500,16 @@ func (s *Provider) removeVideoWatermark(ctx context.Context, mediaID, localURL s
 		keep("path", err)
 		return
 	}
-	tools := media.CheckVideoTools(policy)
-	if len(tools.Missing) > 0 {
-		keep("missing "+strings.Join(tools.Missing, ", "), nil)
-		s.queue.notify(events.EventFlowVideoToolsMissing, tools)
+	ffmpeg, err := s.program(featureVideoWatermark, "ffmpeg")
+	if err != nil {
+		keep("ffmpeg", err)
 		return
 	}
-	ffmpeg, ffprobe := tools.FFmpeg, tools.FFprobe
+	ffprobe, err := s.program(featureVideoWatermark, "ffprobe")
+	if err != nil {
+		keep("ffprobe", err)
+		return
+	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(policy.VideoGenerationTimeoutSeconds)*time.Second)
 	defer cancel()
 	tmp := file + ".clean.mp4"

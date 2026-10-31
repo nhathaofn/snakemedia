@@ -15,6 +15,7 @@ const (
 	museOutputDirName  = "muse-output"
 	accountsDirName    = "accounts"
 	updatesDirName     = "updates"
+	toolsDirName       = "tools"
 )
 
 // Paths groups the resolved on-disk locations for one application.
@@ -34,6 +35,9 @@ type Paths struct {
 	// UpdatesDir holds a downloaded installer until it has run; it is under
 	// the local (not roaming) cache folder where the OS has one.
 	UpdatesDir string
+	// ToolsDir holds the external programs the app downloaded (internal/tools),
+	// under the local cache folder like UpdatesDir.
+	ToolsDir string
 }
 
 // Resolve returns the standard per-user locations for appName, rooted at the
@@ -46,6 +50,7 @@ func Resolve(appName string) (Paths, error) {
 	p := ForRoot(filepath.Join(base, appName))
 	if cache, err := os.UserCacheDir(); err == nil {
 		p.UpdatesDir = filepath.Join(cache, appName, updatesDirName)
+		p.ToolsDir = filepath.Join(cache, appName, toolsDirName)
 	}
 	return p, nil
 }
@@ -61,5 +66,6 @@ func ForRoot(dataDir string) Paths {
 		MuseOutputDir:  filepath.Join(dataDir, museOutputDirName),
 		AccountsDir:    filepath.Join(dataDir, accountsDirName),
 		UpdatesDir:     filepath.Join(dataDir, updatesDirName),
+		ToolsDir:       filepath.Join(dataDir, toolsDirName),
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -155,7 +156,7 @@ func TestLiveFormatWording(t *testing.T) {
 // measure describes a downloaded file's size (and a video's length).
 func measure(ctx context.Context, file string, policy config.FlowConfig) string {
 	if strings.EqualFold(filepath.Ext(file), ".mp4") {
-		meta, err := media.ProbeVideo(ctx, file, policy)
+		meta, err := media.ProbeVideo(ctx, file, func() (string, error) { return exec.LookPath("ffprobe") })
 		if err != nil {
 			return "video: " + err.Error()
 		}

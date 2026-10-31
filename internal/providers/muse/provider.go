@@ -20,6 +20,7 @@ import (
 	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/media"
 	"SnakeMedia/internal/models"
+	"SnakeMedia/internal/tools"
 )
 
 // pumpInterval is how often the queue is re-planned without any trigger, so
@@ -29,8 +30,10 @@ const pumpInterval = 30 * time.Second
 // Provider owns the Muse job queue; accounts and their browsers belong to
 // the accounts service.
 type Provider struct {
-	cfg      *config.Manager
-	media    *media.Store
+	cfg   *config.Manager
+	media *media.Store
+	// tools finds ffprobe for videos whose header Go cannot read; nil in tests.
+	tools    *tools.Service
 	root     string // Muse's data folder
 	accounts *accounts.Service
 	jobs     *jobStore
@@ -525,4 +528,16 @@ func sortedJobs(jobs []MuseJob) []MuseJob {
 		return 0
 	})
 	return jobs
+}
+
+// featureVideoCheck is named to the user when checking a made video needs a
+// tool the machine lacks.
+const featureVideoCheck = "Kiểm tra video Muse"
+
+// ffprobe is ProbeVideo's lookup (internal/tools).
+func (p *Provider) ffprobe() (string, error) {
+	if p.tools == nil {
+		return "", tools.ErrMissing
+	}
+	return p.tools.Program(featureVideoCheck, "ffprobe")
 }

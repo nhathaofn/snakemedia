@@ -38,10 +38,6 @@ export function CheckProxies() {
   return window['go']['main']['App']['CheckProxies']();
 }
 
-export function CheckVideoTools() {
-  return window['go']['main']['App']['CheckVideoTools']();
-}
-
 export function ChooseBatchOutputDirectory(arg1) {
   return window['go']['main']['App']['ChooseBatchOutputDirectory'](arg1);
 }
@@ -130,6 +126,10 @@ export function GetSystemInfo() {
   return window['go']['main']['App']['GetSystemInfo']();
 }
 
+export function GetToolActivity() {
+  return window['go']['main']['App']['GetToolActivity']();
+}
+
 export function GetUpdateProgress() {
   return window['go']['main']['App']['GetUpdateProgress']();
 }
@@ -152,6 +152,10 @@ export function ImportAccountCookies(arg1, arg2, arg3) {
 
 export function ImportFlowProjectImageReference(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ImportFlowProjectImageReference'](arg1, arg2, arg3, arg4);
+}
+
+export function InstallTool(arg1) {
+  return window['go']['main']['App']['InstallTool'](arg1);
 }
 
 export function InstallUpdate() {
@@ -194,6 +198,10 @@ export function ListPendingVideoGenerations() {
   return window['go']['main']['App']['ListPendingVideoGenerations']();
 }
 
+export function ListTools() {
+  return window['go']['main']['App']['ListTools']();
+}
+
 export function ListVideoEditJobs() {
   return window['go']['main']['App']['ListVideoEditJobs']();
 }
@@ -230,6 +238,10 @@ export function PickVideo() {
   return window['go']['main']['App']['PickVideo']();
 }
 
+export function PostponeTool(arg1) {
+  return window['go']['main']['App']['PostponeTool'](arg1);
+}
+
 export function RemoveAccount(arg1) {
   return window['go']['main']['App']['RemoveAccount'](arg1);
 }
@@ -256,6 +268,10 @@ export function RemoveMuseLibraryItems(arg1) {
 
 export function RemoveMuseTemplate(arg1) {
   return window['go']['main']['App']['RemoveMuseTemplate'](arg1);
+}
+
+export function RemoveTool(arg1) {
+  return window['go']['main']['App']['RemoveTool'](arg1);
 }
 
 export function RenameAccount(arg1, arg2) {

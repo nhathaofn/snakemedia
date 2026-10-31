@@ -16,3 +16,4 @@
 | [0012](0012-production-hardening-pay-once-fail-closed.md) | Production Hardening: Pay Once, Fail Closed, Durable Queues, Composable Nodes | Accepted | 2026-10-27 |
 | [0013](0013-muse-long-video.md) | Muse Long Videos: the App's Guide, a Status Line, Continue in the Same Chat | Accepted | 2026-10-28 |
 | [0014](0014-muse-assets-roles-storyboard.md) | Muse Asset Library, Reference Roles, Storyboard and Source Video | Accepted | 2026-10-28 |
+| [0015](0015-external-tools-on-demand.md) | External Tools: One Manifest, Found First, Downloaded Only When a Feature Needs Them | Accepted | 2026-10-31 |

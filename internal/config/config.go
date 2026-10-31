@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -77,7 +79,7 @@ var ErrConflict = errors.New("Cài đặt vừa được lưu ở màn hình kh�
 // SchemaVersion is the format of config.json, saved in it as schemaVersion.
 // Raise it when a saved field changes meaning, and carry older values over in
 // migrate. A file without it predates versioning and is read as version 1.
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 // ErrNewerConfig refuses to save over a config.json written by a newer build:
 // this build would drop the settings it does not know.
@@ -100,6 +102,7 @@ type AppConfig struct {
 	Flow        FlowConfig    `json:"flow"`
 	Muse        MuseConfig    `json:"muse"`
 	Updates     UpdateConfig  `json:"updates"`
+	Tools       ToolsConfig   `json:"tools"`
 	// Revision counts saves in this run. An update must carry the revision it
 	// was made from (0 from a client that predates it is accepted), so a stale
 	// screen cannot overwrite a newer save. It is not kept across restarts.
@@ -116,6 +119,7 @@ func DefaultConfig() AppConfig {
 		Flow:        DefaultFlowConfig(),
 		Muse:        DefaultMuseConfig(),
 		Updates:     DefaultUpdateConfig(),
+		Tools:       DefaultToolsConfig(),
 	}
 }
 
@@ -139,6 +143,9 @@ func (c AppConfig) Validate() error {
 		errs = append(errs, err)
 	}
 	if err := c.Muse.Validate(); err != nil {
+		errs = append(errs, err)
+	}
+	if err := c.Tools.Validate(); err != nil {
 		errs = append(errs, err)
 	}
 	if len(errs) > 0 {
@@ -175,7 +182,14 @@ func (m *Manager) Path() string {
 func (m *Manager) Get() AppConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.config
+	return m.config.clone()
+}
+
+// clone copies the maps too, so a caller changing its copy never changes
+// the current configuration.
+func (c AppConfig) clone() AppConfig {
+	c.Tools.Paths = maps.Clone(c.Tools.Paths)
+	return c
 }
 
 // Update validates cfg, persists it atomically, and only then makes it current.
@@ -198,8 +212,8 @@ func (m *Manager) Update(cfg AppConfig) (AppConfig, error) {
 	if err := m.write(cfg); err != nil {
 		return m.config, err
 	}
-	m.config = cfg
-	return m.config, nil
+	m.config = cfg.clone()
+	return m.config.clone(), nil
 }
 
 func (m *Manager) load() error {
@@ -261,6 +275,8 @@ func migrate(data []byte, cfg *AppConfig) {
 			MaxDiscoveryBytes   *int64 `json:"maxDiscoveryBytes"`
 			MaxDiscoveryScripts *int   `json:"maxDiscoveryScripts"`
 			RPCCacheSeconds     *int   `json:"rpcCacheSeconds"`
+			FFmpegPath          string `json:"ffmpegPath"`
+			ProbePath           string `json:"probePath"`
 		} `json:"flow"`
 	}
 	if json.Unmarshal(data, &old) != nil {
@@ -279,6 +295,15 @@ func migrate(data []byte, cfg *AppConfig) {
 	}
 	if old.Flow.RPCCacheSeconds == nil && old.Accounts.RPCCacheSeconds != nil {
 		cfg.Flow.RPCCacheSeconds = *old.Accounts.RPCCacheSeconds
+	}
+	// Schema 1 kept the FFmpeg paths with Flow; every feature shares them now.
+	if cfg.Tools.Paths == nil {
+		cfg.Tools.Paths = map[string]string{}
+	}
+	for program, path := range map[string]string{"ffmpeg": old.Flow.FFmpegPath, "ffprobe": old.Flow.ProbePath} {
+		if _, set := cfg.Tools.Paths[program]; !set && filepath.IsAbs(path) {
+			cfg.Tools.Paths[program] = path
+		}
 	}
 }
 

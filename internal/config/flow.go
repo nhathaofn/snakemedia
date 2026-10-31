@@ -7,14 +7,10 @@ import "fmt"
 // kept as logged fallbacks in the provider. Keys of removed fields in a saved
 // file are ignored on load.
 type FlowConfig struct {
-	ProbePath string `json:"probePath"`
-	// FFmpegPath is the ffmpeg used to remove the video watermark; empty
-	// means PATH. Nothing is bundled with the app.
-	FFmpegPath         string `json:"ffmpegPath"`
-	UploadAttempts     int    `json:"uploadAttempts"`
-	UploadRetryDelayMS int    `json:"uploadRetryDelayMs"`
-	MaxPollFailures    int    `json:"maxPollFailures"`
-	PollMaxIntervalMS  int    `json:"pollMaxIntervalMs"`
+	UploadAttempts     int `json:"uploadAttempts"`
+	UploadRetryDelayMS int `json:"uploadRetryDelayMs"`
+	MaxPollFailures    int `json:"maxPollFailures"`
+	PollMaxIntervalMS  int `json:"pollMaxIntervalMs"`
 	// MaxImageBytes bounds one downloaded generated or referenced image.
 	MaxImageBytes int64 `json:"maxImageBytes"`
 	// ModelCacheSeconds is how long an account's model catalogue is reused.
@@ -55,7 +51,8 @@ type FlowConfig struct {
 	// from generated images using reverse alpha blending.
 	AutoRemoveWatermark bool `json:"autoRemoveWatermark"`
 	// AutoRemoveVideoWatermark does the same for downloaded videos. It needs
-	// ffmpeg and ffprobe; without them the video is kept as Flow sent it.
+	// ffmpeg and ffprobe (internal/tools); without them the video is kept as
+	// Flow sent it and the user is asked to download them.
 	AutoRemoveVideoWatermark bool `json:"autoRemoveVideoWatermark"`
 }
 

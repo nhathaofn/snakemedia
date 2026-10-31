@@ -676,7 +676,7 @@ func (p *Provider) tooShort(ctx context.Context, job MuseJob, file string) bool 
 	if err != nil {
 		return false
 	}
-	meta, err := media.ProbeVideo(ctx, path, p.cfg.Get().Flow)
+	meta, err := media.ProbeVideo(ctx, path, p.ffprobe)
 	return err == nil && meta.DurationSeconds > 0 && meta.DurationSeconds < float64(job.Duration)-durationTolerance
 }
 

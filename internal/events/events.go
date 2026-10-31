@@ -28,9 +28,11 @@ const (
 	// EventFlowImageTasksRemoved carries the []string IDs of tasks removed or
 	// trimmed at once, so listeners drop them without reloading the queue.
 	EventFlowImageTasksRemoved Event = "flow:image-tasks-removed"
-	// EventFlowVideoToolsMissing carries the media.VideoTools found when a
-	// downloaded video kept its watermark because ffmpeg or ffprobe is missing.
-	EventFlowVideoToolsMissing Event = "flow:video-tools-missing"
+	// EventToolMissing carries the tools.Request of a feature that needs a
+	// tool the machine does not have; the user decides whether to download it.
+	EventToolMissing Event = "tools:missing"
+	// EventToolProgress carries tools.Progress while a tool downloads.
+	EventToolProgress Event = "tools:progress"
 	// EventAccountsUpdated carries the full []accounts.Account list.
 	EventAccountsUpdated Event = "accounts:updated"
 	// EventUpdateAvailable carries the updater.Release a startup check found.
@@ -51,7 +53,8 @@ var AllEvents = []struct {
 	{EventFlowImageTaskUpdated, "FlowImageTaskUpdated"},
 	{EventFlowImageTasksAdded, "FlowImageTasksAdded"},
 	{EventFlowImageTasksRemoved, "FlowImageTasksRemoved"},
-	{EventFlowVideoToolsMissing, "FlowVideoToolsMissing"},
+	{EventToolMissing, "ToolMissing"},
+	{EventToolProgress, "ToolProgress"},
 	{EventAccountsUpdated, "AccountsUpdated"},
 	{EventUpdateAvailable, "UpdateAvailable"},
 	{EventUpdateProgress, "UpdateProgress"},

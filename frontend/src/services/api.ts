@@ -38,7 +38,8 @@ import type {
   SaveMediaResult,
   StudioConfig,
   UpdateProgress,
-  VideoTools,
+  Tool,
+  ToolActivity,
   UpdateRelease,
   UploadedSourceVideo,
 } from '../types';
@@ -118,7 +119,11 @@ export const api = {
   installUpdate: () => invoke<boolean>('InstallUpdate', Backend.InstallUpdate),
   getUpdateProgress: () => invoke<UpdateProgress>('GetUpdateProgress', Backend.GetUpdateProgress),
   openLogFolder: () => invoke<boolean>('OpenLogFolder', Backend.OpenLogFolder),
-  checkVideoTools: () => invoke<VideoTools>('CheckVideoTools', Backend.CheckVideoTools),
+  listTools: () => invoke<Tool[]>('ListTools', Backend.ListTools),
+  getToolActivity: () => invoke<ToolActivity>('GetToolActivity', Backend.GetToolActivity),
+  installTool: (id: string) => invoke<Tool>('InstallTool', () => Backend.InstallTool(id)),
+  postponeTool: (id: string) => invoke<boolean>('PostponeTool', () => Backend.PostponeTool(id)),
+  removeTool: (id: string) => invoke<boolean>('RemoveTool', () => Backend.RemoveTool(id)),
   getConfig: () => invoke<AppConfig>('GetConfig', Backend.GetConfig),
   updateConfig: (cfg: AppConfig) =>
     invoke<AppConfig>('UpdateConfig', () => Backend.UpdateConfig(cfg)),
