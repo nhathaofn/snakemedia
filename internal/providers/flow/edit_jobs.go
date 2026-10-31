@@ -146,7 +146,7 @@ func (s *Provider) runEditVideoJob(ctx context.Context, client *chrome.FlowClien
 	body, err := client.DoFromBrowser(ctx, browser.Port, rpcID, fReq, time.Duration(s.cfg.Get().Flow.GenerationTimeoutSeconds)*time.Second)
 	page.RUnlock()
 	if bytes.Contains(body, []byte("PUBLIC_ERROR_UNUSUAL_ACTIVITY")) {
-		err = &mutationRejection{cause: errors.New("Google Flow yêu cầu xác thực reCAPTCHA Enterprise token trước khi chỉnh sửa video.")}
+		err = &mutationRejection{cause: unusualActivity("chỉnh sửa video")}
 	}
 	if err == nil {
 		var reply string

@@ -358,7 +358,7 @@ func (s *Provider) UploadReferenceImage(ctx context.Context, client *chrome.Flow
 	}
 	body, err := client.Do(ctx, rpcID, fReq, time.Duration(s.cfg.Get().Flow.GenerationTimeoutSeconds)*time.Second)
 	if bytes.Contains(body, []byte("PUBLIC_ERROR_UNUSUAL_ACTIVITY")) {
-		return "", errors.New("Google Flow từ chối tải ảnh lên do token bảo mật không hợp lệ")
+		return "", unusualActivity("tải ảnh lên")
 	}
 	if err != nil {
 		return "", fmt.Errorf("lỗi khi gọi Flow UploadImage: %w", err)
@@ -439,7 +439,7 @@ func (s *Provider) generateImagesFromAccount(ctx context.Context, acc session.St
 	genBody, err := client.Do(ctx, rpcID, genFReq, time.Duration(s.cfg.Get().Flow.GenerationTimeoutSeconds)*time.Second)
 	if bytes.Contains(genBody, []byte("PUBLIC_ERROR_UNUSUAL_ACTIVITY")) {
 		requestSubmitted = false
-		return nil, &mutationRejection{cause: errors.New("Google Flow yêu cầu xác thực reCAPTCHA Enterprise token (action: IMAGE_GENERATION). Phiên cần được cấp token qua trình duyệt trước khi tạo ảnh.")}
+		return nil, &mutationRejection{cause: unusualActivity("tạo ảnh")}
 	}
 	if err != nil {
 		if definiteMutationRejection(err) {
@@ -525,7 +525,7 @@ func (s *Provider) upsampleGeneratedImage(ctx context.Context, client *chrome.Fl
 	}
 	body, err := client.Do(ctx, rpcID, fReq, time.Duration(s.cfg.Get().Flow.GenerationTimeoutSeconds)*time.Second)
 	if bytes.Contains(body, []byte("PUBLIC_ERROR_UNUSUAL_ACTIVITY")) {
-		return "", errors.New("Google Flow từ chối yêu cầu do token bảo mật không hợp lệ")
+		return "", unusualActivity("nâng độ phân giải")
 	}
 	if err != nil {
 		return "", fmt.Errorf("lỗi khi gọi Flow UpsampleImage: %w", err)
