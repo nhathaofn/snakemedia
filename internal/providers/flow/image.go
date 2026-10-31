@@ -448,7 +448,7 @@ func (s *Provider) generateImagesFromAccount(ctx context.Context, acc session.St
 	}
 
 	requestSubmitted = true
-	genBody, err := client.Do(ctx, rpcID, genFReq, time.Duration(s.cfg.Get().Flow.GenerationTimeoutSeconds)*time.Second)
+	genBody, err := s.sendBillable(ctx, client, browser, rpcID, genFReq)
 	if bytes.Contains(genBody, []byte("PUBLIC_ERROR_UNUSUAL_ACTIVITY")) {
 		requestSubmitted = false
 		return nil, &mutationRejection{cause: unusualActivity("tạo ảnh")}

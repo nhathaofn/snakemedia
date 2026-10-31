@@ -40,6 +40,9 @@ type Provider struct {
 	accounts Accounts
 	cfg      *config.Manager
 	media    *media.Store
+	// rpcFromGo sends billable RPCs from Go's HTTP client rather than the
+	// account's Flow page (sendBillable); only the live trust test sets it.
+	rpcFromGo bool
 	// tools finds ffmpeg and ffprobe; nil in tests, where none is found.
 	tools *tools.Service
 	// jobLocks holds the request IDs a call is working on (tryJobLock).
