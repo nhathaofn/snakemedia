@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"SnakeMedia/internal/browser"
@@ -111,36 +111,50 @@ func TestStoreMissingRecordFileBlocksInsteadOfDroppingTheAccount(t *testing.T) {
 }
 
 func TestNotifyCoalescesChanges(t *testing.T) {
-	s, _, _ := testService(t)
-	s.notifyDelay = 250 * time.Millisecond
-	var mu sync.Mutex
-	count := 0
-	done := make(chan struct{}, 4)
-	s.Start(t.Context(), func(e events.Event, _ any) {
-		if e == events.EventAccountsUpdated {
-			mu.Lock()
-			count++
-			mu.Unlock()
-			done <- struct{}{}
+	// Real encrypted writes can span multiple notification windows on a busy
+	// runner. Advance the timer explicitly while still exercising Update and
+	// checking that the delivered event contains the latest persisted state.
+	synctest.Test(t, func(t *testing.T) {
+		s, _, _ := testService(t)
+		seed(t, s, Record{Account: Account{ID: "a"}})
+		s.notifyDelay = 250 * time.Millisecond
+		count, changes := 0, 0
+		var latest []Account
+		s.Start(t.Context(), func(e events.Event, data any) {
+			if e == events.EventAccountsUpdated {
+				count++
+				latest, _ = data.([]Account)
+			}
+		})
+		s.OnChange(func() { changes++ })
+		for _, message := range []string{"one", "two", "three", "four", "latest"} {
+			if _, err := s.Update("a", func(r *Record) { r.Message = message }); err != nil {
+				t.Fatal(err)
+			}
 		}
-	})
-	seed(t, s, Record{Account: Account{ID: "a"}})
-	for range 5 {
-		if _, err := s.Update("a", func(r *Record) { r.Message = "x" }); err != nil {
+		synctest.Wait()
+		if count != 0 || changes != 0 {
+			t.Fatal("notification fired before its coalescing window ended")
+		}
+		time.Sleep(s.notifyDelay)
+		synctest.Wait()
+		if count != 1 || changes != 1 || len(latest) != 1 || latest[0].Message != "latest" {
+			t.Fatalf("coalesced events=%d listeners=%d latest=%+v", count, changes, latest)
+		}
+		time.Sleep(2 * s.notifyDelay)
+		synctest.Wait()
+		if count != 1 || changes != 1 {
+			t.Fatal("a completed burst emitted extra notifications")
+		}
+		if _, err := s.Update("a", func(r *Record) { r.Message = "next" }); err != nil {
 			t.Fatal(err)
 		}
-	}
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("no accounts:updated event")
-	}
-	time.Sleep(500 * time.Millisecond)
-	mu.Lock()
-	defer mu.Unlock()
-	if count != 1 {
-		t.Fatalf("want one coalesced event, got %d", count)
-	}
+		time.Sleep(s.notifyDelay)
+		synctest.Wait()
+		if count != 2 || changes != 2 || len(latest) != 1 || latest[0].Message != "next" {
+			t.Fatalf("next burst events=%d listeners=%d latest=%+v", count, changes, latest)
+		}
+	})
 }
 
 func TestStoreFromAnotherWindowsUserSaysSoInsteadOfCorrupt(t *testing.T) {
