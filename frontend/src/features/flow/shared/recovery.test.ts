@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { RUN_START, runAge } from '../../../stores';
-import { itemRunAge } from './recovery';
+import { failedItems, itemRunAge } from './recovery';
 import type { RecoverableItem } from './recovery';
 
 const item = (createdAt: string, pending = false) =>
@@ -39,5 +39,15 @@ describe('runAge', () => {
 
   it('has no earlier run on a first start', () => {
     expect(runAge('2026-10-26T10:00:00.000Z', true, start, start)).toBe('older');
+  });
+});
+
+describe('failedItems', () => {
+  it('turns only the settled job’s pending results into failures', () => {
+    const other = { ...item('', true), jobId: 'k' };
+    const failed = failedItems([item('', true), other], 'j', 'Flow không nhận được yêu cầu này.');
+    expect(failed).toEqual([
+      { ...item('', true), pending: false, error: 'Flow không nhận được yêu cầu này.' },
+    ]);
   });
 });

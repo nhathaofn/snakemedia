@@ -293,3 +293,12 @@ func TestEditJobIsNotJournaledWhenTheBrowserIsNotReady(t *testing.T) {
 		t.Fatalf("an unsent edit was journaled as sent: %+v %v", job, err)
 	}
 }
+
+func TestUnusualActivityNamesTheActionAndTheRealCause(t *testing.T) {
+	msg := unusualActivity("tạo ảnh").Error()
+	for _, want := range []string{"tạo ảnh", "hoạt động bất thường", "chưa bị trừ credit"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message %q lacks %q", msg, want)
+		}
+	}
+}

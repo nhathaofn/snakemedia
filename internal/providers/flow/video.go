@@ -247,7 +247,10 @@ func (s *Provider) GenerateVideos(ctx context.Context, req GenerateVideoRequest)
 			for i := range pending {
 				pending[i].ModelName = displayName(chosen.family.name)
 			}
-			job.Phase, job.VideoResult = generationAccepted, append([]GeneratedVideoItem(nil), pending...)
+			// The phase stays as reconciliation left it: an unknown outcome is not
+			// proof Flow accepted the job, and only a submitting job can later be
+			// closed as lost (submissionLost).
+			job.VideoResult = append([]GeneratedVideoItem(nil), pending...)
 			_ = s.saveGenerationJob(job)
 			return models.SuccessResponse(pending)
 		}
@@ -349,9 +352,10 @@ func (s *Provider) runVideoJob(ctx context.Context, client *chrome.FlowClient, a
 	}
 	body, err := client.Do(ctx, rpcID, fReq, time.Duration(s.cfg.Get().Flow.GenerationTimeoutSeconds)*time.Second)
 	if bytes.Contains(body, []byte("PUBLIC_ERROR_UNUSUAL_ACTIVITY")) {
-		job.Phase, job.Message = generationRejected, "Flow yêu cầu xác thực lại reCAPTCHA trước khi tạo video."
+		rejected := unusualActivity("tạo video")
+		job.Phase, job.Message = generationRejected, rejected.Error()
 		_ = s.saveGenerationJob(job)
-		return nil, errors.New("Google Flow yêu cầu xác thực reCAPTCHA Enterprise token (action: VIDEO_GENERATION). Phiên cần được cấp token qua trình duyệt trước khi tạo video.")
+		return nil, rejected
 	}
 	if err != nil {
 		if definiteMutationRejection(err) {

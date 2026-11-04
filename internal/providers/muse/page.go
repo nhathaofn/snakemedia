@@ -15,6 +15,7 @@ import (
 
 	"SnakeMedia/internal/browser"
 	"SnakeMedia/internal/config"
+	"SnakeMedia/internal/logger"
 )
 
 //go:embed page.js
@@ -283,6 +284,16 @@ func (p *chromePage) SendTo(ctx context.Context, sessionID, text string) (SendRe
 // Muse's home page when the page had no chat client (nothing was sent then).
 func (p *chromePage) send(ctx context.Context, text string, atts []Attachment, sessionID string) (SendResult, error) {
 	var r SendResult
+	defer func() {
+		if r.OK || r.Reason == "" {
+			return
+		}
+		encodedBytes := 0
+		for _, att := range atts {
+			encodedBytes += len(att.DataBase64)
+		}
+		logger.Get().Warn("muse client send refused", "reason", r.Reason, "attachments", len(atts), "base64Bytes", encodedBytes, "existingChat", sessionID != "", "diagnostics", r.Diagnostics)
+	}()
 	if err := p.invoke(ctx, p.sendTimeout, "send", &r, text, atts, sessionID); err != nil {
 		return r, err
 	}
@@ -355,13 +366,16 @@ func (p *chromePage) Download(ctx context.Context, path string, sink io.Writer) 
 	// reload the page and drop the open file.
 	unlock := p.readNav()
 	defer unlock()
-	if err := p.call(ctx, p.callTimeout, "open", &file, path); err != nil {
+	if err := p.call(ctx, p.callTimeout, "open", &file, path, p.policy.MaxDownloadBytes); err != nil {
 		return 0, err
 	}
 	defer func() {
 		var ignored any
 		_ = p.call(context.WithoutCancel(ctx), p.callTimeout, "closeFile", &ignored, file.ID)
 	}()
+	if file.Size <= 0 || file.Size > p.policy.MaxDownloadBytes {
+		return 0, errors.New("Tệp Muse rỗng hoặc vượt giới hạn tải media.")
+	}
 	for i := 0; int64(i)*chunkSize < file.Size; i++ {
 		var chunk string
 		if err := p.call(ctx, p.callTimeout, "slice", &chunk, file.ID, i); err != nil {

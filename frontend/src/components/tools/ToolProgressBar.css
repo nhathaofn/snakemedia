@@ -1,0 +1,28 @@
+.tool-progress {
+  position: relative;
+  height: var(--space-3);
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+}
+
+.tool-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+  transition: width var(--transition-fast);
+}
+
+.tool-progress-indeterminate .tool-progress-fill {
+  width: 30%;
+  animation: tool-progress-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes tool-progress-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}

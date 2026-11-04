@@ -3,6 +3,7 @@ package flow
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -48,7 +49,7 @@ func TestSavedJobFileCarriesTheFormatVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(s.stateDir("jobs"), id+".json"))
-	if !bytes.HasPrefix(data, []byte(`{"formatVersion":1,`)) {
+	if !bytes.HasPrefix(data, fmt.Appendf(nil, `{"formatVersion":%d,`, jobs.FormatVersion)) {
 		t.Fatalf("saved %s", data)
 	}
 	var job editJob

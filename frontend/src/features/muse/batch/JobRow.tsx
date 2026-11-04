@@ -47,7 +47,7 @@ export const JobRow = memo(function JobRow({
   const moreRefs = job.references.length - shownRefs.length;
   // What the job asked Muse for besides the prompt: "9:16 · 8s".
   const format = [job.ratio, job.duration ? `${job.duration}s` : ''].filter(Boolean).join(' · ');
-  const saved = job.savedFiles?.[0] ?? job.files[0];
+  const saved = job.savedFiles?.[0] || job.files[0];
 
   return (
     <div className={`queue-table-row${selected ? ' is-selected' : ''}`} role="row">
@@ -128,19 +128,27 @@ export const JobRow = memo(function JobRow({
 
       <QueueProgress
         tone={job.held ? 'held' : tones[job.status]}
-        label={job.held ? 'Tạm dừng' : jobStatusLabels[job.status]}
+        label={
+          job.held
+            ? 'Tạm dừng'
+            : job.saveError
+              ? 'Đã tạo, lưu file thất bại'
+              : jobStatusLabels[job.status]
+        }
         title={[accountName, format].filter(Boolean).join(' · ') || undefined}
         detail={busy ? job.step : format || undefined}
         error={ended ? job.error : undefined}
-        warning={jobNote(job) || undefined}
+        warning={[job.saveError, jobNote(job)].filter(Boolean).join(' ') || undefined}
         savedPath={job.status === MuseJobStatus.Succeeded ? saved : undefined}
         onReveal={saved ? () => actions.reveal(saved) : undefined}
         action={
           busy
             ? { label: 'Hủy', onClick: () => actions.cancel(job.id) }
-            : ended
-              ? { label: 'Chạy lại', onClick: () => actions.retry(job) }
-              : undefined
+            : job.saveError && job.files.length > 0
+              ? { label: 'Lưu lại', onClick: () => actions.retrySave(job.id) }
+              : ended
+                ? { label: 'Chạy lại', onClick: () => actions.retry(job) }
+                : undefined
         }
       />
     </div>

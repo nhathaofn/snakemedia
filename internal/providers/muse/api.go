@@ -2,6 +2,8 @@ package muse
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -47,7 +49,9 @@ type MuseOptions struct {
 
 // MuseJobRequest queues Repeat jobs per non-empty prompt with shared settings.
 type MuseJobRequest struct {
-	Kind MuseJobKind `json:"kind"`
+	// SubmissionID identifies one user action; repeating it returns its saved jobs.
+	SubmissionID string      `json:"submissionId,omitempty"`
+	Kind         MuseJobKind `json:"kind"`
 	// Mode is the screen the jobs come from; empty means MuseJobBatch.
 	Mode       MuseJobMode `json:"mode"`
 	Prompts    []string    `json:"prompts"`
@@ -207,7 +211,33 @@ func (p *Provider) importImages(paths []string, prefix string) models.Response[[
 
 // SubmitJobs queues Repeat jobs (at least one) for every non-empty prompt.
 func (p *Provider) SubmitJobs(req MuseJobRequest) models.Response[[]MuseJob] {
+	p.submitMu.Lock()
+	defer p.submitMu.Unlock()
+	if req.SubmissionID != "" {
+		hash := submissionHash(req)
+		var existing []MuseJob
+		for _, job := range p.jobs.list() {
+			if job.SubmissionID == req.SubmissionID {
+				if job.SubmissionHash != hash {
+					return fail[[]MuseJob](errors.New("Lần gửi này đã có nội dung khác. Hãy gửi lại bằng một lần tạo mới."), models.CodeInvalidArgument)
+				}
+				existing = append(existing, job)
+			}
+		}
+		if len(existing) > 0 {
+			if err := p.jobs.journal.Flush(); err != nil {
+				return fail[[]MuseJob](err, models.CodeInternal)
+			}
+			p.trigger()
+			return models.SuccessResponse(existing)
+		}
+	}
 	return p.submitJobs(req, "")
+}
+
+func submissionHash(req MuseJobRequest) string {
+	data, _ := json.Marshal(req)
+	return fmt.Sprintf("%x", sha256.Sum256(data))
 }
 
 // maxNodeAttempts bounds how many never-sent failures one prompt of a graph
@@ -337,7 +367,11 @@ func (p *Provider) submitJobs(req MuseJobRequest, runKey string) models.Response
 	// New jobs are written together once the batch is built: one journal
 	// write for the whole batch, and none of it if that write fails.
 	var fresh []MuseJob
+	hash := submissionHash(req)
 	add := func(job MuseJob) {
+		if req.SubmissionID != "" {
+			job.SubmissionID, job.SubmissionHash = req.SubmissionID, hash
+		}
 		// A job without references goes to the UI as [] (never null).
 		normalizeJob(&job)
 		fresh = append(fresh, job)

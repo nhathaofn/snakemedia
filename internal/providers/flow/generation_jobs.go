@@ -185,6 +185,25 @@ func noteRPCError(err *chrome.RPCError, reason string, definite bool) {
 	logger.Get().Info("flow rpc error seen", "method", err.ID, "code", err.Code, "reason", reason, "treatedAs", treatedAs)
 }
 
+// unusualActivity explains PUBLIC_ERROR_UNUSUAL_ACTIVITY: the request carried
+// a reCAPTCHA token, but Google scored it as bot-like and refused the action,
+// so nothing was charged. It usually follows requests sent too densely from
+// one account or IP, or a headless browser.
+func unusualActivity(action string) error { return &unusualActivityError{action: action} }
+
+type unusualActivityError struct{ action string }
+
+func (e *unusualActivityError) Error() string {
+	return fmt.Sprintf("Google tạm chặn %s vì thấy hoạt động bất thường (điểm reCAPTCHA thấp); chưa bị trừ credit. Hãy giảm số luồng, tăng thời gian nghỉ hoặc dùng proxy riêng cho tài khoản rồi chạy lại.", e.action)
+}
+
+// isUnusualActivity reports a refusal for unusual activity: the account was
+// refused, nothing was charged, and another account may take the request.
+func isUnusualActivity(err error) bool {
+	var refused *unusualActivityError
+	return errors.As(err, &refused)
+}
+
 type mutationRejection struct{ cause error }
 
 func (e *mutationRejection) Error() string { return e.cause.Error() }

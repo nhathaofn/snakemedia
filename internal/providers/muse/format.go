@@ -39,11 +39,11 @@ var museRatios = []MuseRatio{
 
 // museDurations are the video lengths (seconds) the screens offer: one clip
 // (10 seconds, Muse's longest), or a long video Muse makes as several clips
-// joined in one chat (longvideo.go), up to museVideosPerMessage clips, one
-// message's worth. Read live on 2026-10-28: with the long video guide, 20,
+// joined in one chat (longvideo.go). Two minutes requires a continuation
+// after museVideosPerMessage clips. Read live on 2026-10-28: with the long video guide, 20,
 // 30, 40 and 60 seconds came out exact, one cast and the prompt followed in
 // order; without it Muse joined near copies of one clip.
-var museDurations = []int{10, 20, 30, 40, 50, 60}
+var museDurations = []int{10, 20, 30, 40, 50, 60, 120}
 
 // Result checks: a file whose shape is off by more than ratioTolerance (or
 // turned the other way), or whose length is off by more than
@@ -152,7 +152,7 @@ func (p *Provider) measureNote(ctx context.Context, job MuseJob, files []string)
 		return ""
 	}
 	if job.Kind == MuseJobVideo {
-		meta, err := media.ProbeVideo(ctx, path, p.cfg.Get().Flow)
+		meta, err := media.ProbeVideo(ctx, path, p.ffprobe)
 		if err != nil {
 			return ""
 		}

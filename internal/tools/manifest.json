@@ -1,0 +1,19 @@
+{
+  "tools": [
+    {
+      "id": "ffmpeg",
+      "name": "FFmpeg",
+      "homepage": "https://www.gyan.dev/ffmpeg/builds/",
+      "programs": ["ffmpeg", "ffprobe"],
+      "sources": {
+        "windows/amd64": {
+          "versionUrl": "https://www.gyan.dev/ffmpeg/builds/release-version",
+          "url": "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-{version}-essentials_build.zip",
+          "sha256Url": "{url}.sha256",
+          "archive": "zip",
+          "maxBytes": 536870912
+        }
+      }
+    }
+  ]
+}

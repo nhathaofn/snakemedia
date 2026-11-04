@@ -166,13 +166,13 @@ func roleRule(role MuseRefRole, roles map[MuseRefRole]bool) string {
 	faces := roles[MuseRoleFace] || roles[MuseRoleCharacter]
 	switch role {
 	case MuseRoleFace:
-		return "identity only: keep this exact face, hair, skin tone and age for this character in every shot. Take clothing, body and setting from the other images or the prompt, not from this one, unless nothing else gives them."
+		return "identity only: keep this exact face, hair, skin tone and age whenever this character is visible. Take clothing, body and setting from the other images or the prompt, not from this one, unless nothing else gives them."
 	case MuseRoleCharacter:
-		return "character authority: keep this exact face, body proportions, hair and outfit for this character in every shot."
+		return "character authority: keep this exact face, body proportions, hair and outfit whenever this character is visible."
 	case MuseRoleProduct:
 		return "sole authority for the product: its shape, colors, materials, printed text and logo exactly as shown, never redrawn or simplified. It overrides any storyboard and any product wording in the prompt."
 	case MuseRoleStoryboard:
-		rule := "authority for composition, camera angle, shot order, setting, lighting and wardrobe. Do not reproduce the storyboard itself (its grid, frames, numbers or sketch look)."
+		rule := "authority for composition, camera angle, shot order, setting, lighting and otherwise unlocked wardrobe. Do not reproduce its grid, panel borders or numbers. Use its sketch look only if the requested final style calls for it."
 		if faces {
 			rule += " Faces in it are placeholders: identity comes from the character images."
 		}
@@ -183,7 +183,7 @@ func roleRule(role MuseRefRole, roles map[MuseRefRole]bool) string {
 	case MuseRoleSetting:
 		return "the place: keep its layout, materials, light and colors. Do not take people or products from it."
 	case MuseRoleStyle:
-		return "the look only: color grade, lighting and rendering style. Take no subject, person or product from it."
+		return "the look only: color grade and rendering style, with lighting treatment that respects the assigned setting and locks. Take no subject, person or product from it."
 	}
 	return "a separate element of the result; keep its design, colors and details exactly."
 }
@@ -229,29 +229,29 @@ func roleLines(kind MuseJobKind, info []MuseRefInfo, first int) []string {
 		priority = append(priority, fmt.Sprintf("- Identity: %s > faces in a storyboard > prompt text. The same person looks the same in every shot.", strings.Join(names, ", ")))
 	}
 	if names := byRole[MuseRoleStoryboard]; len(names) > 0 {
-		priority = append(priority, fmt.Sprintf("- Scene: %s set framing, setting and wardrobe; the prompt decides actions and lines.", strings.Join(names, ", ")))
+		priority = append(priority, fmt.Sprintf("- Scene: %s set framing, setting and otherwise unlocked wardrobe; the prompt decides actions and lines.", strings.Join(names, ", ")))
 	}
 	if len(priority) > 0 {
 		lines = append(lines, "Priority when they disagree:")
 		lines = append(lines, priority...)
 	}
-	lines = append(lines, "Do not copy an image's background, framing or pose unless its role says so; take those from the prompt. If the prompt itself says what an image is for, follow the prompt.")
+	lines = append(lines, "Apply each role only to its assigned attributes. For the same named subject, a face reference controls identity ahead of a full-character reference; a full-character reference controls proportions and outfit ahead of a storyboard; a product reference controls that product; a storyboard controls scene composition and wardrobe except where a full-character reference or lock fixes them. A style reference controls rendering and grading, not identity or product colors. The prompt controls actions and dialogue. The prompt may assign a role to an unassigned image, but does not override an assigned role or lock. Do not copy backgrounds, framing or poses outside an image's role, or introduce its subject into shots that do not call for it.")
 	var locks []string
 	seen := map[string]bool{}
-	for _, ri := range info {
-		key := ri.Tag + "\x00" + ri.Lock
+	for k, ri := range info {
+		subject := "@" + ri.Tag
+		if ri.Tag == "" {
+			subject = fmt.Sprintf("image %d", first+k)
+		}
+		key := subject + "\x00" + ri.Lock
 		if ri.Lock == "" || seen[key] {
 			continue
 		}
 		seen[key] = true
-		subject := "@" + ri.Tag
-		if ri.Tag == "" {
-			subject = roleNames[ri.Role]
-		}
 		locks = append(locks, fmt.Sprintf("- %s: %s", subject, ri.Lock))
 	}
 	if len(locks) > 0 {
-		lines = append(lines, "Locks (must match exactly in every frame):")
+		lines = append(lines, "Locks (highest authority for the named subject and attribute whenever visible; a lock does not require its subject in every frame):")
 		lines = append(lines, locks...)
 	}
 	return lines

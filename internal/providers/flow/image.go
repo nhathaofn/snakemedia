@@ -100,6 +100,11 @@ type GenerateImageRequest struct {
 	fingerprint string
 	onSubmit    func(projectID string, clientIDs []string) error
 	onAccepted  func(images []GeneratedImageItem) error
+	// avoid are accounts that refused this prompt for unusual activity
+	// (ImageTask.RefusedBy); the rotation picks among the others.
+	avoid []string
+	// onRefused is told which account Google refused for unusual activity.
+	onRefused func(accountID string)
 }
 
 // GeneratedImageItem represents an image returned from generation.
@@ -210,6 +215,10 @@ func (s *Provider) GenerateImages(ctx context.Context, req GenerateImageRequest)
 	if err != nil {
 		return models.ErrorResponse[[]GeneratedImageItem]("Không thể tạo ảnh: "+err.Error(), code)
 	}
+	choices = slices.DeleteFunc(choices, func(c imageGenerationChoice) bool { return slices.Contains(req.avoid, c.account.ID) })
+	if len(choices) == 0 {
+		return models.ErrorResponse[[]GeneratedImageItem]("Không thể tạo ảnh: mọi tài khoản phù hợp đều đã bị Google tạm chặn prompt này vì hoạt động bất thường. Hãy giảm số luồng, tăng thời gian nghỉ hoặc dùng proxy riêng cho tài khoản rồi chạy lại.", models.CodeUnavailable)
+	}
 	compatible := make([]session.StoredAccount, len(choices))
 	for i := range choices {
 		compatible[i] = choices[i].account
@@ -259,6 +268,9 @@ func (s *Provider) GenerateImages(ctx context.Context, req GenerateImageRequest)
 				job.Phase, job.Message = generationRejected, err.Error()
 				if saveErr := s.saveGenerationJob(job); saveErr != nil {
 					return models.ErrorResponse[[]GeneratedImageItem](saveErr.Error(), models.CodeInternal)
+				}
+				if isUnusualActivity(err) && req.onRefused != nil {
+					req.onRefused(acc.ID)
 				}
 				return models.ErrorResponse[[]GeneratedImageItem](fmt.Sprintf("Lỗi khi tạo ảnh từ Google Flow (%s): %s", acc.Email, err.Error()), models.CodeUnavailable)
 			}
@@ -358,7 +370,7 @@ func (s *Provider) UploadReferenceImage(ctx context.Context, client *chrome.Flow
 	}
 	body, err := client.Do(ctx, rpcID, fReq, time.Duration(s.cfg.Get().Flow.GenerationTimeoutSeconds)*time.Second)
 	if bytes.Contains(body, []byte("PUBLIC_ERROR_UNUSUAL_ACTIVITY")) {
-		return "", errors.New("Google Flow từ chối tải ảnh lên do token bảo mật không hợp lệ")
+		return "", unusualActivity("tải ảnh lên")
 	}
 	if err != nil {
 		return "", fmt.Errorf("lỗi khi gọi Flow UploadImage: %w", err)
@@ -436,10 +448,10 @@ func (s *Provider) generateImagesFromAccount(ctx context.Context, acc session.St
 	}
 
 	requestSubmitted = true
-	genBody, err := client.Do(ctx, rpcID, genFReq, time.Duration(s.cfg.Get().Flow.GenerationTimeoutSeconds)*time.Second)
+	genBody, err := s.sendBillable(ctx, client, browser, rpcID, genFReq)
 	if bytes.Contains(genBody, []byte("PUBLIC_ERROR_UNUSUAL_ACTIVITY")) {
 		requestSubmitted = false
-		return nil, &mutationRejection{cause: errors.New("Google Flow yêu cầu xác thực reCAPTCHA Enterprise token (action: IMAGE_GENERATION). Phiên cần được cấp token qua trình duyệt trước khi tạo ảnh.")}
+		return nil, &mutationRejection{cause: unusualActivity("tạo ảnh")}
 	}
 	if err != nil {
 		if definiteMutationRejection(err) {
@@ -525,7 +537,7 @@ func (s *Provider) upsampleGeneratedImage(ctx context.Context, client *chrome.Fl
 	}
 	body, err := client.Do(ctx, rpcID, fReq, time.Duration(s.cfg.Get().Flow.GenerationTimeoutSeconds)*time.Second)
 	if bytes.Contains(body, []byte("PUBLIC_ERROR_UNUSUAL_ACTIVITY")) {
-		return "", errors.New("Google Flow từ chối yêu cầu do token bảo mật không hợp lệ")
+		return "", unusualActivity("nâng độ phân giải")
 	}
 	if err != nil {
 		return "", fmt.Errorf("lỗi khi gọi Flow UpsampleImage: %w", err)

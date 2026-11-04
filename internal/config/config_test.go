@@ -1,10 +1,12 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -14,7 +16,7 @@ func TestManager_DefaultsWhenFileMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager returned error for missing file: %v", err)
 	}
-	if got := unrevised(m.Get()); got != DefaultConfig() {
+	if got := unrevised(m.Get()); !reflect.DeepEqual(got, DefaultConfig()) {
 		t.Errorf("Get() = %+v; want defaults %+v", got, DefaultConfig())
 	}
 }
@@ -49,7 +51,7 @@ func TestManager_UpdateRejectsInvalid(t *testing.T) {
 	if !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("expected ErrInvalidConfig, got %v", err)
 	}
-	if unrevised(got) != DefaultConfig() || unrevised(m.Get()) != DefaultConfig() {
+	if !reflect.DeepEqual(unrevised(got), DefaultConfig()) || !reflect.DeepEqual(unrevised(m.Get()), DefaultConfig()) {
 		t.Errorf("invalid update must not change state; got %+v", m.Get())
 	}
 	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
@@ -87,7 +89,7 @@ func TestManager_CorruptFileIsQuarantined(t *testing.T) {
 	if !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("expected ErrInvalidConfig, got %v", err)
 	}
-	if unrevised(m.Get()) != DefaultConfig() {
+	if !reflect.DeepEqual(unrevised(m.Get()), DefaultConfig()) {
 		t.Errorf("expected defaults after corrupt file, got %+v", m.Get())
 	}
 
@@ -115,7 +117,7 @@ func TestManager_PartialFileKeepsDefaultsAndIgnoresUnknownFields(t *testing.T) {
 	}
 	want := DefaultConfig()
 	want.Theme = ThemeLight
-	if got := unrevised(m.Get()); got != want {
+	if got := unrevised(m.Get()); !reflect.DeepEqual(got, want) {
 		t.Errorf("Get() = %+v; want %+v", got, want)
 	}
 }
@@ -217,7 +219,7 @@ func TestManager_SavesSchemaVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
-	if !strings.Contains(string(data), `"schemaVersion": 1`) || !strings.Contains(string(data), `"theme"`) {
+	if !strings.Contains(string(data), `"schemaVersion": 2`) || !strings.Contains(string(data), `"theme"`) {
 		t.Fatalf("saved config = %s", data)
 	}
 }
@@ -243,5 +245,25 @@ func TestManager_NewerConfigIsReadOnlyAndKept(t *testing.T) {
 	}
 	if matches, _ := filepath.Glob(path + ".corrupt-*"); len(matches) > 0 {
 		t.Fatal("a newer config was moved aside as corrupt")
+	}
+}
+
+func TestMigrate_MovesFlowFFmpegPathsToTools(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	ffmpeg := filepath.Join(t.TempDir(), "bin", "ffmpeg.exe")
+	old, _ := json.Marshal(map[string]any{"flow": map[string]any{"ffmpegPath": ffmpeg, "probePath": "relative/ffprobe"}})
+	if err := os.WriteFile(path, old, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := NewManager(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := m.Get().Tools.Paths
+	if paths["ffmpeg"] != ffmpeg {
+		t.Errorf("ffmpeg path = %q, want %q", paths["ffmpeg"], ffmpeg)
+	}
+	if _, kept := paths["ffprobe"]; kept {
+		t.Errorf("a relative path was carried over: %q", paths["ffprobe"])
 	}
 }

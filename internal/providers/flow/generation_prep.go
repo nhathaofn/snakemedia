@@ -29,6 +29,22 @@ func (s *Provider) generationBrowser(ctx context.Context, acc session.StoredAcco
 	return browser, nil
 }
 
+// sendBillable posts a billable RPC (one that carries a reCAPTCHA token).
+// From the account's Flow page it leaves Chrome like Flow's own requests, with
+// the browser that minted the token; rpcFromGo sends it from Go's HTTP client
+// instead (kept for measuring the difference). The page is held so a project
+// being opened elsewhere cannot navigate it mid-request.
+func (s *Provider) sendBillable(ctx context.Context, client *chrome.FlowClient, browser *browser.Browser, rpcID, fReq string) ([]byte, error) {
+	timeout := time.Duration(s.cfg.Get().Flow.GenerationTimeoutSeconds) * time.Second
+	if s.rpcFromGo {
+		return client.Do(ctx, rpcID, fReq, timeout)
+	}
+	page := s.pageLock(browser.Port)
+	page.RLock()
+	defer page.RUnlock()
+	return client.DoFromBrowser(ctx, browser.Port, rpcID, fReq, timeout)
+}
+
 // mintGenerationToken mints one single-use reCAPTCHA Enterprise token with the
 // site key the account's Flow page loaded. Only when the page does not expose
 // it is the built-in key used, and that fallback is logged. The page is held

@@ -146,6 +146,14 @@ func (j *Journal[T]) List() []T {
 // Path is the journal file.
 func (j *Journal[T]) Path() string { return j.path }
 
+// Flush retries persistence after a previous write failed. An idempotent
+// submission must not acknowledge records held only in memory.
+func (j *Journal[T]) Flush() error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.saveLocked()
+}
+
 // Get returns the record with id.
 func (j *Journal[T]) Get(id string) (T, bool) {
 	j.mu.Lock()

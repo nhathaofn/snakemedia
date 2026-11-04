@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"SnakeMedia/internal/config"
@@ -40,7 +41,7 @@ func TestSettingsService_UpdateConfigInvalid(t *testing.T) {
 	}
 	got := s.GetConfig(context.Background()).Data
 	got.Revision = 0
-	if got != config.DefaultConfig() {
+	if !reflect.DeepEqual(got, config.DefaultConfig()) {
 		t.Errorf("state changed after rejected update: %+v", got)
 	}
 }

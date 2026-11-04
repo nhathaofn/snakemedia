@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -20,6 +21,45 @@ import (
 	"SnakeMedia/internal/config"
 	"github.com/gorilla/websocket"
 )
+
+// Execute the real script: a fake CDP response cannot catch losing an Error's
+// non-enumerable message when Muse also returns a generic send_failed reason.
+func TestPageSendDiagnostics(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is needed to execute the page script")
+	}
+	script := `const assert = require('node:assert/strict');
+const client = { ensureActiveChatSendReady() {}, sendMessage: async () => answer };
+global.document = {body: {__reactFiber: {memoizedProps: {value: client}}}, querySelectorAll: () => []};
+let answer;
+const page = (` + pageSource + `)(1024);
+(async () => {
+ const error = new Error('invalid chat request body: length limit exceeded');
+ error.code = 'invalid_params'; error.kind = 'jarvis_rejection';
+ answer = {ok: false, reason: 'send_failed', error};
+ const rejected = await page.send('private prompt', [], '');
+ assert.equal(rejected.reason, 'send_failed');
+ assert.equal(rejected.diagnostics.message, error.message);
+ assert.equal(rejected.diagnostics.code, 'invalid_params');
+ assert.equal(rejected.diagnostics.kind, 'jarvis_rejection');
+ assert.equal(rejected.diagnostics.stack, undefined);
+ error.message = 'private prompt ' + 'A'.repeat(256);
+ const redacted = await page.send('private prompt', [], '');
+ assert.equal(redacted.diagnostics.message, '[prompt] [data]');
+ answer = {ok: true, sessionId: 'accepted-chat'};
+ const accepted = await page.send('private prompt', [], '');
+ assert.equal(accepted.sessionId, 'accepted-chat');
+ assert.equal(accepted.diagnostics, null);
+})().catch(e => { console.error(e); process.exitCode = 1; });`
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, node)
+	cmd.Stdin = strings.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("page diagnostics: %v\n%s", err, out)
+	}
+}
 
 // fakeDevTools serves /json and one tab's debugger socket. Runtime.evaluate
 // answers by the page script method named in the expression, like the page:
@@ -237,6 +277,26 @@ func TestChromePageInjectsAgainAfterReload(t *testing.T) {
 	}
 	if dials, injections := f.counts(); dials != 1 || injections != 2 {
 		t.Fatalf("dials = %d, injections = %d, want 1 and 2", dials, injections)
+	}
+}
+
+func TestChromePageRejectsOversizedBlobAndClosesIt(t *testing.T) {
+	f := newFakeDevTools(t, MuseURL)
+	page := newTestPage(f)
+	defer page.Close()
+	f.answers["open"] = func(args []json.RawMessage) any {
+		if len(args) != 2 || string(args[1]) != strconv.FormatInt(page.policy.MaxDownloadBytes, 10) {
+			t.Error("download cap was not sent to the page")
+		}
+		return map[string]any{"id": 7, "size": page.policy.MaxDownloadBytes + 1}
+	}
+	f.answers["closeFile"] = func([]json.RawMessage) any { return nil }
+	var out bytes.Buffer
+	if _, err := page.Download(context.Background(), "/out.mp4", &out); err == nil {
+		t.Fatal("oversized Blob accepted")
+	}
+	if f.ran("slice") != 0 || f.ran("closeFile") != 1 || out.Len() != 0 {
+		t.Fatal("oversized Blob was read or leaked")
 	}
 }
 

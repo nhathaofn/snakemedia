@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -526,4 +527,32 @@ func resolvedTempDir(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+func TestQueuePassesARefusedPromptToTheOtherAccounts(t *testing.T) {
+	h := newQueueHarness(t)
+	h.onGen = func(_ context.Context, req GenerateImageRequest) models.Response[[]GeneratedImageItem] {
+		// acc-1 is flagged by Google; any other account makes the image.
+		if !slices.Contains(req.avoid, "acc-1") {
+			h.setPhase(req.RequestID, generationRejected)
+			req.onRefused("acc-1")
+			return models.ErrorResponse[[]GeneratedImageItem](unusualActivity("tạo ảnh").Error(), models.CodeUnavailable)
+		}
+		h.setPhase(req.RequestID, generationComplete)
+		return models.SuccessResponse(made(req.RequestID))
+	}
+	h.start()
+	task := h.submit("a dog")[0]
+	done := h.waitFor(task.ID, func(t ImageTask) bool { return t.Status == ImageTaskSucceeded })
+	if !slices.Equal(done.RefusedBy, []string{"acc-1"}) {
+		t.Errorf("refused accounts = %v", done.RefusedBy)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.generated) != 2 || h.generated[0].RequestID == h.generated[1].RequestID {
+		t.Fatalf("a refused prompt must be sent again with a new request ID: %+v", h.generated)
+	}
+	if n := h.s.RetryImageTasks([]string{task.ID}); n.Data != 0 {
+		t.Errorf("a finished task was retried")
+	}
 }

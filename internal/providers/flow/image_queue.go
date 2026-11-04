@@ -80,7 +80,11 @@ type ImageTask struct {
 	RequestID string          `json:"requestId,omitempty"`
 	// Rechecks counts reads of a request Flow has not settled yet; it sets the
 	// wait before the next one.
-	Rechecks    int                  `json:"rechecks,omitempty"`
+	Rechecks int `json:"rechecks,omitempty"`
+	// RefusedBy are the accounts Google refused this prompt for unusual
+	// activity; the task goes back to the queue and the rotation picks among
+	// the other accounts, so refused prompts spread over them.
+	RefusedBy   []string             `json:"refusedBy,omitempty"`
 	NextCheckAt string               `json:"nextCheckAt,omitempty"`
 	Results     []GeneratedImageItem `json:"results"`
 	// SavedFiles are the results (local URLs) already copied to OutputDir, and
@@ -488,7 +492,13 @@ func (q *imageQueue) execute(ctx context.Context, t ImageTask) {
 			q.fail(t.ID, err.Error(), true)
 			return
 		}
+		refused := ""
+		req.avoid, req.onRefused = t.RefusedBy, func(accountID string) { refused = accountID }
 		res = q.generate(ctx, req)
+		if refused != "" && ctx.Err() == nil {
+			q.passOn(t.ID, refused)
+			return
+		}
 	}
 	if ctx.Err() != nil {
 		q.interrupted(t.ID)
@@ -623,6 +633,27 @@ func (q *imageQueue) recheck(id string, items []GeneratedImageItem, message stri
 		t.Step = fmt.Sprintf("%s Kiểm tra lại lúc %s; yêu cầu sẽ không được gửi lại.", strings.TrimSpace(message), at.Local().Format("15:04:05"))
 		if items != nil {
 			t.Results = items
+		}
+	})
+	if err == nil {
+		q.publish(updated)
+	}
+}
+
+// passOn puts a task Google refused on one account for unusual activity back
+// in the queue for the other accounts. The refusal is definite and unpaid, so
+// the next attempt is a new request (new ID); it waits for the queue's gap
+// like any new send.
+func (q *imageQueue) passOn(id, accountID string) {
+	updated, err := q.journal.Update(id, func(t *ImageTask) {
+		if t.Status != ImageTaskRunning {
+			return
+		}
+		t.Status, t.Error, t.NextCheckAt = ImageTaskQueued, "", ""
+		t.Step = "Tài khoản vừa bị Google tạm chặn; chuyển sang tài khoản khác."
+		t.RequestID, t.Rechecks = "", 0
+		if !slices.Contains(t.RefusedBy, accountID) {
+			t.RefusedBy = append(t.RefusedBy, accountID)
 		}
 	})
 	if err == nil {
@@ -931,7 +962,7 @@ func (s *Provider) EditImageTask(id, prompt string) models.Response[ImageTask] {
 			return
 		}
 		t.Status, t.Error, t.Step, t.NextCheckAt, t.FinishedAt = ImageTaskQueued, "", "", "", ""
-		t.RequestID, t.Rechecks, t.Held = "", 0, false
+		t.RequestID, t.Rechecks, t.Held, t.RefusedBy = "", 0, false, nil
 		t.Results, t.SavedFiles, t.SavedPaths = []GeneratedImageItem{}, []string{}, nil
 	})
 	if err != nil {
@@ -953,7 +984,7 @@ func (s *Provider) RetryImageTasks(ids []string) models.Response[int] {
 			return false
 		}
 		t.Status, t.Error, t.Step, t.NextCheckAt, t.FinishedAt = ImageTaskQueued, "", "", "", ""
-		t.Rechecks, t.Held = 0, false
+		t.Rechecks, t.Held, t.RefusedBy = 0, false, nil
 		if t.RequestID == "" && len(unsaved(*t)) == 0 {
 			t.Results, t.SavedFiles, t.SavedPaths = []GeneratedImageItem{}, []string{}, nil
 		}

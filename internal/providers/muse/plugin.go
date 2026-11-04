@@ -11,7 +11,9 @@ func Plugin() providers.Plugin {
 	return providers.Plugin{
 		Site: func(cfg *config.Manager) accounts.Site { return NewSite(cfg) },
 		New: func(d providers.Deps) providers.Provider {
-			return New(d.Paths.DataDir, d.Paths.MuseOutputDir, d.Config, d.Media, d.Accounts)
+			p := New(d.Paths.DataDir, d.Paths.MuseOutputDir, d.Config, d.Media, d.Accounts)
+			p.tools = d.Tools
+			return p
 		},
 	}
 }

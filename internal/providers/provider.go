@@ -16,6 +16,7 @@ import (
 	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/media"
 	"SnakeMedia/internal/paths"
+	"SnakeMedia/internal/tools"
 )
 
 // Provider is one external service contributing nodes to the engine.
@@ -41,10 +42,12 @@ type Lifecycle interface {
 
 // Deps are the shared services a provider is built on.
 type Deps struct {
-	Paths       paths.Paths
-	Config      *config.Manager
-	Media       *media.Store
-	Accounts    *accounts.Service
+	Paths    paths.Paths
+	Config   *config.Manager
+	Media    *media.Store
+	Accounts *accounts.Service
+	// Tools finds external programs and asks the user to download a missing one.
+	Tools       *tools.Service
 	ProductName string
 }
 

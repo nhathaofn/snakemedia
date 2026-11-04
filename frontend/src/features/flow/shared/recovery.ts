@@ -8,6 +8,7 @@ import {
   usePreviousRunStore,
 } from '../../../stores';
 import type { RunAge } from '../../../stores';
+import { ResponseCode } from '../../../types';
 import type { ApiResponse } from '../../../types';
 import { clearGenerationAttempt } from './hooks';
 import type { ConversationTurn, RestoredTurn, StudioResult } from './studioStore';
@@ -24,6 +25,7 @@ export interface RecoverableItem extends StudioResult {
 interface RecoverableStore<TItem> {
   getState: () => {
     turns: ConversationTurn[];
+    items: TItem[];
     addItems: (items: TItem[]) => void;
     restoreTurns: (entries: RestoredTurn<TItem>[]) => void;
     completeTurn: (turnId: string, items: TItem[]) => void;
@@ -57,23 +59,42 @@ export function turnsFromJobs<TItem extends RecoverableItem>(
 /**
  * Restores a studio's saved jobs when it opens. Jobs already in the
  * conversation (sent this session, or restored on an earlier visit) are kept
- * as they are.
+ * as they are. onRestored gets the restored jobs' IDs, so the screen can check
+ * them again at once instead of leaving them waiting for a click.
  */
 export function useRestoreJobs<TItem extends RecoverableItem>(
   store: RecoverableStore<TItem>,
   list: () => Promise<ApiResponse<TItem[]>>,
   pendingLabel: string,
+  onRestored?: (jobIds: string[]) => void,
 ): void {
+  const restored = useRef(onRestored);
+  useEffect(() => {
+    restored.current = onRestored;
+  });
   useEffect(() => {
     let active = true;
     void list().then((response) => {
       if (!active || !response.success || !response.data?.length) return;
-      store.getState().restoreTurns(turnsFromJobs(response.data, pendingLabel));
+      const turns = turnsFromJobs(response.data, pendingLabel);
+      store.getState().restoreTurns(turns);
+      restored.current?.(turns.map((entry) => entry.turn.id));
     });
     return () => {
       active = false;
     };
   }, [store, list, pendingLabel]);
+}
+
+/** A job's results shown as failed with message, once Flow settled it. */
+export function failedItems<TItem extends RecoverableItem>(
+  items: readonly TItem[],
+  jobId: string,
+  message: string,
+): TItem[] {
+  return items
+    .filter((item) => item.jobId === jobId)
+    .map((item) => ({ ...item, pending: false, error: message }));
 }
 
 /**
@@ -201,6 +222,19 @@ export function useResumeJob<TItem extends RecoverableItem>(
       setResuming(new Set(running.current));
       try {
         const response = await resume(jobId);
+        if (!response.success && response.code === ResponseCode.Unavailable) {
+          // Flow settled the job as failed (refused, or never received): its
+          // card shows why instead of waiting forever.
+          const current = store.getState();
+          const message = response.error ?? 'Job không thành công.';
+          const failed = failedItems(current.items, jobId, message);
+          if (failed.length) {
+            current.addItems(failed);
+            current.completeTurn(jobId, failed);
+          }
+          clearGenerationAttempt(jobId);
+          return;
+        }
         if (!response.success || !response.data) {
           addToast({
             type: 'error',

@@ -1,0 +1,9 @@
+.tools-row-control {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+}
+
+.tools-row-control .tool-progress {
+  width: var(--tools-progress-width);
+}

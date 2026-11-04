@@ -15,9 +15,6 @@ export const UPDATE_TOAST_DURATION_MS = 0;
  */
 export const FLOW_SHARED_REQUEST_REUSE_MS = 10_000;
 
-/** Where the FFmpeg prompt sends the user to download FFmpeg (ffmpeg and ffprobe). */
-export const FFMPEG_DOWNLOAD_URL = 'https://www.gyan.dev/ffmpeg/builds/';
-
 /** Media query used to resolve the `system` theme. */
 export const PREFERS_DARK_QUERY = '(prefers-color-scheme: dark)';
 

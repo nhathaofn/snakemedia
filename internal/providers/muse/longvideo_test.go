@@ -84,7 +84,7 @@ func TestLongVideoContinuesInTheSameChat(t *testing.T) {
 			{Text: "clip", Videos: []ResultMedia{{Path: "/out/c1.mp4", Mime: "video/mp4", ByteLen: 2}}},
 			{Text: "Clips 1-4 are made.\nSTATUS: INCOMPLETE clips 5-6"},
 		},
-		files: map[string][]byte{"/out/c1.mp4": []byte("c1"), "/out/final.mp4": []byte("final")}}
+		files: map[string][]byte{"/out/c1.mp4": []byte("c1"), "/out/final.mp4": mp4WithDuration(60)}}
 	p := testProvider(t, page)
 	acc := addSignedIn(t, p, "A")
 	job := submitLong(t, p, 60)
@@ -95,7 +95,7 @@ func TestLongVideoContinuesInTheSameChat(t *testing.T) {
 			if reads++; reads == 3 {
 				page.mu.Lock()
 				page.events = append(page.events,
-					AssistantEvent{Text: "video", Videos: []ResultMedia{{Path: "/out/final.mp4", Mime: "video/mp4", ByteLen: 5}}},
+					AssistantEvent{Text: "video", Videos: []ResultMedia{{Path: "/out/final.mp4", Mime: "video/mp4", ByteLen: int64(len(mp4WithDuration(60)))}}},
 					AssistantEvent{Text: "CHANGED: one shot is wider.\nSTATUS: DONE"})
 				page.mu.Unlock()
 			}

@@ -32,11 +32,13 @@ func TestMessageAsksForRatioAndDuration(t *testing.T) {
 				"Reference: The attached image (image 1) shows the subject of this video; " +
 				"keep its design, colors, details and art style exactly, consistent in every frame. " +
 				"Do not copy the image's background, framing or pose; take those from the prompt. " +
-				"If the prompt gives the image another role (for example the style only, or the opening frame), follow the prompt instead.\n" +
+				"If the prompt gives this unassigned image another role (for example style only or the opening frame), use only that role. An explicit requested change to an unlocked attribute overrides its appearance in this image.\n" +
+				strings.Join(videoReferenceLines(MuseJob{Kind: MuseJobVideo, References: []string{"r"}}, 1), "\n") + "\n" +
 				"Aspect ratio: 1:1 (square). Frame the video in this ratio, not in the shape of the attached images.\n" +
 				"Duration: 10 seconds\n" + oneClip + "\nPrompt:\np"},
 	}
 	for _, c := range cases {
+		c.want = strings.Replace(c.want, "\n", "\n"+requestRules+"\n", 1)
 		if got := buildMessage(c.job); got != c.want {
 			t.Errorf("message %q, want %q", got, c.want)
 		}
@@ -54,7 +56,7 @@ func TestMessageNumbersEveryAttachedImage(t *testing.T) {
 			"Reference: " + strconv.Itoa(n) + " images are attached, numbered in the order attached (" + names + ").",
 			"Do not merge them into one subject.",
 			"include every element shown and keep each one's design, colors, details and art style exactly.",
-			"its image overrides any description of it in the prompt.",
+			"use its image unless the prompt explicitly requests a change to an unlocked attribute.",
 		} {
 			if !strings.Contains(msg, want) {
 				t.Errorf("%d images: message lacks %q:\n%s", n, want, msg)
@@ -134,7 +136,7 @@ func TestJobSendsFormatAndNotesTheResult(t *testing.T) {
 	p.runOne(context.Background(), job.ID, acc.ID)
 	p.wg.Wait()
 
-	if len(page.sends) != 1 || !strings.HasPrefix(page.sends[0], "Task: Create a new image.\nAspect ratio: 9:16 (portrait)\n") {
+	if len(page.sends) != 1 || !strings.HasPrefix(page.sends[0], "Task: Create a new image.\n"+requestRules+"\nAspect ratio: 9:16 (portrait)\n") {
 		t.Fatalf("sent %q", page.sends)
 	}
 	got := mustJob(t, p, job.ID)

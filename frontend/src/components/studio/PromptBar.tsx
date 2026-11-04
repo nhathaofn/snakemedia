@@ -14,6 +14,7 @@ export function PromptBar({
   onGenerate,
   placeholder,
   generating,
+  submitting = false,
   blockedReason,
 }: {
   prompt: string;
@@ -21,11 +22,13 @@ export function PromptBar({
   onGenerate: () => void;
   placeholder: string;
   generating: boolean;
+  /** Only the queue submission is locked; generation can run in the background. */
+  submitting?: boolean;
   /** Why Generate is unavailable besides an empty prompt; undefined when ready. */
   blockedReason?: string;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const disabled = !!blockedReason || !prompt.trim();
+  const disabled = submitting || !!blockedReason || !prompt.trim();
 
   const insertNewLine = (el: HTMLTextAreaElement) => {
     const { selectionStart, selectionEnd } = el;
@@ -51,6 +54,7 @@ export function PromptBar({
           className="studio-prompt-textarea"
           placeholder={`${placeholder} · Enter để tạo, Ctrl+Enter xuống dòng`}
           value={prompt}
+          readOnly={submitting}
           onChange={(e) => onPromptChange(e.target.value)}
           onKeyDown={onKeyDown}
           rows={2}

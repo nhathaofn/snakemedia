@@ -5,7 +5,14 @@ import { TitleBar } from './TitleBar';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 import { PreviousRunPrompt, Toaster } from '../feedback';
-import { useAppBootstrap, useCompactLayout, useThemeSync, useUpdateNotice } from '../../hooks';
+import {
+  useAppBootstrap,
+  useCompactLayout,
+  useThemeSync,
+  useToolsLive,
+  useUpdateNotice,
+} from '../../hooks';
+import { ToolPrompt } from '../tools';
 // Import routes modules directly: routes/index depends on layout, so going through it would be circular.
 import { useActiveFeature } from '../../routes/useActiveSection';
 import { STARTUP_ELEMENTS } from '../../routes/registry';
@@ -15,6 +22,7 @@ export const AppLayout: React.FC = () => {
   useThemeSync();
   useCompactLayout();
   useUpdateNotice();
+  useToolsLive();
   const fullLayout = useActiveFeature()?.layout === 'full';
 
   return (
@@ -31,6 +39,7 @@ export const AppLayout: React.FC = () => {
         <Fragment key={id}>{element}</Fragment>
       ))}
       <PreviousRunPrompt />
+      <ToolPrompt />
       <Toaster />
     </div>
   );

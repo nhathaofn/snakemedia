@@ -1,0 +1,32 @@
+.tool-prompt-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: var(--space-8);
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+}
+
+.tool-prompt-body p {
+  margin: 0;
+}
+
+.tool-prompt-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--font-size-small);
+}
+
+.tool-prompt-error {
+  color: var(--danger);
+  font-size: var(--font-size-small);
+}
+
+.tool-prompt-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-4);
+  width: 100%;
+}

@@ -39,9 +39,20 @@ type Attachment struct {
 // SendResult is Muse's definite answer to a send. A transport error instead of
 // a SendResult means the outcome is unknown.
 type SendResult struct {
-	OK        bool   `json:"ok"`
-	SessionID string `json:"sessionId"`
-	Reason    string `json:"reason"`
+	OK          bool             `json:"ok"`
+	SessionID   string           `json:"sessionId"`
+	Reason      string           `json:"reason"`
+	Diagnostics *SendDiagnostics `json:"diagnostics,omitempty"`
+}
+
+// SendDiagnostics keeps Muse's underlying error, never the request payload.
+type SendDiagnostics struct {
+	Name            string `json:"name,omitempty"`
+	Message         string `json:"message,omitempty"`
+	Code            any    `json:"code,omitempty"`
+	Kind            string `json:"kind,omitempty"`
+	DeliveryState   string `json:"deliveryState,omitempty"`
+	RequestTimedOut bool   `json:"requestTimedOut,omitempty"`
 }
 
 // ResultMedia is one file an assistant message produced in the session sandbox.

@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -85,7 +86,7 @@ func TestLiveReplayUploadedSource(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		meta, err := media.ProbeVideo(ctx, file, cfg.Get().Flow)
+		meta, err := media.ProbeVideo(ctx, file, func() (string, error) { return exec.LookPath("ffprobe") })
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -250,7 +251,7 @@ func TestLiveVideoEdit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		meta, err := media.ProbeVideo(ctx, file, cfg.Get().Flow)
+		meta, err := media.ProbeVideo(ctx, file, func() (string, error) { return exec.LookPath("ffprobe") })
 		if err != nil {
 			t.Fatal(err)
 		}
