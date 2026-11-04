@@ -76,7 +76,7 @@ type assignment struct {
 // sent it, because only that account can read the chat. Queued jobs go to
 // every usable account (signed in, enabled, routed, not resting), up to
 // ThreadsPerAccount each, oldest first.
-func plan(jobs []MuseJob, accs []MuseAccount, cfg config.MuseConfig, running map[string]string, now time.Time) []assignment {
+func plan(jobs []MuseJob, accs []MuseAccount, cfg config.MuseConfig, running map[string]string, now time.Time, previous ...MuseJobMode) []assignment {
 	busy := make(map[string]int, len(accs))
 	for _, accID := range running {
 		busy[accID]++
@@ -120,6 +120,11 @@ func plan(jobs []MuseJob, accs []MuseAccount, cfg config.MuseConfig, running map
 		}
 		return 0
 	})
+	last := MuseJobMode("")
+	if len(previous) > 0 {
+		last = previous[0]
+	}
+	queued = fairQueue(queued, last)
 	for _, job := range queued {
 		var pool []MuseAccount
 		for _, acc := range accs {
@@ -139,6 +144,40 @@ func plan(jobs []MuseJob, accs []MuseAccount, cfg config.MuseConfig, running map
 			})
 		}
 		take(job, pool[0])
+	}
+	return out
+}
+
+// fairQueue alternates modes while preserving FIFO within each mode. Empty
+// modes are legacy batch jobs; neither a busy batch nor repeated single sends
+// can starve the other screen. Already-sent jobs are planned separately first.
+func fairQueue(ordered []MuseJob, last MuseJobMode) []MuseJob {
+	var single, batch []MuseJob
+	for _, job := range ordered {
+		if job.Mode == MuseJobSingle {
+			single = append(single, job)
+		} else {
+			batch = append(batch, job)
+		}
+	}
+	if last == "" && len(ordered) > 0 {
+		if ordered[0].Mode == MuseJobSingle {
+			last = MuseJobBatch
+		} else {
+			last = MuseJobSingle
+		}
+	}
+	out := make([]MuseJob, 0, len(ordered))
+	for len(single) > 0 || len(batch) > 0 {
+		if len(single) > 0 && (last != MuseJobSingle || len(batch) == 0) {
+			out = append(out, single[0])
+			single = single[1:]
+			last = MuseJobSingle
+		} else {
+			out = append(out, batch[0])
+			batch = batch[1:]
+			last = MuseJobBatch
+		}
 	}
 	return out
 }

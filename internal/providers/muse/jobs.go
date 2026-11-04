@@ -63,8 +63,11 @@ var AllMuseJobStatuses = []struct {
 // chat. SessionID is that chat: once set, the job is only ever re-checked
 // there, never re-sent, so an interrupted job costs no second Muse generation.
 type MuseJob struct {
-	ID   string      `json:"id"`
-	Kind MuseJobKind `json:"kind"`
+	ID string `json:"id"`
+	// SubmissionID and SubmissionHash identify a UI submit, across retries and restarts.
+	SubmissionID   string      `json:"submissionId,omitempty"`
+	SubmissionHash string      `json:"submissionHash,omitempty"`
+	Kind           MuseJobKind `json:"kind"`
 	// Mode is the screen the job was made from; journals written before it
 	// existed leave it empty, which reads as MuseJobBatch.
 	Mode   MuseJobMode `json:"mode,omitempty"`
@@ -130,8 +133,12 @@ type MuseJob struct {
 	Files       []string `json:"files"`
 	// SavedFiles are the copies written to the output folder.
 	SavedFiles []string `json:"savedFiles,omitempty"`
-	CreatedAt  string   `json:"createdAt"`
-	StartedAt  string   `json:"startedAt,omitempty"`
+	// OutputPaths maps original media URLs to successfully saved copies. Unlike
+	// the legacy compact SavedFiles list it remains unambiguous on partial saves.
+	OutputPaths map[string]string `json:"outputPaths,omitempty"`
+	SaveError   string            `json:"saveError,omitempty"`
+	CreatedAt   string            `json:"createdAt"`
+	StartedAt   string            `json:"startedAt,omitempty"`
 	// SentAt is when Muse accepted the send (SessionID set); the job's time
 	// limit counts from here. Older journals fall back to StartedAt.
 	SentAt     string `json:"sentAt,omitempty"`
@@ -160,6 +167,7 @@ func resetForQueue(j *MuseJob) {
 	j.Continues, j.RepliesSeen = 0, 0
 	j.AccountID, j.SessionID, j.Sending, j.SendUnknown, j.Rechecks = "", "", false, false, 0
 	j.Files, j.SavedFiles = []string{}, []string{}
+	j.OutputPaths, j.SaveError = nil, ""
 	j.StartedAt, j.SentAt, j.FinishedAt = "", "", ""
 }
 

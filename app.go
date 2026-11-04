@@ -673,6 +673,11 @@ func (a *App) RetryMuseJob(id string) models.Response[muse.MuseJob] {
 	return logged("RetryMuseJob", a.muse.RetryJob(id))
 }
 
+// RetrySaveMuseJob copies existing results without generating again.
+func (a *App) RetrySaveMuseJob(id string) models.Response[muse.MuseJob] {
+	return logged("RetrySaveMuseJob", a.muse.RetrySave(id))
+}
+
 // RemoveMuseJob deletes a Muse job that is not running.
 func (a *App) RemoveMuseJob(id string) models.Response[bool] {
 	return logged("RemoveMuseJob", a.muse.RemoveJob(id))

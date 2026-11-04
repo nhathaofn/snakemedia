@@ -11,7 +11,9 @@ import (
 // providers save on their own (Flow's per-job files). Raise it when a saved
 // field changes meaning or type, and read the older format on load. A file
 // without a version predates versioning and is read as format 1.
-const FormatVersion = 1
+// Version 2 records partial Muse output saves by source URL so older builds
+// cannot mistake a compact saved-file list for a fully saved batch.
+const FormatVersion = 2
 
 // ErrNewerFormat marks data saved by a newer build of the app (after the user
 // went back to an older one). It is kept as it is and never overwritten: the

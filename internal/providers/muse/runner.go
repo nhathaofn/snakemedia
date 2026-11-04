@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -45,7 +46,7 @@ func referenceLines(kind MuseJobKind, n int) []string {
 		return []string{
 			fmt.Sprintf("Reference: The attached image (image 1) shows the subject of this %s; %s. "+
 				"Do not copy the image's background, framing or pose; take those from the prompt. "+
-				"If the prompt gives the image another role (for example the style only, or the opening frame), follow the prompt instead.", what, keep),
+				"If the prompt gives this unassigned image another role (for example style only or the opening frame), use only that role. An explicit requested change to an unlocked attribute overrides its appearance in this image.", what, keep),
 		}
 	}
 	return []string{
@@ -53,7 +54,7 @@ func referenceLines(kind MuseJobKind, n int) []string {
 			"Each image shows a separate element of this %s, such as a character, an object, a product or a setting. Do not merge them into one subject.", n, imageNames(n), what),
 		`- If the prompt says what an image is for (for example "image 1 is the main character, image 2 is the product"), follow the prompt.`,
 		fmt.Sprintf("- If it does not, include every element shown and %s.", strings.Replace(keep, "its", "each one's", 1)),
-		"- For how an element looks, its image overrides any description of it in the prompt.",
+		"- For how an element looks, use its image unless the prompt explicitly requests a change to an unlocked attribute. References do not require every element to appear in every video shot.",
 		"- Keep the art style the images share unless the prompt asks for another. Do not copy their backgrounds, framing or poses; take those from the prompt.",
 	}
 }
@@ -81,7 +82,7 @@ var kindMime = map[MuseJobKind]string{MuseJobImage: "image/", MuseJobVideo: "vid
 var kindName = map[MuseJobKind]string{MuseJobImage: "ảnh", MuseJobVideo: "video"}
 
 // buildMessage is the chat message sent for a job, in English like the setup
-// message: one labelled line each for what to make, how to use the attached
+// message: task and request rules, then how to use the attached
 // images (when there are any), and the ratio and duration asked
 // (formatLines), the video guide (longVideoLines for several clips,
 // shortVideoLines for one),
@@ -91,6 +92,7 @@ func buildMessage(job MuseJob) string {
 	if job.Kind == MuseJobImage && job.BoardFrames > 0 {
 		lines = append([]string{"Task: Create the storyboard images of a video."}, boardImageLines(job)...)
 	}
+	lines = append(lines, requestRules)
 	if job.SourceVideo != "" {
 		lines = append(lines, v2vLines(job)...)
 	}
@@ -108,6 +110,7 @@ func buildMessage(job MuseJob) string {
 		default:
 			lines = append(lines, referenceLines(job.Kind, n)...)
 		}
+		lines = append(lines, videoReferenceLines(job, first)...)
 	}
 	lines = append(lines, formatLines(job)...)
 	switch {
@@ -598,40 +601,82 @@ func (p *Provider) collect(ctx context.Context, job MuseJob, accountID string, p
 	p.updateJob(job.ID, func(j *MuseJob) { j.Step = "Tải file" })
 	files := make([]string, 0, len(wanted))
 	for k, m := range wanted {
+		release, err := p.downloadSlot(ctx, accountID)
+		if err != nil {
+			return err
+		}
 		url, err := p.download(ctx, page, m, fmt.Sprintf("muse-%s-%d", job.ID, k+1))
+		release()
 		if err != nil {
 			return err
 		}
 		files = append(files, url)
 	}
-	if isLong(job) && long.State == "" && p.tooShort(ctx, job, files[0]) {
-		// No status line and only a clip so far: Muse may still be joining
-		// (it has ended a turn early with one clip and sent the video later).
-		return fmt.Errorf("Muse chưa giao đủ video %d giây", job.Duration)
+	// Preserve the files even when validation cannot confirm a complete result.
+	job, err = p.updateJob(job.ID, func(j *MuseJob) {
+		if j.Status == MuseJobProcessing {
+			j.Files = files
+		}
+	})
+	if err != nil {
+		return err
 	}
-	saved := p.saveOutputs(job, files)
-	note := p.measureNote(ctx, job, files)
-	succeeded := false
+	if job.Status != MuseJobProcessing {
+		return nil
+	}
+	note := ""
+	incomplete := false
+	if isLong(job) {
+		path, err := p.media.Path(files[0])
+		if err != nil {
+			return err
+		}
+		meta, err := media.ProbeVideo(ctx, path, p.ffprobe)
+		if err != nil {
+			return fmt.Errorf("Chưa xác minh được thời lượng video Muse: %w", err)
+		}
+		note = formatNote(job, meta.Width, meta.Height, meta.DurationSeconds)
+		incomplete = math.Abs(meta.DurationSeconds-float64(job.Duration)) > durationTolerance
+		if incomplete && long.State == "" {
+			return fmt.Errorf("Muse chưa giao đúng video %d giây (file hiện tại %.1f giây)", job.Duration, meta.DurationSeconds)
+		}
+	} else {
+		note = p.measureNote(ctx, job, files)
+	}
+	job, err = p.saveCollected(job, files)
+	if err != nil {
+		return err
+	}
+	if job.ID == "" || job.Status != MuseJobProcessing {
+		return nil
+	}
+	saved := job.SavedFiles
+	settled := false
 	done, err := p.jobs.update(job.ID, func(j *MuseJob) {
 		if j.Status != MuseJobProcessing {
 			return // cancelled meanwhile: keep the user's decision
 		}
 		j.Status, j.Files, j.Error, j.SavedFiles, j.FormatNote = MuseJobSucceeded, files, "", saved, note
 		j.ChangeNote = long.Changed
+		if incomplete {
+			j.Status = MuseJobFailed
+			j.Error = "Video chưa đúng thời lượng. " + note + " File đã nhận được giữ lại; app không tự gửi tạo lại."
+		}
 		j.Step = fmt.Sprintf("Đã tải %d file", len(files))
 		j.FinishedAt = p.now().UTC().Format(time.RFC3339)
-		succeeded = true
+		settled = true
 	})
 	if err != nil {
 		logger.Get().Warn("cannot save muse job", "job", job.ID, "error", err)
+		return err
 	} else {
-		// The library is filled before the frontend hears of the success,
+		// The library is filled before the frontend hears of the result,
 		// since that event is when it reloads the library.
-		if succeeded {
+		if settled {
 			p.addToLibrary(done)
 		}
 		p.emit(events.EventMuseJobUpdated, done)
-		if succeeded && done.BoardFrames > 0 && done.Kind == MuseJobImage {
+		if settled && done.BoardFrames > 0 && done.Kind == MuseJobImage {
 			p.releaseAfter(done)
 		}
 	}
@@ -667,17 +712,6 @@ func (p *Provider) longOutcome(ctx context.Context, job MuseJob, accountID strin
 		return st, &continueNeeded{seen: len(replies)}
 	}
 	return st, nil
-}
-
-// tooShort reports whether a downloaded video is clearly shorter than the
-// job asked for. A file that cannot be measured is not judged.
-func (p *Provider) tooShort(ctx context.Context, job MuseJob, file string) bool {
-	path, err := p.media.Path(file)
-	if err != nil {
-		return false
-	}
-	meta, err := media.ProbeVideo(ctx, path, p.ffprobe)
-	return err == nil && meta.DurationSeconds > 0 && meta.DurationSeconds < float64(job.Duration)-durationTolerance
 }
 
 // restingUntil reads the account's quota and returns when its rest ends, or
@@ -729,15 +763,25 @@ func (p *Provider) noResult(ctx context.Context, accountID string, page Page, en
 // both the expected length and the limit. A file whose size Muse left out is
 // read whole (the page reads the file's own size) under the app's download cap.
 func (p *Provider) download(ctx context.Context, page Page, m ResultMedia, id string) (string, error) {
-	limit := m.ByteLen
-	if limit <= 0 {
-		limit = p.cfg.Get().Accounts.MaxDownloadBytes
+	limit := p.cfg.Get().Accounts.MaxDownloadBytes
+	if limit <= 0 || m.ByteLen > limit {
+		return "", &inputError{msg: "Tệp Muse vượt giới hạn tải media trong cấu hình."}
+	}
+	if m.ByteLen > 0 {
+		limit = min(limit, m.ByteLen)
 	}
 	reader, writer := io.Pipe()
-	defer reader.Close()
+	downloadCtx, cancel := context.WithCancel(ctx)
+	finished := make(chan struct{})
+	defer func() {
+		reader.Close()
+		cancel()
+		<-finished // release the account slot only after Chrome closed its Blob
+	}()
 	go func() {
+		defer close(finished)
 		defer logger.Recover("tải file Muse", func(err error) { writer.CloseWithError(err) })
-		n, err := page.Download(ctx, m.Path, writer)
+		n, err := page.Download(downloadCtx, m.Path, writer)
 		if err == nil && m.ByteLen > 0 && n != m.ByteLen {
 			err = fmt.Errorf("Tải file lỗi: %d/%d byte", n, m.ByteLen)
 		}
@@ -836,12 +880,9 @@ func (p *Provider) attach(job MuseJob, caps *MuseCapabilities) ([]Attachment, er
 		if err != nil {
 			return nil, &inputError{msg: "Không đọc được ảnh tham chiếu (có thể đã bị xoá): " + filepath.Base(path)}
 		}
-		if int64(len(data)) > caps.MaxFileBytes {
-			return nil, &inputError{msg: fmt.Sprintf("%s vượt %d MB, giới hạn một file của Muse.", filepath.Base(path), caps.MaxFileBytes>>20)}
-		}
 		atts = append(atts, Attachment{Filename: fmt.Sprintf("image_%d%s", k+1, ext), MimeType: mime, DataBase64: base64.StdEncoding.EncodeToString(data), Category: "image"})
 	}
-	return atts, nil
+	return prepareAttachments(job, atts, caps)
 }
 
 // attachVideo reads a source video and checks it against caps.
@@ -1205,20 +1246,19 @@ func (p *Provider) refreshQuota(ctx context.Context, accountID string, page Page
 // folder (Đơn, graph nodes) saves nothing; a job cancelled meanwhile keeps the
 // user's decision: its files stay in the media folder and are not copied out.
 func (p *Provider) saveOutputs(job MuseJob, files []string) []string {
-	if job.OutputDir == "" || len(files) == 0 {
-		return nil
+	current, err := p.saveCollected(job, files)
+	if err != nil {
+		logger.Get().Warn("muse save failed", "job", job.ID, "error", err)
 	}
-	var saved []string
-	for _, fileURL := range files {
-		if current, ok := p.jobs.get(job.ID); !ok || current.Status != MuseJobProcessing {
-			return saved
-		}
-		path, err := p.media.SaveTo(fileURL, job.OutputDir, media.OutputName(job.Index, "muse"))
-		if err != nil {
-			logger.Get().Warn("muse save failed", "job", job.ID, "dir", job.OutputDir, "error", err)
-			continue
-		}
-		saved = append(saved, path)
+	return current.SavedFiles
+}
+
+func (p *Provider) saveCollected(job MuseJob, files []string) (MuseJob, error) {
+	p.saveMu.Lock()
+	defer p.saveMu.Unlock()
+	current, ok := p.jobs.get(job.ID)
+	if !ok || current.Status != MuseJobProcessing {
+		return MuseJob{}, nil
 	}
-	return saved
+	return p.writeOutputs(current, files)
 }

@@ -82,8 +82,8 @@ type MuseConfig struct {
 	// Single jobs are not saved; their files are downloaded by hand.
 	OutputDir string `json:"outputDir"`
 	// SetupMessage is sent in a chat of its own on every Muse account once it
-	// is signed in; the account counts as signed in only once Muse has replied.
-	// A changed message is sent again; empty sends nothing.
+	// is signed in. Failures are noted without undoing sign-in.
+	// Once Muse accepts it, it is not sent again; empty sends nothing.
 	SetupMessage string `json:"setupMessage"`
 	// CleanupMessage is what "Dọn đoạn chat phụ" (Cài đặt Muse → Tài khoản)
 	// sends in a new chat on every signed-in Muse account: Muse deletes the
@@ -103,7 +103,9 @@ const defaultMuseSetupMessage = `Please save the following rule to this account'
 
 GLOBAL RULE: Every request I make to create an image, a video or any other new output is a completely independent request. Never use, reference or infer anything from any output created earlier on your own, including subject, characters, style, aspect ratio, duration, resolution and old files, even when my generation prompt does not mention this rule. Use only the parameters in the current request. Reuse an earlier output only when I explicitly say in that request that I want to continue, edit or reuse it.
 
-After saving it, please confirm: where you saved it, what its scope is, and whether I need to repeat this rule in later generations.`
+Apply each request's reference roles and locks only to their assigned subjects and attributes. Preserve its exact dialogue, language and requested style. Do not force photorealism or rapid pacing when they are not requested.
+
+Please confirm whether you can actually save this rule across conversations and its scope. If permanent memory is unavailable, say so explicitly; do not claim it was saved. Each generation request will also carry its own rules.`
 
 // defaultMuseCleanupMessage asks Muse to delete every other chat of the
 // account without asking first.

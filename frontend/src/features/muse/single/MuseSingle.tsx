@@ -92,7 +92,7 @@ export function MuseSingleWorkspace({ kind }: { kind: MuseJobKind }) {
   const allJobs = useVisibleMuseJobs();
   const loaded = useMuseStore((s) => s.loaded);
   const [draft, update] = useMuseDraft(kind, MuseJobMode.Single);
-  const submit = useMuseSubmit(kind, MuseJobMode.Single);
+  const { submit, submitting } = useMuseSubmit(kind, MuseJobMode.Single);
   const { jobActions } = useMuseActions();
   const [preview, setPreview] = useState<{
     url: string;
@@ -143,6 +143,7 @@ export function MuseSingleWorkspace({ kind }: { kind: MuseJobKind }) {
         onGenerate={() => void generate()}
         placeholder={placeholders[kind]}
         generating={generating}
+        submitting={submitting}
       />
       {preview && (
         <Modal variant="lightbox" label={preview.prompt} onClose={() => setPreview(null)}>
@@ -222,6 +223,7 @@ const SingleTile = memo(function SingleTile({
           {jobNote(job) && <Icon icon={AlertCircle} size="sm" className="muse-tile-note" />}
           {job.prompt}
         </p>
+        {ended && job.files.length > 0 && <p role="alert">{job.error}</p>}
         <div className="muse-tile-actions">
           {job.held && (
             <IconAction

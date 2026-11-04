@@ -240,6 +240,8 @@ export const api = {
   listMuseJobs: () => invoke<MuseJob[]>('ListMuseJobs', Backend.ListMuseJobs),
   cancelMuseJob: (id: string) => invoke<MuseJob>('CancelMuseJob', () => Backend.CancelMuseJob(id)),
   retryMuseJob: (id: string) => invoke<MuseJob>('RetryMuseJob', () => Backend.RetryMuseJob(id)),
+  retrySaveMuseJob: (id: string) =>
+    invoke<MuseJob>('RetrySaveMuseJob', () => Backend.RetrySaveMuseJob(id)),
   removeMuseJob: (id: string) => invoke<boolean>('RemoveMuseJob', () => Backend.RemoveMuseJob(id)),
   runMuseJobs: (ids: string[]) => invoke<number>('RunMuseJobs', () => Backend.RunMuseJobs(ids)),
   holdMuseQueued: (kind: MuseJobKind, mode: MuseJobMode) =>

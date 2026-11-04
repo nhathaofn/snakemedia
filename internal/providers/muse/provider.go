@@ -30,8 +30,10 @@ const pumpInterval = 30 * time.Second
 // Provider owns the Muse job queue; accounts and their browsers belong to
 // the accounts service.
 type Provider struct {
-	cfg   *config.Manager
-	media *media.Store
+	submitMu sync.Mutex // serializes submission IDs and batch numbering
+	saveMu   sync.Mutex // serializes output retries with collection
+	cfg      *config.Manager
+	media    *media.Store
 	// tools finds ffprobe for videos whose header Go cannot read; nil in tests.
 	tools    *tools.Service
 	root     string // Muse's data folder
@@ -52,11 +54,12 @@ type Provider struct {
 	sleep   func(context.Context, time.Duration) error
 	gap     func(config.MuseConfig) time.Duration
 
-	mu      sync.Mutex
-	emit    func(events.Event, any)
-	ctx     context.Context
-	stop    context.CancelFunc
-	running map[string]string // job ID -> account ID
+	mu       sync.Mutex
+	emit     func(events.Event, any)
+	ctx      context.Context
+	stop     context.CancelFunc
+	running  map[string]string // job ID -> account ID
+	lastMode MuseJobMode       // last newly assigned screen; next mode gets a turn
 	// cleaning holds the accounts "Dọn đoạn chat phụ" is working on; they
 	// take no job meanwhile (cleanup.go).
 	cleaning map[string]bool
@@ -67,6 +70,7 @@ type Provider struct {
 	// moved aside, so the user checks jobs that may have been sent.
 	journalWarning string
 	sendSlots      map[string]chan struct{}
+	downloadSlots  map[string]chan struct{}
 	navs           map[string]*sync.RWMutex
 	wake           chan struct{}
 	wg             sync.WaitGroup
@@ -79,16 +83,17 @@ func New(dataDir, outputDir string, cfg *config.Manager, store *media.Store, acc
 	root := filepath.Join(dataDir, "muse")
 	p := &Provider{
 		cfg: cfg, media: store, root: root, accounts: accts, defaultOutputDir: outputDir,
-		now:       time.Now,
-		sleep:     sleepContext,
-		gap:       sendGap,
-		emit:      func(events.Event, any) {},
-		running:   make(map[string]string),
-		cleaning:  make(map[string]bool),
-		cancels:   make(map[string]context.CancelFunc),
-		sendSlots: make(map[string]chan struct{}),
-		navs:      make(map[string]*sync.RWMutex),
-		wake:      make(chan struct{}, 1),
+		now:           time.Now,
+		sleep:         sleepContext,
+		gap:           sendGap,
+		emit:          func(events.Event, any) {},
+		running:       make(map[string]string),
+		cleaning:      make(map[string]bool),
+		cancels:       make(map[string]context.CancelFunc),
+		sendSlots:     make(map[string]chan struct{}),
+		downloadSlots: make(map[string]chan struct{}),
+		navs:          make(map[string]*sync.RWMutex),
+		wake:          make(chan struct{}, 1),
 	}
 	// The folders Muse saves results to are the app's own: the default, the
 	// one the batch form remembers, and those queued batches still save into.
@@ -101,7 +106,7 @@ func New(dataDir, outputDir string, cfg *config.Manager, store *media.Store, acc
 			return dirs
 		}
 		for _, j := range p.jobs.list() {
-			if !j.finished() && j.OutputDir != "" {
+			if j.OutputDir != "" {
 				dirs = append(dirs, j.OutputDir)
 			}
 		}
@@ -260,7 +265,13 @@ func (p *Provider) pump() {
 	jobs := p.jobs.list()
 	started := make(map[string]bool)
 	free := slices.DeleteFunc(slices.Clone(views), func(v MuseAccount) bool { return p.cleaning[v.ID] })
-	for _, a := range plan(due(jobs, now), free, p.cfg.Get().Muse, p.running, now) {
+	for _, a := range plan(due(jobs, now), free, p.cfg.Get().Muse, p.running, now, p.lastMode) {
+		if job, ok := p.jobs.get(a.jobID); ok && job.Status == MuseJobQueued {
+			p.lastMode = job.Mode
+			if p.lastMode == "" {
+				p.lastMode = MuseJobBatch
+			}
+		}
 		ctx, cancel := context.WithCancel(p.ctx)
 		p.running[a.jobID] = a.accountID
 		p.cancels[a.jobID] = cancel
@@ -326,11 +337,21 @@ func (p *Provider) holdUntil(jobID string, t time.Time) {
 
 // sendSlot waits for the account's single send slot; release frees it.
 func (p *Provider) sendSlot(ctx context.Context, accountID string) (release func(), err error) {
+	return p.accountSlot(ctx, accountID, p.sendSlots)
+}
+
+// downloadSlot keeps only one result Blob open per account, even when several
+// generations run together. Other accounts can still download in parallel.
+func (p *Provider) downloadSlot(ctx context.Context, accountID string) (func(), error) {
+	return p.accountSlot(ctx, accountID, p.downloadSlots)
+}
+
+func (p *Provider) accountSlot(ctx context.Context, accountID string, slots map[string]chan struct{}) (release func(), err error) {
 	p.mu.Lock()
-	slot := p.sendSlots[accountID]
+	slot := slots[accountID]
 	if slot == nil {
 		slot = make(chan struct{}, 1)
-		p.sendSlots[accountID] = slot
+		slots[accountID] = slot
 	}
 	p.mu.Unlock()
 	select {

@@ -159,6 +159,8 @@ export function RetryMuseFailed(arg1:muse.MuseJobKind,arg2:muse.MuseJobMode):Pro
 
 export function RetryMuseJob(arg1:string):Promise<models.Response_SnakeMedia_internal_providers_muse_MuseJob_>;
 
+export function RetrySaveMuseJob(arg1:string):Promise<models.Response_SnakeMedia_internal_providers_muse_MuseJob_>;
+
 export function RevealFile(arg1:string):Promise<models.Response_bool_>;
 
 export function RotateAccountIP(arg1:string):Promise<models.Response_SnakeMedia_internal_proxy_CheckResult_>;

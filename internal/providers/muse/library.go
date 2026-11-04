@@ -42,7 +42,9 @@ func libraryItems(job MuseJob) []MuseLibraryItem {
 			ID: fmt.Sprintf("%s-%d", job.ID, k+1), Job: job.ID, Kind: job.Kind, LocalURL: url,
 			Prompt: job.Prompt, Label: job.Label, AccountID: job.AccountID, CreatedAt: job.FinishedAt,
 		}
-		if k < len(job.SavedFiles) {
+		if job.OutputPaths != nil {
+			item.SavedPath = job.OutputPaths[url]
+		} else if k < len(job.SavedFiles) {
 			item.SavedPath = job.SavedFiles[k]
 		}
 		if item.CreatedAt == "" {

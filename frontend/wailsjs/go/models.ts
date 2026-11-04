@@ -3051,6 +3051,8 @@ export namespace muse {
 	}
 	export class MuseJob {
 	    id: string;
+	    submissionId?: string;
+	    submissionHash?: string;
 	    kind: MuseJobKind;
 	    mode?: MuseJobMode;
 	    prompt: string;
@@ -3082,6 +3084,8 @@ export namespace muse {
 	    error?: string;
 	    files: string[];
 	    savedFiles?: string[];
+	    outputPaths?: Record<string, string>;
+	    saveError?: string;
 	    createdAt: string;
 	    startedAt?: string;
 	    sentAt?: string;
@@ -3096,6 +3100,8 @@ export namespace muse {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
+	        this.submissionId = source["submissionId"];
+	        this.submissionHash = source["submissionHash"];
 	        this.kind = source["kind"];
 	        this.mode = source["mode"];
 	        this.prompt = source["prompt"];
@@ -3127,6 +3133,8 @@ export namespace muse {
 	        this.error = source["error"];
 	        this.files = source["files"];
 	        this.savedFiles = source["savedFiles"];
+	        this.outputPaths = source["outputPaths"];
+	        this.saveError = source["saveError"];
 	        this.createdAt = source["createdAt"];
 	        this.startedAt = source["startedAt"];
 	        this.sentAt = source["sentAt"];
@@ -3168,6 +3176,7 @@ export namespace muse {
 	    }
 	}
 	export class MuseJobRequest {
+	    submissionId?: string;
 	    kind: MuseJobKind;
 	    mode: MuseJobMode;
 	    prompts: string[];
@@ -3189,6 +3198,7 @@ export namespace muse {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.submissionId = source["submissionId"];
 	        this.kind = source["kind"];
 	        this.mode = source["mode"];
 	        this.prompts = source["prompts"];

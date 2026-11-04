@@ -9,8 +9,8 @@ async function fetchLibrary(): Promise<MuseLibraryItem[]> {
 }
 
 /**
- * The Muse library: loaded on mount and again whenever a job succeeds, since
- * that is the only time the backend adds files to it.
+ * Reload when results arrive, including a video that failed validation while
+ * preserving its file, or a completed job whose output copies were retried.
  */
 export function useMuseLibrary() {
   const [items, setItems] = useState<MuseLibraryItem[]>([]);
@@ -36,7 +36,12 @@ export function useMuseLibrary() {
   // Jobs finishing in a burst share one reload.
   const reloadQueued = useRef(false);
   useWailsEvent<MuseJob | null>(AppEvent.MuseJobUpdated, (job) => {
-    if (job?.status !== MuseJobStatus.Succeeded || reloadQueued.current) return;
+    if (
+      !job?.files.length ||
+      (job.status !== MuseJobStatus.Succeeded && job.status !== MuseJobStatus.Failed) ||
+      reloadQueued.current
+    )
+      return;
     reloadQueued.current = true;
     onNextFrame(() => {
       reloadQueued.current = false;

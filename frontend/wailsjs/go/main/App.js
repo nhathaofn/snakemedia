@@ -306,6 +306,10 @@ export function RetryMuseJob(arg1) {
   return window['go']['main']['App']['RetryMuseJob'](arg1);
 }
 
+export function RetrySaveMuseJob(arg1) {
+  return window['go']['main']['App']['RetrySaveMuseJob'](arg1);
+}
+
 export function RevealFile(arg1) {
   return window['go']['main']['App']['RevealFile'](arg1);
 }

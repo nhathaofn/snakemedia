@@ -108,3 +108,48 @@ clips with pauses.
   carries Muse's change note or fails with Muse's reason.
 - The guide is the part to tune when Muse changes; `TestLiveLongVideo` sends
   the app's real message (`buildMessage`) for a range of kinds of video.
+
+
+## Prompt revision (2026-11-04)
+
+The current guide supersedes the brisk-pace defaults above. Every new Muse
+job now carries independent-request rules, so isolation does not depend on
+account memory. The user's requested style, pacing, pauses and language are
+preserved; unspecified visual details may be completed without adding plot
+events, characters or dialogue. No fixed words-per-second estimate is used
+as a universal speech limit. Feasibility includes action and reaction time.
+
+Reference authority is scoped to attributes: locks first for their named
+subject and attribute; face references for identity; full-character
+references for proportions and wardrobe; product references for product
+appearance; storyboards for composition and otherwise unlocked wardrobe.
+The prompt controls actions and dialogue. Unassigned references may be given
+a role by the prompt. References do not require a subject in every shot.
+Storyboard generation follows the requested medium instead of forcing
+photorealism, and preserves required product markings and requested text.
+
+The existing cut-based long-video workflow, generation limits, same-chat
+continuations and STATUS parser remain. The guide asks for an exported,
+available complete file before DONE, and disclosure of checks that could
+not be performed. A production limitation must not be described as a
+verified success. Prompt instructions do not themselves verify visual or
+speech quality. The default setup message asks for truthful reporting of
+memory capability; saved custom setup messages are not migrated or resent.
+
+Before claiming an output-quality improvement, compare old and new guides
+on the same requests: animation storyboard, slow silent scene, Vietnamese
+dialogue near the duration limit, product text with a style reference,
+multiple characters with separate entrances, and long-video continuation.
+Assess content coverage, identities, product markings, pacing, speech,
+format, remakes and cost. Automated message-composition and queue tests do
+not replace this live comparison.
+
+Video jobs with attached references also carry a separate reference-sheet
+rule (`referenceSheetRule`, `videoReferenceLines`). Each affected attachment
+is named by image number, asset tag when present, and role, including all
+views of one asset. Reference grids, turnarounds and previews must not appear
+as video frames, including at the start and end; frame zero must show the
+requested scene. A tool requiring an opening image must use a clean scene
+frame instead of a reference sheet. Separately supplied storyboard openings
+keep their scene assignments and are not listed as reference sheets. This
+is a generation instruction only: no automatic frame trimming is applied.

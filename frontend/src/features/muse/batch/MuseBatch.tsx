@@ -72,7 +72,7 @@ export function MuseBatchPanel({ kind }: { kind: MuseJobKind }) {
   );
   const [draft, update] = useMuseDraft(kind, MuseJobMode.Batch);
   const [outputDir, setOutputDir] = useState('');
-  const submit = useMuseSubmit(kind, MuseJobMode.Batch);
+  const { submit } = useMuseSubmit(kind, MuseJobMode.Batch);
   const addToast = useAppStore((s) => s.addToast);
   const { act, report } = useMuseActions();
   return (

@@ -274,6 +274,22 @@ function pageMain(CHUNK) {
         ok: Boolean(r?.ok),
         sessionId: r?.sessionId || (r?.ok ? thread : ""),
         reason: String(r?.reason || r?.error || ""),
+        // Muse returns both reason: "send_failed" and an Error. Keep the
+        // latter's useful fields: choosing reason || error hid the cause.
+        diagnostics: r?.error
+          ? Object.fromEntries(
+              ["name", "message", "code", "kind", "deliveryState", "requestTimedOut"]
+                .filter((k) => ["string", "number", "boolean"].includes(typeof r.error[k]))
+                .map((k) => {
+                  let v = r.error[k];
+                  if (typeof v === "string") {
+                    if (text) v = v.split(text).join("[prompt]");
+                    v = v.replace(/[A-Za-z0-9+/=]{128,}/g, "[data]").slice(0, 1024);
+                  }
+                  return [k, v];
+                }),
+            )
+          : null,
       };
     },
     async status(sid) {
@@ -300,11 +316,13 @@ function pageMain(CHUNK) {
           videos: media(e.payload?.data?.videos),
         }));
     },
-    async open(path) {
+    async open(path, maxBytes) {
       const r = await rt().sendRequest("fs.raw", {
         path: path.replace(/^sandbox:\/\//, ""),
       });
       const blob = r instanceof Blob ? r : r.data;
+      if (!blob || blob.size <= 0 || blob.size > maxBytes)
+        throw new Error("Muse file is empty or exceeds the download limit");
       files.set(++fileSeq, blob);
       return { id: fileSeq, size: blob.size };
     },

@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { api, unwrap } from '../../../services';
 import { useAppStore } from '../../../stores';
 import { MuseJobKind as Kind, MuseJobRequest, MuseStoryboard } from '../../../types';
@@ -18,6 +18,7 @@ export interface JobActions {
   editPrompt: (id: string, prompt: string) => void;
   remove: (id: string) => void;
   save: (url: string) => void;
+  retrySave: (id: string) => void;
   reveal: (url: string) => void;
 }
 
@@ -51,6 +52,16 @@ export function useMuseActions() {
   const jobActions = useMemo<JobActions>(
     () => ({
       cancel: (id) => void act(async () => setJob(unwrap(await api.cancelMuseJob(id)))),
+      retrySave: (id) =>
+        void act(async () => {
+          const job = unwrap(await api.retrySaveMuseJob(id));
+          setJob(job);
+          addToast(
+            job.saveError
+              ? { type: 'error', message: job.saveError }
+              : { type: 'success', message: 'Đã lưu đầy đủ file vào thư mục hàng loạt.' },
+          );
+        }),
       retry: (job) => {
         if (mayBePaid(job) && !window.confirm(RETRY_PAID_CONFIRM)) return;
         void act(async () => setJob(unwrap(await api.retryMuseJob(job.id))));
@@ -85,7 +96,10 @@ export function useMuseActions() {
 export function useMuseSubmit(kind: MuseJobKind, mode: MuseJobMode) {
   const setJob = useMuseStore((s) => s.setJob);
   const addToast = useAppStore((s) => s.addToast);
-  return useCallback(
+  const locked = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
+  const pending = useRef<{ key: string; id: string } | null>(null);
+  const submit = useCallback(
     async (
       prompts: string[],
       repeat: number,
@@ -93,33 +107,39 @@ export function useMuseSubmit(kind: MuseJobKind, mode: MuseJobMode) {
       draft: Pick<MuseDraft, 'references' | 'ratio' | 'duration'> & Partial<MuseDraft>,
       outputDir = '',
     ) => {
+      if (locked.current) return false;
+      locked.current = true;
+      setSubmitting(true);
       try {
-        const created = unwrap(
-          await api.submitMuseJobs(
-            MuseJobRequest.createFrom({
-              kind,
-              mode,
-              prompts,
-              repeat,
-              references: draft.references.map((r) => r.localUrl),
-              label: '',
-              held,
-              outputDir,
-              ratio: draft.ratio,
-              duration: draft.duration,
-              refMode: draft.refMode || undefined,
-              assets: draft.assetIds?.length ? liveAssetIds(draft.assetIds) : undefined,
-              storyboard:
-                kind === Kind.Video && (draft.boardFrames ?? 0) > 0
-                  ? MuseStoryboard.createFrom({
-                      frames: draft.boardFrames,
-                      review: draft.boardReview ?? false,
-                    })
-                  : undefined,
-              sourceVideo: draft.sourceVideo?.localUrl || undefined,
-            }),
-          ),
+        const values = {
+          kind,
+          mode,
+          prompts,
+          repeat,
+          references: draft.references.map((r) => r.localUrl),
+          label: '',
+          held,
+          outputDir,
+          ratio: draft.ratio,
+          duration: draft.duration,
+          refMode: draft.refMode || undefined,
+          assets: draft.assetIds?.length ? liveAssetIds(draft.assetIds) : undefined,
+          storyboard:
+            kind === Kind.Video && (draft.boardFrames ?? 0) > 0
+              ? MuseStoryboard.createFrom({
+                  frames: draft.boardFrames,
+                  review: draft.boardReview ?? false,
+                })
+              : undefined,
+          sourceVideo: draft.sourceVideo?.localUrl || undefined,
+        };
+        const key = JSON.stringify(values);
+        if (pending.current?.key !== key) pending.current = { key, id: crypto.randomUUID() };
+        const response = await api.submitMuseJobs(
+          MuseJobRequest.createFrom({ ...values, submissionId: pending.current.id }),
         );
+        const created = unwrap(response);
+        pending.current = null;
         created.forEach(setJob);
         return created.length > 0;
       } catch (cause) {
@@ -128,8 +148,12 @@ export function useMuseSubmit(kind: MuseJobKind, mode: MuseJobMode) {
           message: cause instanceof Error ? cause.message : String(cause),
         });
         return false;
+      } finally {
+        locked.current = false;
+        setSubmitting(false);
       }
     },
     [addToast, kind, mode, setJob],
   );
+  return { submit, submitting };
 }

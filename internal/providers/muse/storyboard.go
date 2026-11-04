@@ -22,8 +22,8 @@ const maxBoardFrames = 6
 func boardImageLines(job MuseJob) []string {
 	return []string{
 		fmt.Sprintf("Storyboard: make exactly %d separate images, the opening frame of each scene of the video the prompt describes, in its scene order (image 1 opens scene 1).", job.BoardFrames),
-		"Photorealistic, like stills from the finished video. The same people with the same faces, hair and clothing, the same setting, light and products in every frame; a product attached as an image stays exactly as shown, with its text and colors.",
-		"Make only these images, no video yet, and add no text, captions, numbers, grids or logos to them.",
+		"Match the medium, visual style and mood requested for the finished video; do not default to photorealism. Keep recurring people, faces, hair, clothing, places and products consistent wherever they appear, except for changes the prompt explicitly describes. Show only the people and objects called for in each scene. A product reference keeps its text and colors. If scene boundaries are unspecified, divide the existing content into the requested number of frames without inventing events.",
+		"Make only these separate images, no video yet. Add no storyboard labels, captions, panel numbers, grids or decorative logos. Preserve required product markings and text explicitly requested in the scene.",
 	}
 }
 
@@ -31,7 +31,7 @@ func boardImageLines(job MuseJob) []string {
 func boardVideoLines(job MuseJob) []string {
 	n := len(job.Frames)
 	return []string{
-		fmt.Sprintf("Storyboard frames: image 1 to image %d are the opening frames of the video's scenes, in order (image k opens scene k). Start each scene from its frame and keep the same people, faces, clothing, setting, light and products as in the frames throughout. Do not show the frames as stills or add anything drawn on them.", n),
+		fmt.Sprintf("Storyboard frames: image 1 to image %d are the opening frames of the video's scenes, in order (image k opens scene k). Start each scene from its frame and preserve the identities, wardrobe, setting, light and products established by each frame, subject to assigned reference roles and locks. Follow the prompt's scene-specific entrances, exits and changes; do not force every subject into every scene. Do not show the frames as stills or reproduce storyboard grids, labels or panel numbers; preserve required product markings and requested scene text.", n),
 	}
 }
 
@@ -39,7 +39,7 @@ func boardVideoLines(job MuseJob) []string {
 func v2vLines(job MuseJob) []string {
 	return []string{
 		"Source video: the attached video (video 1) is the template. First study its camera angles and movement, shot timing, the people's actions and pacing, and its sound style.",
-		fmt.Sprintf("Then make a new %s that follows the same camera movement, timing and actions with the changes the prompt asks for. Do not send the source video back or cut it; generate new footage.", kindWord[job.Kind]),
+		fmt.Sprintf("Then make a new %s that follows the same camera movement, timing and actions with the changes the prompt asks for. The source controls only movement, timing and actions not explicitly changed by the prompt; assigned reference roles and locks still control appearance. Do not copy source identities, brands, captions or music unless requested. Do not send the source video back or cut it; generate new footage.", kindWord[job.Kind]),
 	}
 }
 
