@@ -10,8 +10,16 @@ export function AddFlowImageTaskReferences(arg1, arg2) {
   return window['go']['main']['App']['AddFlowImageTaskReferences'](arg1, arg2);
 }
 
+export function AddFlowVideoTaskReferences(arg1, arg2) {
+  return window['go']['main']['App']['AddFlowVideoTaskReferences'](arg1, arg2);
+}
+
 export function CancelFlowImageTask(arg1) {
   return window['go']['main']['App']['CancelFlowImageTask'](arg1);
+}
+
+export function CancelFlowVideoTask(arg1) {
+  return window['go']['main']['App']['CancelFlowVideoTask'](arg1);
 }
 
 export function CancelGeneration(arg1) {
@@ -50,6 +58,10 @@ export function ClearFinishedFlowImageTasks() {
   return window['go']['main']['App']['ClearFinishedFlowImageTasks']();
 }
 
+export function ClearFinishedFlowVideoTasks() {
+  return window['go']['main']['App']['ClearFinishedFlowVideoTasks']();
+}
+
 export function ClearMuseFinished(arg1, arg2) {
   return window['go']['main']['App']['ClearMuseFinished'](arg1, arg2);
 }
@@ -60,6 +72,10 @@ export function EditAndRetryMuseJob(arg1, arg2) {
 
 export function EditFlowImageTask(arg1, arg2) {
   return window['go']['main']['App']['EditFlowImageTask'](arg1, arg2);
+}
+
+export function EditFlowVideoTask(arg1, arg2) {
+  return window['go']['main']['App']['EditFlowVideoTask'](arg1, arg2);
 }
 
 export function EditVideos(arg1) {
@@ -102,6 +118,10 @@ export function GetFlowImageTasks() {
   return window['go']['main']['App']['GetFlowImageTasks']();
 }
 
+export function GetFlowVideoTasks() {
+  return window['go']['main']['App']['GetFlowVideoTasks']();
+}
+
 export function GetImageModels() {
   return window['go']['main']['App']['GetImageModels']();
 }
@@ -140,6 +160,10 @@ export function GetVideoModels() {
 
 export function HoldFlowImageTasks(arg1) {
   return window['go']['main']['App']['HoldFlowImageTasks'](arg1);
+}
+
+export function HoldFlowVideoTasks(arg1) {
+  return window['go']['main']['App']['HoldFlowVideoTasks'](arg1);
 }
 
 export function HoldMuseQueued(arg1, arg2) {
@@ -222,6 +246,10 @@ export function PickFlowImageReferences() {
   return window['go']['main']['App']['PickFlowImageReferences']();
 }
 
+export function PickFlowVideoReferences() {
+  return window['go']['main']['App']['PickFlowVideoReferences']();
+}
+
 export function PickMuseAssetImages() {
   return window['go']['main']['App']['PickMuseAssetImages']();
 }
@@ -248,6 +276,10 @@ export function RemoveAccount(arg1) {
 
 export function RemoveFlowImageTasks(arg1) {
   return window['go']['main']['App']['RemoveFlowImageTasks'](arg1);
+}
+
+export function RemoveFlowVideoTasks(arg1) {
+  return window['go']['main']['App']['RemoveFlowVideoTasks'](arg1);
 }
 
 export function RemoveMuseAssets(arg1) {
@@ -298,6 +330,10 @@ export function RetryFlowImageTasks(arg1) {
   return window['go']['main']['App']['RetryFlowImageTasks'](arg1);
 }
 
+export function RetryFlowVideoTasks(arg1) {
+  return window['go']['main']['App']['RetryFlowVideoTasks'](arg1);
+}
+
 export function RetryMuseFailed(arg1, arg2) {
   return window['go']['main']['App']['RetryMuseFailed'](arg1, arg2);
 }
@@ -320,6 +356,10 @@ export function RotateAccountIP(arg1) {
 
 export function RunFlowImageTasks(arg1) {
   return window['go']['main']['App']['RunFlowImageTasks'](arg1);
+}
+
+export function RunFlowVideoTasks(arg1) {
+  return window['go']['main']['App']['RunFlowVideoTasks'](arg1);
 }
 
 export function RunGraph(arg1) {
@@ -356,6 +396,10 @@ export function SetAccountProxy(arg1, arg2) {
 
 export function SubmitFlowImageTasks(arg1) {
   return window['go']['main']['App']['SubmitFlowImageTasks'](arg1);
+}
+
+export function SubmitFlowVideoTasks(arg1) {
+  return window['go']['main']['App']['SubmitFlowVideoTasks'](arg1);
 }
 
 export function SubmitMuseJobs(arg1) {

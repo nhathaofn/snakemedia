@@ -4,7 +4,6 @@ import (
 	_ "embed"
 	"image"
 	"image/color"
-	"image/draw"
 	"math"
 	"slices"
 	"sync"
@@ -34,6 +33,7 @@ type textMark struct {
 	alpha    []float32
 	sumAlpha float64
 	denAlpha float64
+	gradient []float64
 }
 
 var (
@@ -57,6 +57,7 @@ func veoMark() textMark {
 			sumSq += (float64(a) - mean) * (float64(a) - mean)
 		}
 		veo.denAlpha = math.Sqrt(sumSq)
+		veo.gradient = alphaGradient(veo.alpha, veo.w, veo.h)
 	})
 	return veo
 }
@@ -64,6 +65,7 @@ func veoMark() textMark {
 type veoMatch struct {
 	x, y  int
 	score float64
+	gain  float64
 }
 
 // findVeo correlates the text's alpha with the picture around its place.
@@ -94,7 +96,7 @@ func findVeo(img image.Image) veoMatch {
 				continue
 			}
 			if c := (prod - sum/n*t.sumAlpha) / (math.Sqrt(den) * t.denAlpha); c > best.score {
-				best = veoMatch{x: x0, y: y0, score: c}
+				best = veoMatch{x: x0, y: y0, score: c, gain: 1}
 			}
 		}
 	}
@@ -119,68 +121,50 @@ func voteVeo(found []veoMatch) (veoMatch, bool) {
 	}
 	slices.Sort(scores)
 	median := scores[len(scores)/2]
-	return veoMatch{x: best.X, y: best.Y, score: median}, median >= minVeoScore
+	return veoMatch{x: best.X, y: best.Y, score: median, gain: 1}, median >= minVeoScore
 }
 
-// removeVeo unblends the white text at m. The strokes are a pixel or two
-// wide and video keeps colour at half resolution, so the text's colour is
-// spread wider and fainter than its brightness: brightness is unblended with
-// the sharp alpha and colour with the alpha averaged over 3x3, otherwise the
-// strokes come back as dark letters. What is left is faint letter-shaped
-// noise, so stroke pixels then take the median of their 5x5 neighbourhood,
-// which is mostly picture since the strokes are thin.
+// removeVeo seamlessly inpaints the small (24x12) "Veo" text mark at m by
+// interpolating from the boundary pixels around the bounding box. This avoids
+// leaving dark letter residues or smudges on compressed video backgrounds.
 func removeVeo(rgba *image.RGBA, m veoMatch) {
 	t := veoMark()
-	at := func(x, y int) float64 {
-		if x < 0 || y < 0 || x >= t.w || y >= t.h {
-			return 0
-		}
-		return float64(t.alpha[y*t.w+x])
+	bounds := rgba.Bounds()
+	x0 := max(bounds.Min.X+1, m.x-2)
+	y0 := max(bounds.Min.Y+1, m.y-2)
+	x1 := min(bounds.Max.X-2, m.x+t.w+2)
+	y1 := min(bounds.Max.Y-2, m.y+t.h+2)
+	if x0 >= x1 || y0 >= y1 {
+		return
 	}
-	for y := -1; y <= t.h; y++ {
-		for x := -1; x <= t.w; x++ {
-			var soft float64
-			for dy := -1; dy <= 1; dy++ {
-				for dx := -1; dx <= 1; dx++ {
-					soft += at(x+dx, y+dy)
-				}
-			}
-			soft /= 9
-			a := at(x, y)
-			if a < 0.002 && soft < 0.002 {
-				continue
-			}
-			px, py := m.x+x, m.y+y
-			if !image.Pt(px, py).In(rgba.Bounds()) {
-				continue
-			}
-			c := rgba.RGBAAt(px, py)
-			yy, cb, cr := color.RGBToYCbCr(c.R, c.G, c.B)
-			yy = unblend(yy, a, 255)
-			cb = unblend(cb, soft, 128)
-			cr = unblend(cr, soft, 128)
-			r, g, b := color.YCbCrToRGB(yy, cb, cr)
-			rgba.SetRGBA(px, py, color.RGBA{R: r, G: g, B: b, A: 255})
-		}
-	}
-	box := image.Rect(m.x-2, m.y-2, m.x+t.w+2, m.y+t.h+2).Intersect(rgba.Bounds())
-	src := image.NewRGBA(box)
-	draw.Draw(src, box, rgba, box.Min, draw.Src)
-	var r, g, b [25]uint8
-	for y := 0; y < t.h; y++ {
-		for x := 0; x < t.w; x++ {
-			if at(x, y) < 0.05 {
-				continue
-			}
-			n := 0
-			for dy := -2; dy <= 2; dy++ {
-				for dx := -2; dx <= 2; dx++ {
-					c := src.RGBAAt(m.x+x+dx, m.y+y+dy)
-					r[n], g[n], b[n] = c.R, c.G, c.B
-					n++
-				}
-			}
-			rgba.SetRGBA(m.x+x, m.y+y, color.RGBA{R: median(r), G: median(g), B: median(b), A: 255})
+	bw := float64(x1 - x0)
+	bh := float64(y1 - y0)
+	for y := y0; y <= y1; y++ {
+		for x := x0; x <= x1; x++ {
+			cTop := rgba.RGBAAt(x, y0-1)
+			cBottom := rgba.RGBAAt(x, y1+1)
+			cLeft := rgba.RGBAAt(x0-1, y)
+			cRight := rgba.RGBAAt(x1+1, y)
+
+			wxTop := (bh - float64(y-y0)) / bh
+			wxBottom := float64(y-y0) / bh
+			wxLeft := (bw - float64(x-x0)) / bw
+			wxRight := float64(x-x0) / bw
+
+			rHoriz := wxLeft*float64(cLeft.R) + wxRight*float64(cRight.R)
+			gHoriz := wxLeft*float64(cLeft.G) + wxRight*float64(cRight.G)
+			bHoriz := wxLeft*float64(cLeft.B) + wxRight*float64(cRight.B)
+
+			rVert := wxTop*float64(cTop.R) + wxBottom*float64(cBottom.R)
+			gVert := wxTop*float64(cTop.G) + wxBottom*float64(cBottom.G)
+			bVert := wxTop*float64(cTop.B) + wxBottom*float64(cBottom.B)
+
+			rgba.SetRGBA(x, y, color.RGBA{
+				R: clamp8((rHoriz + rVert) / 2),
+				G: clamp8((gHoriz + gVert) / 2),
+				B: clamp8((bHoriz + bVert) / 2),
+				A: 255,
+			})
 		}
 	}
 }

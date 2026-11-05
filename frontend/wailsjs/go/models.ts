@@ -280,6 +280,10 @@ export namespace config {
 	    queueGapMinSeconds: number;
 	    queueGapMaxSeconds: number;
 	    queueMaxTasks: number;
+	    videoQueueThreads: number;
+	    videoQueueGapMinSeconds: number;
+	    videoQueueGapMaxSeconds: number;
+	    videoQueueMaxTasks: number;
 	    batchOutputDir?: string;
 	    maxDiscoveryBytes: number;
 	    maxDiscoveryScripts: number;
@@ -309,6 +313,10 @@ export namespace config {
 	        this.queueGapMinSeconds = source["queueGapMinSeconds"];
 	        this.queueGapMaxSeconds = source["queueGapMaxSeconds"];
 	        this.queueMaxTasks = source["queueMaxTasks"];
+	        this.videoQueueThreads = source["videoQueueThreads"];
+	        this.videoQueueGapMinSeconds = source["videoQueueGapMinSeconds"];
+	        this.videoQueueGapMaxSeconds = source["videoQueueGapMaxSeconds"];
+	        this.videoQueueMaxTasks = source["videoQueueMaxTasks"];
 	        this.batchOutputDir = source["batchOutputDir"];
 	        this.maxDiscoveryBytes = source["maxDiscoveryBytes"];
 	        this.maxDiscoveryScripts = source["maxDiscoveryScripts"];
@@ -644,6 +652,9 @@ export namespace events {
 	    FlowImageTaskUpdated = "flow:image-task-updated",
 	    FlowImageTasksAdded = "flow:image-tasks-added",
 	    FlowImageTasksRemoved = "flow:image-tasks-removed",
+	    FlowVideoTaskUpdated = "flow:video-task-updated",
+	    FlowVideoTasksAdded = "flow:video-tasks-added",
+	    FlowVideoTasksRemoved = "flow:video-tasks-removed",
 	    MuseJobUpdated = "muse:job-updated",
 	    MuseJobsRemoved = "muse:jobs-removed",
 	    ToolMissing = "tools:missing",
@@ -666,6 +677,13 @@ export namespace flow {
 	    TwoK = "2K",
 	}
 	export enum ImageTaskStatus {
+	    Cancelled = "cancelled",
+	    Failed = "failed",
+	    Queued = "queued",
+	    Running = "running",
+	    Succeeded = "succeeded",
+	}
+	export enum VideoTaskStatus {
 	    Cancelled = "cancelled",
 	    Failed = "failed",
 	    Queued = "queued",
@@ -1253,6 +1271,163 @@ export namespace flow {
 		    return a;
 		}
 	}
+	export class VideoTask {
+	    id: string;
+	    batchId: string;
+	    prompt: string;
+	    modelId: string;
+	    aspectRatio: string;
+	    duration: number;
+	    resolution: string;
+	    count: number;
+	    references: ImageTaskReference[];
+	    outputDir: string;
+	    index?: number;
+	    held?: boolean;
+	    status: VideoTaskStatus;
+	    step?: string;
+	    requestId?: string;
+	    accountId?: string;
+	    rechecks?: number;
+	    refusedBy?: string[];
+	    nextCheckAt?: string;
+	    results: GeneratedVideoItem[];
+	    savedFiles: string[];
+	    savedPaths?: string[];
+	    error?: string;
+	    createdAt: string;
+	    startedAt?: string;
+	    finishedAt?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new VideoTask(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.batchId = source["batchId"];
+	        this.prompt = source["prompt"];
+	        this.modelId = source["modelId"];
+	        this.aspectRatio = source["aspectRatio"];
+	        this.duration = source["duration"];
+	        this.resolution = source["resolution"];
+	        this.count = source["count"];
+	        this.references = this.convertValues(source["references"], ImageTaskReference);
+	        this.outputDir = source["outputDir"];
+	        this.index = source["index"];
+	        this.held = source["held"];
+	        this.status = source["status"];
+	        this.step = source["step"];
+	        this.requestId = source["requestId"];
+	        this.accountId = source["accountId"];
+	        this.rechecks = source["rechecks"];
+	        this.refusedBy = source["refusedBy"];
+	        this.nextCheckAt = source["nextCheckAt"];
+	        this.results = this.convertValues(source["results"], GeneratedVideoItem);
+	        this.savedFiles = source["savedFiles"];
+	        this.savedPaths = source["savedPaths"];
+	        this.error = source["error"];
+	        this.createdAt = source["createdAt"];
+	        this.startedAt = source["startedAt"];
+	        this.finishedAt = source["finishedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class VideoQueueState {
+	    tasks: VideoTask[];
+	    warning?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new VideoQueueState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tasks = this.convertValues(source["tasks"], VideoTask);
+	        this.warning = source["warning"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class VideoTaskRequest {
+	    prompts: string[];
+	    modelId: string;
+	    aspectRatio: string;
+	    duration: number;
+	    resolution: string;
+	    references: ImageTaskReference[];
+	    outputDir: string;
+	    hold: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new VideoTaskRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.prompts = source["prompts"];
+	        this.modelId = source["modelId"];
+	        this.aspectRatio = source["aspectRatio"];
+	        this.duration = source["duration"];
+	        this.resolution = source["resolution"];
+	        this.references = this.convertValues(source["references"], ImageTaskReference);
+	        this.outputDir = source["outputDir"];
+	        this.hold = source["hold"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 
 }
 
@@ -1729,6 +1904,78 @@ export namespace models {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
 	        this.data = this.convertValues(source["data"], flow.UploadedSourceVideo);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_flow_VideoQueueState_ {
+	    success: boolean;
+	    data: flow.VideoQueueState;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_flow_VideoQueueState_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], flow.VideoQueueState);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_flow_VideoTask_ {
+	    success: boolean;
+	    data: flow.VideoTask;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_flow_VideoTask_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], flow.VideoTask);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }
@@ -2593,6 +2840,42 @@ export namespace models {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
 	        this.data = this.convertValues(source["data"], flow.ImageTask);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response___SnakeMedia_internal_providers_flow_VideoTask_ {
+	    success: boolean;
+	    data: flow.VideoTask[];
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response___SnakeMedia_internal_providers_flow_VideoTask_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], flow.VideoTask);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }

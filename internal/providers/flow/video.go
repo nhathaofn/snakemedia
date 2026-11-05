@@ -80,6 +80,12 @@ type GenerateVideoRequest struct {
 	References  []ReferenceImage `json:"references,omitempty"`
 	fingerprint string
 	onAccepted  func()
+	// avoid are accounts that refused this prompt for unusual activity
+	avoid []string
+	// onRefused is told which account Google refused for unusual activity
+	onRefused   func(accountID string)
+	batchTaskID string
+	onReserved  func(accountID string) error
 }
 
 // GeneratedVideoItem is one requested output video.
@@ -174,6 +180,14 @@ func (s *Provider) videoGenerationChoices(ctx context.Context, req GenerateVideo
 		}}
 	})
 	if len(choices) > 0 {
+		if len(req.avoid) > 0 {
+			choices = slices.DeleteFunc(choices, func(c videoGenerationChoice) bool {
+				return slices.Contains(req.avoid, c.rotation.account.ID)
+			})
+			if len(choices) == 0 {
+				return nil, models.CodeUnavailable, errors.New("mọi tài khoản phù hợp đều đã bị Google tạm chặn prompt này vì hoạt động bất thường. Hãy giảm số luồng, tăng thời gian nghỉ hoặc dùng proxy riêng cho tài khoản rồi chạy lại.")
+			}
+		}
 		return choices, models.CodeOK, nil
 	}
 	if firstCatalogErr != nil {
@@ -200,6 +214,10 @@ func (s *Provider) GenerateVideos(ctx context.Context, req GenerateVideoRequest)
 	fingerprintReq.RequestID = ""
 	fingerprintReq.fingerprint = ""
 	fingerprintReq.onAccepted = nil
+	fingerprintReq.avoid = nil
+	fingerprintReq.onRefused = nil
+	fingerprintReq.batchTaskID = ""
+	fingerprintReq.onReserved = nil
 	fingerprint, err := requestFingerprint(fingerprintReq)
 	if err != nil {
 		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeInternal)
@@ -210,6 +228,9 @@ func (s *Provider) GenerateVideos(ctx context.Context, req GenerateVideoRequest)
 		return settled
 	}
 	defer unlock()
+	if req.batchTaskID != "" {
+		defer s.releaseUnusedBatchVideoAccounts(req.batchTaskID, req.RequestID)
+	}
 	choices, code, err := s.videoGenerationChoices(ctx, req)
 	if err != nil {
 		return models.ErrorResponse[[]GeneratedVideoItem]("Không thể tạo video: "+err.Error(), code)
@@ -219,7 +240,14 @@ func (s *Provider) GenerateVideos(ctx context.Context, req GenerateVideoRequest)
 		for i, choice := range remaining {
 			candidates[i] = choice.rotation
 		}
-		return s.acquireVideoCandidate(ctx, candidates)
+		idx, lease, err := s.acquireVideoCandidateWithBatch(ctx, candidates, req.batchTaskID, req.RequestID)
+		if err == nil && req.onReserved != nil {
+			if err = req.onReserved(candidates[idx].account.ID); err != nil {
+				lease.release()
+				return -1, nil, fmt.Errorf("không lưu được tài khoản trước khi gửi: %w", err)
+			}
+		}
+		return idx, lease, err
 	}
 	chosen, account, lease, release, err := readyCandidate(ctx, s, choices, func(c videoGenerationChoice) session.StoredAccount { return c.rotation.account }, reserve)
 	if err != nil {
@@ -234,25 +262,36 @@ func (s *Provider) GenerateVideos(ctx context.Context, req GenerateVideoRequest)
 	}
 	if err != nil {
 		job, readErr := s.loadGenerationJob(req.RequestID)
-		if readErr == nil && (job.Phase == generationSubmitting || job.Phase == generationAccepted) {
-			if definiteMutationRejection(err) {
-				job.Phase, job.Message = generationRejected, err.Error()
-				if saveErr := s.saveGenerationJob(job); saveErr != nil {
-					return models.ErrorResponse[[]GeneratedVideoItem](saveErr.Error(), models.CodeInternal)
+		if readErr == nil {
+			if job.Phase == generationRejected {
+				if isUnusualActivity(err) && req.onRefused != nil {
+					req.onRefused(account.ID)
 				}
 				return models.ErrorResponse[[]GeneratedVideoItem](fmt.Sprintf("Lỗi khi tạo video từ Google Flow (%s): %s", account.Email, err.Error()), models.CodeUnavailable)
 			}
-			lease.commitVideoSpend()
-			pending := pendingVideoItems(job, req)
-			for i := range pending {
-				pending[i].ModelName = displayName(chosen.family.name)
+			if job.Phase == generationSubmitting || job.Phase == generationAccepted {
+				if definiteMutationRejection(err) || isUnusualActivity(err) {
+					job.Phase, job.Message = generationRejected, err.Error()
+					if saveErr := s.saveGenerationJob(job); saveErr != nil {
+						return models.ErrorResponse[[]GeneratedVideoItem](saveErr.Error(), models.CodeInternal)
+					}
+					if isUnusualActivity(err) && req.onRefused != nil {
+						req.onRefused(account.ID)
+					}
+					return models.ErrorResponse[[]GeneratedVideoItem](fmt.Sprintf("Lỗi khi tạo video từ Google Flow (%s): %s", account.Email, err.Error()), models.CodeUnavailable)
+				}
+				lease.commitVideoSpend()
+				pending := pendingVideoItems(job, req)
+				for i := range pending {
+					pending[i].ModelName = displayName(chosen.family.name)
+				}
+				// The phase stays as reconciliation left it: an unknown outcome is not
+				// proof Flow accepted the job, and only a submitting job can later be
+				// closed as lost (submissionLost).
+				job.VideoResult = append([]GeneratedVideoItem(nil), pending...)
+				_ = s.saveGenerationJob(job)
+				return models.SuccessResponse(pending)
 			}
-			// The phase stays as reconciliation left it: an unknown outcome is not
-			// proof Flow accepted the job, and only a submitting job can later be
-			// closed as lost (submissionLost).
-			job.VideoResult = append([]GeneratedVideoItem(nil), pending...)
-			_ = s.saveGenerationJob(job)
-			return models.SuccessResponse(pending)
 		}
 		s.forgetProject(account.ID)
 		return models.ErrorResponse[[]GeneratedVideoItem](
@@ -355,7 +394,7 @@ func (s *Provider) runVideoJob(ctx context.Context, client *chrome.FlowClient, a
 		rejected := unusualActivity("tạo video")
 		job.Phase, job.Message = generationRejected, rejected.Error()
 		_ = s.saveGenerationJob(job)
-		return nil, rejected
+		return nil, &mutationRejection{cause: rejected}
 	}
 	if err != nil {
 		if definiteMutationRejection(err) {

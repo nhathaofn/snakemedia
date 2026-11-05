@@ -38,6 +38,14 @@ type FlowConfig struct {
 	QueueGapMaxSeconds int `json:"queueGapMaxSeconds"`
 	// QueueMaxTasks caps the image queue journal; the oldest finished tasks go first.
 	QueueMaxTasks int `json:"queueMaxTasks"`
+	// VideoQueueThreads is how many video queue tasks (Video → All) run at once.
+	VideoQueueThreads int `json:"videoQueueThreads"`
+	// VideoQueueGapMinSeconds and VideoQueueGapMaxSeconds bound the random wait
+	// between two new requests the video queue sends.
+	VideoQueueGapMinSeconds int `json:"videoQueueGapMinSeconds"`
+	VideoQueueGapMaxSeconds int `json:"videoQueueGapMaxSeconds"`
+	// VideoQueueMaxTasks caps the video queue journal; the oldest finished tasks go first.
+	VideoQueueMaxTasks int `json:"videoQueueMaxTasks"`
 	// BatchOutputDir is the folder the last batch was saved into (chosen in
 	// the batch form); empty uses the app's default folder.
 	BatchOutputDir string `json:"batchOutputDir,omitempty"`
@@ -61,6 +69,7 @@ func DefaultFlowConfig() FlowConfig {
 		GenerationTimeoutSeconds: 120, VideoGenerationTimeoutSeconds: 600, VideoPollIntervalMS: 5000,
 		MaxConcurrentRequestsPerAccount: 2, SignedOutReads: 3,
 		QueueThreads: 1, QueueGapMinSeconds: 5, QueueGapMaxSeconds: 10, QueueMaxTasks: 2000,
+		VideoQueueThreads: 1, VideoQueueGapMinSeconds: 5, VideoQueueGapMaxSeconds: 10, VideoQueueMaxTasks: 2000,
 		MaxDiscoveryScripts: 16, MaxDiscoveryBytes: 16 << 20, RPCCacheSeconds: 15,
 		AutoRemoveWatermark: true, AutoRemoveVideoWatermark: true}
 }
@@ -86,6 +95,12 @@ func (c FlowConfig) Validate() error {
 	}
 	if c.QueueGapMinSeconds < 0 || c.QueueGapMaxSeconds > 600 || c.QueueGapMinSeconds > c.QueueGapMaxSeconds {
 		return fmt.Errorf("flow: image queue wait must be 0-600 seconds, minimum not above maximum")
+	}
+	if c.VideoQueueThreads < 1 || c.VideoQueueThreads > 20 || c.VideoQueueMaxTasks < 50 || c.VideoQueueMaxTasks > 20000 {
+		return fmt.Errorf("flow: video queue threads must be 1-20 and its size 50-20000 tasks")
+	}
+	if c.VideoQueueGapMinSeconds < 0 || c.VideoQueueGapMaxSeconds > 600 || c.VideoQueueGapMinSeconds > c.VideoQueueGapMaxSeconds {
+		return fmt.Errorf("flow: video queue wait must be 0-600 seconds, minimum not above maximum")
 	}
 	if c.MaxDiscoveryBytes < 1024 || c.MaxDiscoveryBytes > 64<<20 || c.MaxDiscoveryScripts < 1 || c.MaxDiscoveryScripts > 128 {
 		return fmt.Errorf("flow: invalid RPC discovery budget")

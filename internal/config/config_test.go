@@ -267,3 +267,61 @@ func TestMigrate_MovesFlowFFmpegPathsToTools(t *testing.T) {
 		t.Errorf("a relative path was carried over: %q", paths["ffprobe"])
 	}
 }
+
+func TestFlowConfig_VideoQueuePolicy(t *testing.T) {
+	flow := DefaultFlowConfig()
+	if flow.VideoQueueThreads != 1 || flow.VideoQueueGapMinSeconds != 5 || flow.VideoQueueGapMaxSeconds != 10 || flow.VideoQueueMaxTasks != 2000 {
+		t.Fatalf("unexpected defaults: %+v", flow)
+	}
+	if err := flow.Validate(); err != nil {
+		t.Fatalf("default flow config failed validation: %v", err)
+	}
+
+	invalidCases := []func(*FlowConfig){
+		func(c *FlowConfig) { c.VideoQueueThreads = 0 },
+		func(c *FlowConfig) { c.VideoQueueThreads = 21 },
+		func(c *FlowConfig) { c.VideoQueueMaxTasks = 49 },
+		func(c *FlowConfig) { c.VideoQueueMaxTasks = 20001 },
+		func(c *FlowConfig) { c.VideoQueueGapMinSeconds = -1 },
+		func(c *FlowConfig) { c.VideoQueueGapMaxSeconds = 601 },
+		func(c *FlowConfig) { c.VideoQueueGapMinSeconds = 15; c.VideoQueueGapMaxSeconds = 10 },
+	}
+	for i, modify := range invalidCases {
+		bad := DefaultFlowConfig()
+		modify(&bad)
+		if err := bad.Validate(); err == nil {
+			t.Errorf("case %d: expected validation error, got nil", i)
+		}
+	}
+
+	// Legacy config without video queue fields fills defaults and round-trips
+	path := filepath.Join(t.TempDir(), "config.json")
+	legacy := []byte(`{"flow":{"queueThreads":2}}`)
+	if err := os.WriteFile(path, legacy, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := NewManager(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded := m.Get().Flow
+	if loaded.QueueThreads != 2 || loaded.VideoQueueThreads != 1 || loaded.VideoQueueGapMinSeconds != 5 || loaded.VideoQueueGapMaxSeconds != 10 {
+		t.Fatalf("legacy config did not load defaults for video queue: %+v", loaded)
+	}
+
+	cfg := m.Get()
+	cfg.Flow.VideoQueueThreads = 4
+	cfg.Flow.VideoQueueGapMinSeconds = 10
+	cfg.Flow.VideoQueueGapMaxSeconds = 20
+	if _, err := m.Update(cfg); err != nil {
+		t.Fatalf("failed to update config with new video queue policy: %v", err)
+	}
+	m2, err := NewManager(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := m2.Get().Flow
+	if updated.VideoQueueThreads != 4 || updated.VideoQueueGapMinSeconds != 10 || updated.VideoQueueGapMaxSeconds != 20 {
+		t.Fatalf("updated video queue policy not persisted: %+v", updated)
+	}
+}

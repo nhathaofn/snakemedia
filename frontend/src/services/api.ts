@@ -14,6 +14,9 @@ import type {
   FlowImageTask,
   FlowImageTaskReference,
   FlowImageTaskRequest,
+  FlowVideoQueueState,
+  FlowVideoTask,
+  FlowVideoTaskRequest,
   FlowModel,
   FlowProjectImage,
   FlowVideoModel,
@@ -232,6 +235,30 @@ export const api = {
     invoke<FlowImageTaskReference>('ImportFlowProjectImageReference', () =>
       Backend.ImportFlowProjectImageReference(accountID, projectID, mode, mediaID),
     ),
+  getFlowVideoTasks: () =>
+    invoke<FlowVideoQueueState>('GetFlowVideoTasks', Backend.GetFlowVideoTasks),
+  submitFlowVideoTasks: (req: FlowVideoTaskRequest) =>
+    invoke<FlowVideoTask[]>('SubmitFlowVideoTasks', () => Backend.SubmitFlowVideoTasks(req)),
+  runFlowVideoTasks: (ids: string[]) =>
+    invoke<number>('RunFlowVideoTasks', () => Backend.RunFlowVideoTasks(ids)),
+  holdFlowVideoTasks: (ids: string[]) =>
+    invoke<number>('HoldFlowVideoTasks', () => Backend.HoldFlowVideoTasks(ids)),
+  cancelFlowVideoTask: (id: string) =>
+    invoke<FlowVideoTask>('CancelFlowVideoTask', () => Backend.CancelFlowVideoTask(id)),
+  retryFlowVideoTasks: (ids: string[]) =>
+    invoke<number>('RetryFlowVideoTasks', () => Backend.RetryFlowVideoTasks(ids)),
+  editFlowVideoTask: (id: string, prompt: string) =>
+    invoke<FlowVideoTask>('EditFlowVideoTask', () => Backend.EditFlowVideoTask(id, prompt)),
+  removeFlowVideoTasks: (ids: string[]) =>
+    invoke<number>('RemoveFlowVideoTasks', () => Backend.RemoveFlowVideoTasks(ids)),
+  clearFinishedFlowVideoTasks: () =>
+    invoke<number>('ClearFinishedFlowVideoTasks', Backend.ClearFinishedFlowVideoTasks),
+  addFlowVideoTaskReferences: (ids: string[], refs: FlowImageTaskReference[]) =>
+    invoke<number>('AddFlowVideoTaskReferences', () =>
+      Backend.AddFlowVideoTaskReferences(ids, refs),
+    ),
+  pickFlowVideoReferences: () =>
+    invoke<FlowImageTaskReference[]>('PickFlowVideoReferences', Backend.PickFlowVideoReferences),
   getMuseOptions: () => invoke<MuseOptions>('GetMuseOptions', Backend.GetMuseOptions),
   pickMuseReferences: () =>
     invoke<MuseReference[]>('PickMuseReferences', Backend.PickMuseReferences),

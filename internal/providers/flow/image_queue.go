@@ -233,11 +233,7 @@ func newImageQueue(s *Provider) *imageQueue {
 	return q
 }
 
-// Start loads the image queue, returns tasks interrupted by the last exit to
-// the queue (their request is checked again under the same ID) and runs it
-// until Close.
-func (s *Provider) Start(ctx context.Context, emit func(events.Event, any)) {
-	q := s.queue
+func (q *imageQueue) start(ctx context.Context, emit func(events.Event, any)) {
 	q.mu.Lock()
 	q.ctx, q.stop = context.WithCancel(ctx)
 	if emit != nil {
@@ -303,10 +299,7 @@ func (q *imageQueue) adoptPending() {
 	logger.Get().Info("adopted pending image jobs into the queue", "count", len(adopted))
 }
 
-// Close stops the image queue. Running requests stay in the journal and are
-// checked again on the next start.
-func (s *Provider) Close() {
-	q := s.queue
+func (q *imageQueue) close() {
 	q.mu.Lock()
 	stop := q.stop
 	q.mu.Unlock()

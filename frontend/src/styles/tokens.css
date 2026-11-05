@@ -115,6 +115,7 @@
   --studio-panel-width: 340px;
   --studio-panel-width-compact: 280px;
   --flow-bottom-bar-height: 52px;
+  --flow-compact-select-height: 32px;
   --flow-chat-thread-max-width: 1120px;
   --flow-chat-bubble-max-width: min(78%, 760px);
   --flow-chat-result-min-width: 220px;

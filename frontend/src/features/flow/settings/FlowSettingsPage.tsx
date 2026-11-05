@@ -229,6 +229,61 @@ export const FlowSettingsPage: React.FC = () => {
         </SettingRow>
       </SettingsSection>
 
+      <SettingsSection
+        title="Hàng đợi video (Video → Hàng loạt)"
+        advanced={
+          <SettingRow
+            label="Giữ tối đa"
+            hint="Khi đầy, tác vụ đã xong cũ nhất bị bỏ khỏi danh sách; video đã lưu vẫn còn."
+          >
+            <NumberSetting
+              aria-label="Số tác vụ giữ tối đa"
+              value={flow.videoQueueMaxTasks}
+              min={50}
+              max={20000}
+              step={50}
+              unit="tác vụ"
+              disabled={saving}
+              onCommit={(videoQueueMaxTasks) => patchFlow({ videoQueueMaxTasks })}
+            />
+          </SettingRow>
+        }
+      >
+        <SettingRow label="Số luồng" hint="Số prompt chạy cùng lúc.">
+          <NumberSetting
+            aria-label="Số luồng hàng đợi video"
+            value={flow.videoQueueThreads}
+            min={1}
+            max={20}
+            disabled={saving}
+            onCommit={(videoQueueThreads) => patchFlow({ videoQueueThreads })}
+          />
+        </SettingRow>
+        <SettingRow
+          label="Chờ giữa hai lần gửi"
+          hint="Ngẫu nhiên trong khoảng này; kiểm tra lại job đã gửi không phải chờ."
+        >
+          <NumberSetting
+            aria-label="Thời gian chờ ít nhất"
+            value={flow.videoQueueGapMinSeconds}
+            min={0}
+            max={flow.videoQueueGapMaxSeconds}
+            unit="giây"
+            disabled={saving}
+            onCommit={(videoQueueGapMinSeconds) => patchFlow({ videoQueueGapMinSeconds })}
+          />
+          <NumberSetting
+            aria-label="Thời gian chờ nhiều nhất"
+            value={flow.videoQueueGapMaxSeconds}
+            min={flow.videoQueueGapMinSeconds}
+            max={600}
+            unit="giây"
+            disabled={saving}
+            onCommit={(videoQueueGapMaxSeconds) => patchFlow({ videoQueueGapMaxSeconds })}
+          />
+        </SettingRow>
+      </SettingsSection>
+
       <SettingsSection title="Chỉnh sửa video">
         <SettingRow label="Số lần tải lên">
           <NumberSetting

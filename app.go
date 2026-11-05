@@ -636,6 +636,68 @@ func (a *App) ImportFlowProjectImageReference(accountID, projectID string, mode 
 	return logged("ImportFlowProjectImageReference", a.flow.ImportProjectImageReference(a.ctx, accountID, projectID, mode, mediaID))
 }
 
+// GetFlowVideoTasks lists the video queue (Video → All).
+func (a *App) GetFlowVideoTasks() models.Response[flow.VideoQueueState] {
+	return logged("GetFlowVideoTasks", a.flow.ListVideoTasks())
+}
+
+// SubmitFlowVideoTasks queues one video task per prompt.
+func (a *App) SubmitFlowVideoTasks(req flow.VideoTaskRequest) models.Response[[]flow.VideoTask] {
+	return logged("SubmitFlowVideoTasks", a.flow.SubmitVideoTasks(req))
+}
+
+// RunFlowVideoTasks starts held tasks (all when ids is empty).
+func (a *App) RunFlowVideoTasks(ids []string) models.Response[int] {
+	return logged("RunFlowVideoTasks", a.flow.RunVideoTasks(ids))
+}
+
+// HoldFlowVideoTasks pauses queued tasks (all when ids is empty).
+func (a *App) HoldFlowVideoTasks(ids []string) models.Response[int] {
+	return logged("HoldFlowVideoTasks", a.flow.HoldVideoTasks(ids))
+}
+
+// CancelFlowVideoTask stops a queued or running task.
+func (a *App) CancelFlowVideoTask(id string) models.Response[flow.VideoTask] {
+	return logged("CancelFlowVideoTask", a.flow.CancelVideoTask(id))
+}
+
+// RetryFlowVideoTasks queues failed or cancelled tasks again.
+func (a *App) RetryFlowVideoTasks(ids []string) models.Response[int] {
+	return logged("RetryFlowVideoTasks", a.flow.RetryVideoTasks(ids))
+}
+
+// EditFlowVideoTask changes the prompt of a task that is not running.
+func (a *App) EditFlowVideoTask(id, prompt string) models.Response[flow.VideoTask] {
+	return logged("EditFlowVideoTask", a.flow.EditVideoTask(id, prompt))
+}
+
+// RemoveFlowVideoTasks deletes tasks that are not running.
+func (a *App) RemoveFlowVideoTasks(ids []string) models.Response[int] {
+	return logged("RemoveFlowVideoTasks", a.flow.RemoveVideoTasks(ids))
+}
+
+// ClearFinishedFlowVideoTasks deletes the succeeded tasks.
+func (a *App) ClearFinishedFlowVideoTasks() models.Response[int] {
+	return logged("ClearFinishedFlowVideoTasks", a.flow.ClearFinishedVideoTasks())
+}
+
+// AddFlowVideoTaskReferences adds references to tasks that have not sent a request.
+func (a *App) AddFlowVideoTaskReferences(ids []string, refs []flow.ImageTaskReference) models.Response[int] {
+	return logged("AddFlowVideoTaskReferences", a.flow.AddVideoTaskReferences(ids, refs))
+}
+
+// PickFlowVideoReferences asks the user for reference images and imports them.
+func (a *App) PickFlowVideoReferences() models.Response[[]flow.ImageTaskReference] {
+	paths, err := runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:   "Chọn ảnh tham chiếu",
+		Filters: []runtime.FileFilter{{DisplayName: "Ảnh Flow nhận", Pattern: strings.Join(a.flow.ReferenceFilePatterns(), ";")}},
+	})
+	if err != nil {
+		return models.ErrorResponse[[]flow.ImageTaskReference]("Không mở được hộp thoại chọn ảnh: "+err.Error(), models.CodeInternal)
+	}
+	return logged("PickFlowVideoReferences", a.flow.ImportImageReferences(paths))
+}
+
 // PickMuseReferences asks the user for reference images and imports them.
 func (a *App) PickMuseReferences() models.Response[[]muse.MuseReference] {
 	patterns := a.muse.ImageFilePatterns()

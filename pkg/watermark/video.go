@@ -1,19 +1,19 @@
 package watermark
 
 import (
-	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
-	"image/png"
 	"io"
 	"os"
 	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Video holds the programs RemoveVideo runs. Both come from the machine (PATH
@@ -34,30 +34,55 @@ const (
 	// minVideoScore is the lowest median correlation of the voting frames.
 	// Real marks measured 0.55-0.99; a still sticker 0.24.
 	minVideoScore = 0.4
-	// videoCRF keeps the re-encoded video visually lossless.
+	// videoCRF is a quality target; H.264 output remains lossy.
 	videoCRF = "16"
+	// fast keeps the same CRF target with less CPU, at the cost of larger files.
+	videoPreset = "fast"
 )
 
-// RemoveVideo writes src to dst without Flow's marks (the star and the "Veo"
-// text). A mark does not move in a video, so its place and strength are
-// measured once on frames spread over the video, then every frame is restored
-// the same way as an image. Audio is
-// copied unchanged; size and frame rate stay those of src. removed is false
-// (and dst is not written) when neither mark is found.
-func (v Video) RemoveVideo(ctx context.Context, src, dst string) (removed bool, err error) {
-	fps, err := v.frameRate(ctx, src)
+// VideoReport describes work performed, not a guarantee of perfect recovery.
+// A covered pixel cannot always be recovered exactly after lossy compression.
+type VideoReport struct {
+	Processed   bool
+	Frames      int
+	StarFrames  int
+	TextFrames  int
+	ProbeTime   time.Duration
+	DetectTime  time.Duration
+	RewriteTime time.Duration
+}
+
+// RemoveVideo processes detected marks and leaves src untouched. Callers must
+// retain the original if they replace it with dst. false means no mark found.
+func (v Video) RemoveVideo(ctx context.Context, src, dst string) (bool, error) {
+	report, err := v.ProcessVideo(ctx, src, dst)
+	return report.Processed, err
+}
+
+// ProcessVideo additionally reports stage times and the number of frames touched.
+func (v Video) ProcessVideo(ctx context.Context, src, dst string) (VideoReport, error) {
+	var report VideoReport
+	start := time.Now()
+	info, err := v.probe(ctx, src)
+	report.ProbeTime = time.Since(start)
 	if err != nil {
-		return false, err
+		return report, err
 	}
-	marks, w, h, err := v.locate(ctx, src)
+	start = time.Now()
+	marks, err := v.locate(ctx, src, info)
+	report.DetectTime = time.Since(start)
 	if err != nil || (!marks.star.found && !marks.hasVeo) {
-		return false, err
+		return report, err
 	}
-	if err := v.rewrite(ctx, src, dst, marks, w, h, fps); err != nil {
+	start = time.Now()
+	err = v.rewrite(ctx, src, dst, marks, info, &report)
+	report.RewriteTime = time.Since(start)
+	if err != nil {
 		_ = os.Remove(dst)
-		return false, err
+		return report, err
 	}
-	return true, nil
+	report.Processed = true
+	return report, nil
 }
 
 func (v Video) command(ctx context.Context, program string, args ...string) *exec.Cmd {
@@ -68,22 +93,45 @@ func (v Video) command(ctx context.Context, program string, args ...string) *exe
 	return cmd
 }
 
-// frameRate reads the first video stream's frame rate ("24/1").
-func (v Video) frameRate(ctx context.Context, src string) (string, error) {
+type videoInfo struct {
+	Width  int
+	Height int
+	Frames int
+	FPS    string
+}
+
+func (v Video) probe(ctx context.Context, src string) (videoInfo, error) {
 	var out, stderr bytes.Buffer
-	cmd := v.command(ctx, v.FFprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=r_frame_rate", "-of", "default=noprint_wrappers=1:nokey=1", src)
+	cmd := v.command(ctx, v.FFprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,r_frame_rate,nb_frames,duration", "-of", "json", src)
 	cmd.Stdout, cmd.Stderr = &out, &stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("watermark: ffprobe: %w: %s", err, strings.TrimSpace(stderr.String()))
+		return videoInfo{}, fmt.Errorf("watermark: ffprobe: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
-	rate := strings.TrimSpace(out.String())
-	num, den, ok := strings.Cut(rate, "/")
+	var data struct {
+		Streams []struct {
+			Width    int
+			Height   int
+			Rate     string `json:"r_frame_rate"`
+			Frames   string `json:"nb_frames"`
+			Duration string `json:"duration"`
+		}
+	}
+	if err := json.Unmarshal(out.Bytes(), &data); err != nil || len(data.Streams) != 1 {
+		return videoInfo{}, errors.New("watermark: unreadable video stream")
+	}
+	stream := data.Streams[0]
+	num, den, ok := strings.Cut(stream.Rate, "/")
 	n, errN := strconv.Atoi(num)
 	d, errD := strconv.Atoi(den)
-	if !ok || errN != nil || errD != nil || n <= 0 || d <= 0 {
-		return "", fmt.Errorf("watermark: unreadable frame rate %q", rate)
+	if !ok || errN != nil || errD != nil || n <= 0 || d <= 0 || stream.Width <= 0 || stream.Height <= 0 {
+		return videoInfo{}, errors.New("watermark: invalid video geometry or frame rate")
 	}
-	return rate, nil
+	count, _ := strconv.Atoi(stream.Frames)
+	if count <= 0 {
+		duration, _ := strconv.ParseFloat(stream.Duration, 64)
+		count = int(duration * float64(n) / float64(d))
+	}
+	return videoInfo{Width: stream.Width, Height: stream.Height, Frames: count, FPS: stream.Rate}, nil
 }
 
 // videoMarks are the marks found on a video: the star, the "Veo" text, or both.
@@ -93,62 +141,85 @@ type videoMarks struct {
 	hasVeo bool
 }
 
-// locate decodes sampleFrames frames spread over the video and returns the
-// marks found at the same place on most of them (the star with its median
-// strength).
-func (v Video) locate(ctx context.Context, src string) (videoMarks, int, int, error) {
-	frames, err := v.countFrames(ctx, src)
-	if err != nil {
-		return videoMarks{}, 0, 0, err
+// sampledCorner exposes the full frame's coordinates without allocating or
+// transferring pixels outside the detection region.
+type sampledCorner struct {
+	*image.RGBA
+	full image.Rectangle
+}
+
+func (c sampledCorner) Bounds() image.Rectangle { return c.full }
+
+func (v Video) locate(ctx context.Context, src string, info videoInfo) (videoMarks, error) {
+	initTemplates()
+	extent := max(veoRight+veoMark().w+veoSearch, veoBottom+veoMark().h+veoSearch)
+	for _, tmpl := range videoTemplates {
+		extent = max(extent, tmpl.maxMargin+tmpl.size)
 	}
-	step := max(1, frames/sampleFrames)
+	cw, ch := min(extent, info.Width), min(extent, info.Height)
+	step := max(1, info.Frames/sampleFrames)
 	var stderr bytes.Buffer
 	cmd := v.command(ctx, v.FFmpeg, "-v", "error", "-i", src, "-map", "0:v:0",
-		"-vf", fmt.Sprintf("select=not(mod(n\\,%d))", step), "-fps_mode", "passthrough",
-		"-frames:v", strconv.Itoa(sampleFrames), "-c:v", "png", "-f", "image2pipe", "-")
+		"-vf", fmt.Sprintf("select=not(mod(n\\,%d)),crop=%d:%d:iw-%d:ih-%d", step, cw, ch, cw, ch),
+		"-fps_mode", "passthrough", "-frames:v", strconv.Itoa(sampleFrames), "-pix_fmt", "rgba", "-f", "rawvideo", "-")
 	cmd.Stderr = &stderr
 	out, err := cmd.StdoutPipe()
 	if err != nil {
-		return videoMarks{}, 0, 0, err
+		return videoMarks{}, err
 	}
 	if err := cmd.Start(); err != nil {
-		return videoMarks{}, 0, 0, fmt.Errorf("watermark: start ffmpeg: %w", err)
+		return videoMarks{}, fmt.Errorf("watermark: start ffmpeg: %w", err)
 	}
-	initTemplates()
-	reader := bufio.NewReader(out)
+	corner := sampledCorner{RGBA: image.NewRGBA(image.Rect(info.Width-cw, info.Height-ch, info.Width, info.Height)), full: image.Rect(0, 0, info.Width, info.Height)}
 	var found []matchResult
 	var texts []veoMatch
-	w, h := 0, 0
+	var samples []sampledCorner
+	var decodeErr error
 	for {
-		img, err := png.Decode(reader)
-		if err != nil {
+		_, err := io.ReadFull(out, corner.Pix)
+		if errors.Is(err, io.EOF) {
 			break
 		}
-		w, h = img.Bounds().Dx(), img.Bounds().Dy()
-		if m := findWith(img, videoTemplates); m.found {
+		if err != nil {
+			decodeErr = err
+			break
+		}
+		if m := findWith(corner, videoTemplates); m.found {
 			found = append(found, m)
 		}
-		texts = append(texts, findVeo(img))
+		texts = append(texts, findVeo(corner))
+		copyOf := image.NewRGBA(corner.RGBA.Bounds())
+		copy(copyOf.Pix, corner.Pix)
+		samples = append(samples, sampledCorner{RGBA: copyOf, full: corner.full})
 	}
-	_, _ = io.Copy(io.Discard, reader)
+	_, _ = io.Copy(io.Discard, out)
 	if err := cmd.Wait(); err != nil {
-		return videoMarks{}, 0, 0, fmt.Errorf("watermark: sample frames: %w: %s", err, strings.TrimSpace(stderr.String()))
+		return videoMarks{}, fmt.Errorf("watermark: sample frames: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
-	if w == 0 {
-		return videoMarks{}, 0, 0, errors.New("watermark: the video has no decodable frame")
+	if decodeErr != nil {
+		return videoMarks{}, fmt.Errorf("watermark: incomplete sampled frame: %w", decodeErr)
 	}
-	marks := videoMarks{star: vote(found)}
+	if len(texts) == 0 {
+		return videoMarks{}, errors.New("watermark: the video has no decodable frame")
+	}
+	marks := videoMarks{star: calibrateVideoStar(samples, vote(found))}
 	marks.veo, marks.hasVeo = voteVeo(texts)
-	return marks, w, h, nil
+	return marks, nil
 }
 
 // vote keeps the place most frames agree on, and the median of their gains.
 func vote(found []matchResult) matchResult {
-	type spot struct{ x, y, size int }
+	type spot struct {
+		x, y, size int
+		alpha      *float32
+	}
 	votes := map[spot][]matchResult{}
 	var best []matchResult
 	for _, m := range found {
-		k := spot{m.x, m.y, m.size}
+		if len(m.template.alpha) == 0 {
+			continue
+		}
+		k := spot{m.x, m.y, m.size, &m.template.alpha[0]}
 		votes[k] = append(votes[k], m)
 		if len(votes[k]) > len(best) {
 			best = votes[k]
@@ -174,24 +245,10 @@ func vote(found []matchResult) matchResult {
 	return m
 }
 
-func (v Video) countFrames(ctx context.Context, src string) (int, error) {
-	var out bytes.Buffer
-	cmd := v.command(ctx, v.FFprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=nb_frames", "-of", "default=noprint_wrappers=1:nokey=1", src)
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
-		return 0, fmt.Errorf("watermark: ffprobe: %w", err)
-	}
-	n, err := strconv.Atoi(strings.TrimSpace(out.String()))
-	if err != nil || n <= 0 {
-		// Containers without a frame count: sample from the start.
-		return sampleFrames, nil
-	}
-	return n, nil
-}
-
 // rewrite pipes every decoded frame through reconstructWatermark into an
 // encoder that also copies src's audio.
-func (v Video) rewrite(ctx context.Context, src, dst string, marks videoMarks, w, h int, fps string) error {
+func (v Video) rewrite(ctx context.Context, src, dst string, marks videoMarks, info videoInfo, report *VideoReport) error {
+	w, h, fps := info.Width, info.Height, info.FPS
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var decErr, encErr bytes.Buffer
@@ -204,7 +261,7 @@ func (v Video) rewrite(ctx context.Context, src, dst string, marks videoMarks, w
 	enc := v.command(ctx, v.FFmpeg, "-v", "error", "-y",
 		"-f", "rawvideo", "-pix_fmt", "rgba", "-s", fmt.Sprintf("%dx%d", w, h), "-framerate", fps, "-i", "-",
 		"-i", src, "-map", "0:v:0", "-map", "1:a?", "-map_metadata", "1",
-		"-c:v", "libx264", "-preset", "medium", "-crf", videoCRF, "-pix_fmt", "yuv420p",
+		"-c:v", "libx264", "-preset", videoPreset, "-crf", videoCRF, "-pix_fmt", "yuv420p",
 		"-c:a", "copy", "-movflags", "+faststart", dst)
 	enc.Stderr = &encErr
 	sink, err := enc.StdinPipe()
@@ -229,11 +286,14 @@ func (v Video) rewrite(ctx context.Context, src, dst string, marks videoMarks, w
 			}
 			break
 		}
+		report.Frames++
 		if marks.star.found {
-			reconstructWatermark(frame, marks.star)
+			reconstructVideoStar(frame, frameStar(frame, marks.star))
+			report.StarFrames++
 		}
 		if marks.hasVeo {
-			removeVeo(frame, marks.veo)
+			removeVeo(frame, frameText(frame, marks.veo))
+			report.TextFrames++
 		}
 		if _, err := sink.Write(frame.Pix); err != nil {
 			pipeErr = fmt.Errorf("watermark: write frame: %w", err)

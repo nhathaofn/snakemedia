@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"errors"
+	"os"
 	"slices"
 	"sync"
 	"time"
@@ -14,6 +15,11 @@ import (
 )
 
 var errRotationSlotsFull = errors.New("mọi tài khoản phù hợp đang chạy đủ số yêu cầu đồng thời cho phép")
+
+type rotationCooldown struct{ wait time.Duration }
+
+func (e *rotationCooldown) Error() string { return errRotationSlotsFull.Error() }
+func (e *rotationCooldown) Unwrap() error { return errRotationSlotsFull }
 
 type rotationAccountState struct {
 	active           int
@@ -170,12 +176,130 @@ func (s *Provider) waitForRotationSlot(ctx context.Context, reserve func() (int,
 		}
 		changed := s.rotationChanged
 		s.rotationMu.Unlock()
+		var timer *time.Timer
+		var retry <-chan time.Time
+		var cooldown *rotationCooldown
+		if errors.As(err, &cooldown) {
+			timer = time.NewTimer(cooldown.wait)
+			retry = timer.C
+		}
 		select {
 		case <-ctx.Done():
+			if timer != nil {
+				timer.Stop()
+			}
 			return -1, nil, ctx.Err()
 		case <-changed:
+		case <-retry:
+		}
+		if timer != nil {
+			timer.Stop()
 		}
 	}
+}
+
+type batchVideoHold struct {
+	TaskID    string
+	RequestID string
+	AccountID string
+}
+
+// A reservation made before session sync must not survive a pre-send failure.
+// Only the account owning an unresolved billable job keeps its hold.
+func (s *Provider) releaseUnusedBatchVideoAccounts(taskID, requestID string) {
+	job, err := s.loadGenerationJob(requestID)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	owner := ""
+	if err == nil {
+		owner = job.AccountID
+	}
+	s.rotationMu.Lock()
+	defer s.rotationMu.Unlock()
+	for accountID, hold := range s.batchVideoHolds {
+		if hold.TaskID == taskID && accountID != owner {
+			s.releaseBatchVideoAccountLocked(accountID)
+		}
+	}
+}
+
+func (s *Provider) holdBatchVideoAccountLocked(accountID, taskID, requestID string) bool {
+	if s.batchVideoHolds == nil {
+		s.batchVideoHolds = make(map[string]batchVideoHold)
+	}
+	if hold, exists := s.batchVideoHolds[accountID]; exists && hold.TaskID != taskID {
+		return false
+	}
+	s.batchVideoHolds[accountID] = batchVideoHold{TaskID: taskID, RequestID: requestID, AccountID: accountID}
+	s.notifyRotationWaitersLocked()
+	return true
+}
+
+// HoldBatchVideoAccount locks one account for a batch video task.
+func (s *Provider) HoldBatchVideoAccount(accountID, taskID, requestID string) bool {
+	s.rotationMu.Lock()
+	defer s.rotationMu.Unlock()
+	return s.holdBatchVideoAccountLocked(accountID, taskID, requestID)
+}
+
+func (s *Provider) releaseBatchVideoAccountLocked(accountID string) {
+	if s.batchVideoHolds != nil {
+		delete(s.batchVideoHolds, accountID)
+		s.notifyRotationWaitersLocked()
+	}
+}
+
+// ReleaseBatchVideoAccount frees one account from a batch video hold.
+func (s *Provider) ReleaseBatchVideoAccount(accountID string) {
+	s.rotationMu.Lock()
+	defer s.rotationMu.Unlock()
+	s.releaseBatchVideoAccountLocked(accountID)
+}
+
+// ReleaseBatchVideoTask frees any account held for taskID.
+func (s *Provider) ReleaseBatchVideoTask(taskID string) {
+	s.rotationMu.Lock()
+	defer s.rotationMu.Unlock()
+	if s.batchVideoHolds == nil {
+		return
+	}
+	changed := false
+	for accID, hold := range s.batchVideoHolds {
+		if hold.TaskID == taskID {
+			delete(s.batchVideoHolds, accID)
+			changed = true
+		}
+	}
+	if changed {
+		s.notifyRotationWaitersLocked()
+	}
+}
+
+func (s *Provider) isBatchVideoAccountHeldLocked(accountID, taskID string) bool {
+	if s.batchVideoHolds == nil {
+		return false
+	}
+	hold, exists := s.batchVideoHolds[accountID]
+	return exists && (taskID == "" || hold.TaskID != taskID)
+}
+
+// IsBatchVideoAccountHeld reports whether accountID is held by another batch video task.
+func (s *Provider) IsBatchVideoAccountHeld(accountID, taskID string) bool {
+	s.rotationMu.Lock()
+	defer s.rotationMu.Unlock()
+	return s.isBatchVideoAccountHeldLocked(accountID, taskID)
+}
+
+// BatchVideoHeldAccounts returns a snapshot of held accountID -> taskID.
+func (s *Provider) BatchVideoHeldAccounts() map[string]string {
+	s.rotationMu.Lock()
+	defer s.rotationMu.Unlock()
+	out := make(map[string]string, len(s.batchVideoHolds))
+	for accID, hold := range s.batchVideoHolds {
+		out[accID] = hold.TaskID
+	}
+	return out
 }
 
 func (s *Provider) notifyRotationWaitersLocked() {
@@ -191,16 +315,24 @@ func (s *Provider) notifyRotationWaitersLocked() {
 func (s *Provider) reserveVideoCandidate(candidates []videoAccountCandidate) (int, *accountLease, error) {
 	s.rotationMu.Lock()
 	defer s.rotationMu.Unlock()
-	return s.reserveVideoCandidateLocked(candidates)
+	return s.reserveVideoCandidateWithBatchLocked(candidates, "", "")
 }
 
 func (s *Provider) acquireVideoCandidate(ctx context.Context, candidates []videoAccountCandidate) (int, *accountLease, error) {
+	return s.acquireVideoCandidateWithBatch(ctx, candidates, "", "")
+}
+
+func (s *Provider) acquireVideoCandidateWithBatch(ctx context.Context, candidates []videoAccountCandidate, batchTaskID, batchRequestID string) (int, *accountLease, error) {
 	return s.waitForRotationSlot(ctx, func() (int, *accountLease, error) {
-		return s.reserveVideoCandidateLocked(candidates)
+		return s.reserveVideoCandidateWithBatchLocked(candidates, batchTaskID, batchRequestID)
 	})
 }
 
 func (s *Provider) reserveVideoCandidateLocked(candidates []videoAccountCandidate) (int, *accountLease, error) {
+	return s.reserveVideoCandidateWithBatchLocked(candidates, "", "")
+}
+
+func (s *Provider) reserveVideoCandidateWithBatchLocked(candidates []videoAccountCandidate, batchTaskID, batchRequestID string) (int, *accountLease, error) {
 	if len(candidates) == 0 {
 		return -1, nil, errors.New("không có tài khoản video đủ điều kiện")
 	}
@@ -209,7 +341,21 @@ func (s *Provider) reserveVideoCandidateLocked(candidates []videoAccountCandidat
 	remaining := make([]int, len(candidates))
 	creditEligible := make([]bool, len(candidates))
 	minActive := int(^uint(0) >> 1)
+	heldCount := 0
+	var cooldownWait time.Duration
 	for i, candidate := range candidates {
+		if batchTaskID != "" && s.isBatchVideoAccountHeldLocked(candidate.account.ID, batchTaskID) {
+			heldCount++
+			continue
+		}
+		if batchTaskID != "" && s.videoQueue != nil {
+			if wait := s.videoQueue.accountWait(candidate.account.ID, s.videoQueue.now()); wait > 0 {
+				if cooldownWait == 0 || wait < cooldownWait {
+					cooldownWait = wait
+				}
+				continue
+			}
+		}
 		state := s.rotationStateLocked(candidate.account)
 		states[i] = state
 		if !state.snapshotKnown {
@@ -230,6 +376,12 @@ func (s *Provider) reserveVideoCandidateLocked(candidates []videoAccountCandidat
 		}
 	}
 	if !slices.Contains(creditEligible, true) {
+		if cooldownWait > 0 {
+			return -1, nil, &rotationCooldown{wait: cooldownWait}
+		}
+		if heldCount > 0 {
+			return -1, nil, errRotationSlotsFull
+		}
 		return -1, nil, errors.New("không có tài khoản đủ credit cho yêu cầu video này; hãy làm mới số dư Flow")
 	}
 	if minActive == int(^uint(0)>>1) {
@@ -291,6 +443,9 @@ func (s *Provider) reserveVideoCandidateLocked(candidates []videoAccountCandidat
 		return -1, nil, errors.New("không có tài khoản video đủ điều kiện")
 	}
 	chosen := candidates[selected]
+	if batchTaskID != "" {
+		s.holdBatchVideoAccountLocked(chosen.account.ID, batchTaskID, batchRequestID)
+	}
 	s.videoCurrent[chosen.account.ID] -= totalWeight
 	states[selected].active++
 	states[selected].activityEpoch++

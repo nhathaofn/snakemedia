@@ -50,7 +50,9 @@ type Provider struct {
 	jobLocks   map[string]struct{}
 	journals   journalCache
 	// queue runs the image batch queue (Ảnh → All); see image_queue.go.
-	queue               *imageQueue
+	queue *imageQueue
+	// videoQueue runs the video batch queue (Video → All); see video_queue.go.
+	videoQueue          *videoQueue
 	balanceRefreshLocks sync.Map
 	// creditRefreshes holds, per account, whether a balance refresh runs and
 	// whether another was asked for meanwhile (coalesceCreditRefresh).
@@ -64,6 +66,7 @@ type Provider struct {
 	mu                   sync.Mutex
 	rotationMu           sync.Mutex
 	rotationAccounts     map[string]*rotationAccountState
+	batchVideoHolds      map[string]batchVideoHold
 	videoCurrent         map[string]float64
 	imageCursor          uint64
 	rotationChanged      chan struct{}
@@ -107,8 +110,10 @@ func New(accounts Accounts, cfg *config.Manager, store *media.Store, productName
 		reservedImageCounts:  make(map[string]int),
 		imageProjectLocks:    make(map[dailyImageProjectKey]*sync.Mutex),
 		videoModels:          make(map[string]videoModelCache),
+		batchVideoHolds:      make(map[string]batchVideoHold),
 	}
 	s.queue = newImageQueue(s)
+	s.videoQueue = newVideoQueue(s)
 	s.fetchLiveModels = s.queryModelsFromAccount
 	s.generateLiveImages = s.generateImagesFromAccount
 	s.fetchModelsPayload = s.fetchModelsPayloadFromAccount

@@ -513,12 +513,18 @@ func (s *Provider) removeVideoWatermark(ctx context.Context, mediaID, localURL s
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(policy.VideoGenerationTimeoutSeconds)*time.Second)
 	defer cancel()
 	tmp := file + ".clean.mp4"
-	removed, err := watermark.Video{FFmpeg: ffmpeg, FFprobe: ffprobe, Prepare: media.HideWindow}.RemoveVideo(ctx, file, tmp)
+	report, err := (watermark.Video{FFmpeg: ffmpeg, FFprobe: ffprobe, Prepare: media.HideWindow}).ProcessVideo(ctx, file, tmp)
 	if err != nil {
 		keep("ffmpeg run", err)
 		return
 	}
-	if !removed {
+	if !report.Processed {
+		return
+	}
+	original, err := s.media.PreserveOriginal(localURL)
+	if err != nil {
+		_ = os.Remove(tmp)
+		keep("preserve original", err)
 		return
 	}
 	if err := os.Rename(tmp, file); err != nil {
@@ -526,7 +532,9 @@ func (s *Provider) removeVideoWatermark(ctx context.Context, mediaID, localURL s
 		keep("replace", err)
 		return
 	}
-	logger.Get().Info("removed Flow video watermark", "media", mediaID)
+	logger.Get().Info("processed Flow video watermark", "media", mediaID, "original", original,
+		"frames", report.Frames, "starFrames", report.StarFrames, "textFrames", report.TextFrames,
+		"probeMS", report.ProbeTime.Milliseconds(), "detectMS", report.DetectTime.Milliseconds(), "rewriteMS", report.RewriteTime.Milliseconds())
 }
 
 func videoFailed(v pendingVideo) bool {

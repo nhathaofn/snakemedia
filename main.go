@@ -91,6 +91,7 @@ func run() error {
 			flow.AllImageQualities,
 			flow.AllImageProjectModes,
 			flow.AllImageTaskStatuses,
+			flow.AllVideoTaskStatuses,
 			config.AllMuseModes,
 			config.AllImageFormats,
 			muse.AllMuseJobKinds,

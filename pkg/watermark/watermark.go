@@ -44,6 +44,7 @@ type template struct {
 	alpha    []float32
 	sumAlpha float64
 	denAlpha float64
+	gradient []float64
 	// minMargin and maxMargin bound the gap between the mark and the right and
 	// bottom edges. Flow places the 48 px image mark 73-78 px in and the video
 	// mark 94-96 px in (24 px, 46-48 px in at 360p).
@@ -144,7 +145,9 @@ func newTemplate(rows [][]float32, minMargin, maxMargin int, minGain, maxGain fl
 		d := float64(a) - mean
 		sumSq += d * d
 	}
+	gradient := alphaGradient(alpha, sz, sz)
 	return template{size: sz, alpha: alpha, sumAlpha: sum, denAlpha: math.Sqrt(sumSq),
+		gradient:  gradient,
 		minMargin: minMargin, maxMargin: maxMargin, minGain: minGain, maxGain: maxGain, edgeBand: edgeBand, denoise: denoise, colour: colour}
 }
 
@@ -348,26 +351,42 @@ func clamp8(v float64) uint8 {
 func blendGain(img image.Image, match matchResult) (gain float64, ok bool) {
 	sz := match.size
 	alpha := match.template.alpha
-	residual := func(gain float64) float64 {
-		luma := make([]float64, sz*sz)
-		for y := 0; y < sz; y++ {
-			for x := 0; x < sz; x++ {
-				a := math.Min(float64(alpha[y*sz+x])*gain, 0.95)
-				c := color.RGBAModel.Convert(img.At(match.x+x, match.y+y)).(color.RGBA)
-				v := (float64(c.R) + float64(c.G) + float64(c.B)) / 3
-				luma[y*sz+x] = (v - a*255) / (1 - a)
+	// Each pixel is read once. The gradient dot product can be written as a
+	// weighted sum, so root finding no longer decodes/allocates a patch 24 times.
+	values := make([]float64, len(alpha))
+	for y := 0; y < sz; y++ {
+		for x := 0; x < sz; x++ {
+			c := color.RGBAModel.Convert(img.At(match.x+x, match.y+y)).(color.RGBA)
+			i := y*sz + x
+			values[i] = ((float64(c.R)+float64(c.G)+float64(c.B))/3 - 255) * match.template.gradient[i]
+		}
+	}
+	return solveGain(alpha, values, match.template.minGain, match.template.maxGain)
+}
+
+func alphaGradient(alpha []float32, w, h int) []float64 {
+	gradient := make([]float64, len(alpha))
+	for y := 0; y < h-1; y++ {
+		for x := 0; x < w-1; x++ {
+			i := y*w + x
+			for _, j := range []int{i + 1, i + w} {
+				d := float64(alpha[j] - alpha[i])
+				gradient[i] -= d
+				gradient[j] += d
 			}
 		}
+	}
+	return gradient
+}
+
+func solveGain(alpha []float32, values []float64, lo, hi float64) (float64, bool) {
+	residual := func(gain float64) float64 {
 		var sum float64
-		for y := 0; y < sz-1; y++ {
-			for x := 0; x < sz-1; x++ {
-				i := y*sz + x
-				sum += (luma[i+1]-luma[i])*float64(alpha[i+1]-alpha[i]) + (luma[i+sz]-luma[i])*float64(alpha[i+sz]-alpha[i])
-			}
+		for i, value := range values {
+			sum += value / (1 - math.Min(float64(alpha[i])*gain, 0.95))
 		}
 		return sum
 	}
-	lo, hi := match.template.minGain, match.template.maxGain
 	if residual(lo) <= 0 || residual(hi) >= 0 {
 		return 0, false
 	}
@@ -518,7 +537,28 @@ const (
 	rangeSigma    = 14.0
 )
 
+var noiseWeightsOnce sync.Once
+var noiseRangeWeights []float64
+var noiseSpaceWeights [2*denoiseRadius + 1][2*denoiseRadius + 1]float64
+
+func initNoiseWeights() {
+	noiseWeightsOnce.Do(func() {
+		// RGB differences are integral and bounded. These exact lookup values
+		// replace millions of repeated exponentials without approximating them.
+		noiseRangeWeights = make([]float64, 3*255*255+1)
+		for i := range noiseRangeWeights {
+			noiseRangeWeights[i] = math.Exp(-float64(i) / (3 * 2 * rangeSigma * rangeSigma))
+		}
+		for dy := -denoiseRadius; dy <= denoiseRadius; dy++ {
+			for dx := -denoiseRadius; dx <= denoiseRadius; dx++ {
+				noiseSpaceWeights[dy+denoiseRadius][dx+denoiseRadius] = math.Exp(-float64(dx*dx+dy*dy) / (2 * spaceSigma * spaceSigma))
+			}
+		}
+	})
+}
+
 func denoiseInside(rgba *image.RGBA, match matchResult, gain float64) {
+	initNoiseWeights()
 	sz := match.size
 	src := copyAround(rgba, match)
 	b := src.Bounds()
@@ -539,8 +579,8 @@ func denoiseInside(rgba *image.RGBA, match matchResult, gain float64) {
 						continue
 					}
 					n := src.RGBAAt(q.X, q.Y)
-					dr, dg, db := float64(n.R)-float64(c.R), float64(n.G)-float64(c.G), float64(n.B)-float64(c.B)
-					k := math.Exp(-float64(dx*dx+dy*dy)/(2*spaceSigma*spaceSigma) - (dr*dr+dg*dg+db*db)/(3*2*rangeSigma*rangeSigma))
+					dr, dg, db := int(n.R)-int(c.R), int(n.G)-int(c.G), int(n.B)-int(c.B)
+					k := noiseSpaceWeights[dy+denoiseRadius][dx+denoiseRadius] * noiseRangeWeights[dr*dr+dg*dg+db*db]
 					sr += k * float64(n.R)
 					sg += k * float64(n.G)
 					sb += k * float64(n.B)

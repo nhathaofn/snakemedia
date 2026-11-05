@@ -28,6 +28,13 @@ const (
 	// EventFlowImageTasksRemoved carries the []string IDs of tasks removed or
 	// trimmed at once, so listeners drop them without reloading the queue.
 	EventFlowImageTasksRemoved Event = "flow:image-tasks-removed"
+	// EventFlowVideoTaskUpdated carries one flow.VideoTask whenever its state changes.
+	EventFlowVideoTaskUpdated Event = "flow:video-task-updated"
+	// EventFlowVideoTasksAdded carries the []flow.VideoTask added at once.
+	EventFlowVideoTasksAdded Event = "flow:video-tasks-added"
+	// EventFlowVideoTasksRemoved carries the []string IDs of tasks removed or
+	// trimmed at once, so listeners drop them without reloading the queue.
+	EventFlowVideoTasksRemoved Event = "flow:video-tasks-removed"
 	// EventToolMissing carries the tools.Request of a feature that needs a
 	// tool the machine does not have; the user decides whether to download it.
 	EventToolMissing Event = "tools:missing"
@@ -53,6 +60,9 @@ var AllEvents = []struct {
 	{EventFlowImageTaskUpdated, "FlowImageTaskUpdated"},
 	{EventFlowImageTasksAdded, "FlowImageTasksAdded"},
 	{EventFlowImageTasksRemoved, "FlowImageTasksRemoved"},
+	{EventFlowVideoTaskUpdated, "FlowVideoTaskUpdated"},
+	{EventFlowVideoTasksAdded, "FlowVideoTasksAdded"},
+	{EventFlowVideoTasksRemoved, "FlowVideoTasksRemoved"},
 	{EventToolMissing, "ToolMissing"},
 	{EventToolProgress, "ToolProgress"},
 	{EventAccountsUpdated, "AccountsUpdated"},
