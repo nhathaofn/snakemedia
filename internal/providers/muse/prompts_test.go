@@ -26,13 +26,13 @@ func TestRequestRulesReachEveryNewJob(t *testing.T) {
 			if !strings.HasSuffix(msg, "\nPrompt:\n"+prompt) {
 				t.Fatal("user prompt was changed or followed by app instructions")
 			}
-			if strings.Count(msg, "Request rules:") != 1 {
+			if strings.Count(msg, requestRules) != 1 {
 				t.Fatal("independent-request rules missing or duplicated")
 			}
-			if tc.job.Kind == MuseJobImage && strings.Contains(msg, "Video rules:") {
+			if tc.job.Kind == MuseJobImage && strings.Contains(msg, planRule[MuseJobVideo]) {
 				t.Fatal("image job got the single-video workflow")
 			}
-			if tc.job.Kind == MuseJobVideo && !strings.Contains(msg, "pauses and mood") {
+			if tc.job.Kind == MuseJobVideo && !strings.Contains(msg, "speaker names are labels") {
 				t.Fatal("video job lost content-dependent pacing")
 			}
 		})
@@ -49,11 +49,11 @@ func TestStoryboardAnchorsKeepTheirSceneAndReferenceNumbers(t *testing.T) {
 		},
 	})
 	for _, want := range []string{
-		"image 1 to image 2 are the opening frames",
+		"image 1 to image 2 show the video's scenes in order",
 		"image 3 = @lan (character face)",
 		"image 4 = @box (product)",
 		"- @lan: left cheek mole", "- @box: ABC label",
-		"use storyboard frames for their assigned scenes",
+		"storyboard frames for their assigned scenes",
 		"a lock does not require its subject in every frame",
 	} {
 		if !strings.Contains(msg, want) {
@@ -63,7 +63,7 @@ func TestStoryboardAnchorsKeepTheirSceneAndReferenceNumbers(t *testing.T) {
 	// Storyboard-only jobs already have anchors too; do not regenerate all of
 	// them just because the separate References list is empty.
 	boardOnly := buildMessage(MuseJob{Kind: MuseJobVideo, Duration: 20, Frames: []string{"f1", "f2"}})
-	if !strings.Contains(boardOnly, "The attached images are the anchors") {
+	if !strings.Contains(boardOnly, "Use the attached images as anchors") {
 		t.Fatal("storyboard frames were ignored as anchors")
 	}
 }
@@ -80,7 +80,7 @@ func TestUntaggedLocksIdentifyEachImage(t *testing.T) {
 	}
 }
 
-func TestVideoReferenceSheetsIdentifyEveryAffectedAttachment(t *testing.T) {
+func TestVideoReferenceSheetRule(t *testing.T) {
 	for _, seconds := range []int{10, 120} {
 		job := MuseJob{
 			Kind: MuseJobVideo, Duration: seconds, Prompt: "Keep this prompt unchanged.",
@@ -94,28 +94,17 @@ func TestVideoReferenceSheetsIdentifyEveryAffectedAttachment(t *testing.T) {
 			},
 		}
 		msg := buildMessage(job)
-		start := strings.Index(msg, "Reference-sheet handling")
-		if start < 0 {
-			t.Fatalf("%ds video lacks sheet handling", seconds)
-		}
-		guard := msg[start:]
 		for _, want := range []string{
-			"- image 3 = @stone-castle (setting):",
-			"- image 4 = @castle-lord (character, full look):",
-			"- image 5 = @castle-lord (character, full look):",
-			"- image 6 (reference):",
-			"Frame 0 must already show the requested scene.",
-			"never use the reference sheet itself.",
-			"Separately identified storyboard opening frames initialize only their assigned scenes.",
+			"image 3 = @stone-castle (setting):",
+			"image 4 = @castle-lord (character, full look):",
+			"image 5 = @castle-lord (character, full look):",
+			"image 6 (reference):",
 		} {
-			if !strings.Contains(guard, want) {
+			if !strings.Contains(msg, want) {
 				t.Errorf("%ds video lacks %q", seconds, want)
 			}
 		}
-		if strings.Contains(guard, "- image 1 ") || strings.Contains(guard, "- image 2 ") {
-			t.Fatal("scene opening frames were listed as reference sheets")
-		}
-		if strings.Count(msg, "Reference sheets are visual guidance only") != 1 {
+		if strings.Count(msg, referenceSheetRule) != 1 {
 			t.Fatal("sheet rule missing or duplicated")
 		}
 		if !strings.HasSuffix(msg, "\nPrompt:\n"+job.Prompt) {
@@ -138,12 +127,8 @@ func TestReferenceSheetRuleScope(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			msg := buildMessage(tc.job)
-			if got := strings.Contains(msg, "Reference-sheet handling"); got != tc.want {
-				t.Fatalf("reference-sheet handling present=%v, want %v", got, tc.want)
-			}
-			if tc.want && !strings.Contains(msg, "- image 1 (reference):") {
-				t.Fatal("untagged reference lost its attachment number")
+			if got := strings.Contains(buildMessage(tc.job), referenceSheetRule); got != tc.want {
+				t.Fatalf("sheet rule present=%v, want %v", got, tc.want)
 			}
 		})
 	}

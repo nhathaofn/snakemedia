@@ -25,7 +25,7 @@ func TestRunJobSendsPollsAndDownloads(t *testing.T) {
 	if got.Status != MuseJobSucceeded || got.SessionID != "s1" || got.Attempts != 1 || len(got.Files) != 1 {
 		t.Fatalf("job = %+v", got)
 	}
-	if len(page.sends) != 1 || page.sends[0] != "Task: Create a new video.\n"+requestRules+"\n"+strings.Join(shortVideoLines(MuseJob{Kind: MuseJobVideo}), "\n")+"\nPrompt:\nmột con mèo" {
+	if len(page.sends) != 1 || page.sends[0] != "Task: Create a new video.\n"+requestRules+"\n"+strings.Join(shortVideoLines(got), "\n")+"\nPrompt:\nmột con mèo" {
 		t.Fatalf("sent %q", page.sends)
 	}
 	path, err := p.media.Path(got.Files[0])
@@ -180,7 +180,7 @@ func TestImageJobCollectsEveryImage(t *testing.T) {
 	if got := mustJob(t, p, job.ID); got.Status != MuseJobSucceeded || len(got.Files) != 2 {
 		t.Fatalf("job = %+v", got)
 	}
-	if page.sends[0] != "Task: Create a new image.\n"+requestRules+"\nPrompt:\nx" {
+	if page.sends[0] != "Task: Create a new image.\n"+requestRules+"\n"+planRule[MuseJobImage]+"\nPrompt:\nx" {
 		t.Fatalf("sent %q", page.sends[0])
 	}
 }

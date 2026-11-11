@@ -5,37 +5,35 @@ import (
 	"context"
 	"image"
 	"image/png"
-	"strconv"
 	"strings"
 	"testing"
 )
 
 func TestMessageAsksForRatioAndDuration(t *testing.T) {
-	// A one-clip video carries the one-clip guide before the prompt.
-	oneClip := strings.Join(shortVideoLines(MuseJob{Kind: MuseJobVideo}), "\n")
+	img := planRule[MuseJobImage]
+	clip := func(seconds int) string {
+		return strings.Join(shortVideoLines(MuseJob{Kind: MuseJobVideo, Duration: seconds}), "\n")
+	}
 	cases := []struct {
 		job  MuseJob
 		want string
 	}{
-		{MuseJob{Kind: MuseJobImage, Prompt: "p"}, "Task: Create a new image.\nPrompt:\np"},
+		{MuseJob{Kind: MuseJobImage, Prompt: "p"}, "Task: Create a new image.\n" + img + "\nPrompt:\np"},
 		{MuseJob{Kind: MuseJobImage, Prompt: "p", Ratio: "3:4"},
-			"Task: Create a new image.\nAspect ratio: 3:4 (portrait)\nPrompt:\np"},
+			"Task: Create a new image.\nAspect ratio: 3:4 (portrait)\n" + img + "\nPrompt:\np"},
 		{MuseJob{Kind: MuseJobVideo, Prompt: "p", Ratio: "16:9", Duration: 10},
-			"Task: Create a new video.\nAspect ratio: 16:9 (landscape)\nDuration: 10 seconds\n" + oneClip + "\nPrompt:\np"},
-		{MuseJob{Kind: MuseJobVideo, Prompt: "p", Duration: 10}, "Task: Create a new video.\nDuration: 10 seconds\n" + oneClip + "\nPrompt:\np"},
+			"Task: Create a new video.\nAspect ratio: 16:9 (landscape)\nDuration: 10 seconds\n" + clip(10) + "\nPrompt:\np"},
+		{MuseJob{Kind: MuseJobVideo, Prompt: "p", Duration: 10}, "Task: Create a new video.\nDuration: 10 seconds\n" + clip(10) + "\nPrompt:\np"},
 		// An image never asks for a length, nor for a ratio it is not offered.
-		{MuseJob{Kind: MuseJobImage, Prompt: "p", Duration: 5}, "Task: Create a new image.\nPrompt:\np"},
-		// One attached image is the subject, kept as drawn; its role is the
-		// prompt's to change, and the ratio asked wins over the image's shape.
+		{MuseJob{Kind: MuseJobImage, Prompt: "p", Duration: 5}, "Task: Create a new image.\n" + img + "\nPrompt:\np"},
+		// One attached image takes the role the prompt gives it, else it is
+		// the subject; the ratio asked wins over the image's shape.
 		{MuseJob{Kind: MuseJobVideo, Prompt: "p", References: []string{"r"}, Ratio: "1:1", Duration: 10},
 			"Task: Create a new video.\n" +
-				"Reference: The attached image (image 1) shows the subject of this video; " +
-				"keep its design, colors, details and art style exactly, consistent in every frame. " +
-				"Do not copy the image's background, framing or pose; take those from the prompt. " +
-				"If the prompt gives this unassigned image another role (for example style only or the opening frame), use only that role. An explicit requested change to an unlocked attribute overrides its appearance in this image.\n" +
-				strings.Join(videoReferenceLines(MuseJob{Kind: MuseJobVideo, References: []string{"r"}}, 1), "\n") + "\n" +
+				"Image 1: use it as the prompt says. If the prompt gives it no role, it shows the subject of this video: keep its look exactly, but take background, framing and pose from the prompt.\n" +
+				referenceSheetRule + "\n" +
 				"Aspect ratio: 1:1 (square). Frame the video in this ratio, not in the shape of the attached images.\n" +
-				"Duration: 10 seconds\n" + oneClip + "\nPrompt:\np"},
+				"Duration: 10 seconds\n" + clip(10) + "\nPrompt:\np"},
 	}
 	for _, c := range cases {
 		c.want = strings.Replace(c.want, "\n", "\n"+requestRules+"\n", 1)
@@ -53,10 +51,10 @@ func TestMessageNumbersEveryAttachedImage(t *testing.T) {
 		refs := make([]string, n)
 		msg := buildMessage(MuseJob{Kind: MuseJobImage, Prompt: "p", References: refs})
 		for _, want := range []string{
-			"Reference: " + strconv.Itoa(n) + " images are attached, numbered in the order attached (" + names + ").",
-			"Do not merge them into one subject.",
-			"include every element shown and keep each one's design, colors, details and art style exactly.",
-			"use its image unless the prompt explicitly requests a change to an unlocked attribute.",
+			"Images: " + names + ", in the order attached, each show a separate element",
+			"never merge them.",
+			"include its element and keep its look exactly",
+			"take backgrounds, framing and poses from the prompt.",
 		} {
 			if !strings.Contains(msg, want) {
 				t.Errorf("%d images: message lacks %q:\n%s", n, want, msg)

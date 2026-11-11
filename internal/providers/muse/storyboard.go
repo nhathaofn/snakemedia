@@ -6,22 +6,26 @@ import (
 	"time"
 )
 
-// maxBoardFrames caps a storyboard: one opening frame per scene, and the
-// frames go with the video's own images in one message.
+// maxBoardFrames caps a storyboard: one image per scene, and the images go
+// with the video's own images in one message.
 const maxBoardFrames = 6
 
 // A storyboard video is two jobs. The image job asks Muse for BoardFrames
-// opening frames (boardImageLines); the video job waits for it (After) and,
+// scene images (boardImageLines); the video job waits for it (After) and,
 // once it succeeded, attaches its images as Frames before its own references
 // (releaseAfter) in a new chat of its own. Each job is sent once like any
 // other, so a storyboard never pays twice for either step. Tried on muse.ai
 // (HaoHao, 2026-10-09): drawing the frames first kept one person, outfit,
 // room and product across scenes where a direct video changed them.
+// Muse's video tool has no image-to-video mode: an attached image is a
+// reference it redraws the scene from, never a literal first frame (frame 0
+// of test clips matched the attached image at SSIM 0.30-0.69, TestLiveConsole
+// 2026-11-11), so the scene images are worded as references.
 
 // boardImageLines ask for the storyboard frames of a video.
 func boardImageLines(job MuseJob) []string {
 	return []string{
-		fmt.Sprintf("Storyboard: make exactly %d separate images, the opening frame of each scene of the video the prompt describes, in its scene order (image 1 opens scene 1).", job.BoardFrames),
+		fmt.Sprintf("Storyboard: make exactly %d separate images, one per scene of the video the prompt describes, in scene order (image 1 shows scene 1).", job.BoardFrames),
 		"Match the medium, visual style and mood requested for the finished video; do not default to photorealism. Keep recurring people, faces, hair, clothing, places and products consistent wherever they appear, except for changes the prompt explicitly describes. Show only the people and objects called for in each scene. A product reference keeps its text and colors. If scene boundaries are unspecified, divide the existing content into the requested number of frames without inventing events.",
 		"Make only these separate images, no video yet. Add no storyboard labels, captions, panel numbers, grids or decorative logos. Preserve required product markings and text explicitly requested in the scene.",
 	}
@@ -31,15 +35,18 @@ func boardImageLines(job MuseJob) []string {
 func boardVideoLines(job MuseJob) []string {
 	n := len(job.Frames)
 	return []string{
-		fmt.Sprintf("Storyboard frames: image 1 to image %d are the opening frames of the video's scenes, in order (image k opens scene k). Start each scene from its frame and preserve the identities, wardrobe, setting, light and products established by each frame, subject to assigned reference roles and locks. Follow the prompt's scene-specific entrances, exits and changes; do not force every subject into every scene. Do not show the frames as stills or reproduce storyboard grids, labels or panel numbers; preserve required product markings and requested scene text.", n),
+		fmt.Sprintf("Storyboard: image 1 to image %d show the video's scenes in order (image k is scene k). Use each as the reference for its scene's people, wardrobe, setting, light, products and composition, subject to reference roles and locks; follow the prompt's entrances, exits and changes. They are references, not frames to show.", n),
 	}
 }
 
-// v2vLines tell a job to recreate an attached video's movement.
-func v2vLines(job MuseJob) []string {
+// sampleLines tell a job to remake an attached sample video. Muse has no
+// video-to-video: its agent reads the file, looks at a few stills from it and
+// writes a new prompt, passing at most a still to the video tool; it does not
+// listen to the sound (TestLiveConsole, 2026-11-11). So the result is a
+// similar new video, and lines must come from the prompt.
+func sampleLines(job MuseJob) []string {
 	return []string{
-		"Source video: the attached video (video 1) is the template. First study its camera angles and movement, shot timing, the people's actions and pacing, and its sound style.",
-		fmt.Sprintf("Then make a new %s that follows the same camera movement, timing and actions with the changes the prompt asks for. The source controls only movement, timing and actions not explicitly changed by the prompt; assigned reference roles and locks still control appearance. Do not copy source identities, brands, captions or music unless requested. Do not send the source video back or cut it; generate new footage.", kindWord[job.Kind]),
+		fmt.Sprintf("Sample video: video 1 is a sample to remake as a new, similar %s. Look at it and follow its shots, camera movement, timing and actions, except what the prompt changes; appearance follows the prompt and any reference roles and locks. Speech comes only from the prompt. Do not copy the sample's identities, brands, captions or music unless asked.", kindWord[job.Kind]),
 	}
 }
 

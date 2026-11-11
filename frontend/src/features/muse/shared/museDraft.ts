@@ -20,7 +20,7 @@ export interface MuseDraft {
   /** Storyboard frames drawn before each video (0: none), and whether the video waits for review. */
   boardFrames: number;
   boardReview: boolean;
-  /** A video whose movement every prompt recreates (v2v). */
+  /** A sample video every prompt remakes as a similar new video. */
   sourceVideo: MuseReference | null;
 }
 

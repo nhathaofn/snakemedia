@@ -296,6 +296,13 @@ function pageMain(CHUNK) {
       const { sessions = [] } = await sessionList();
       return sessions.find((s) => s.session_id === sid)?.status || "";
     },
+    // The chat's raw events, tool calls included (TestLiveConsole only).
+    async history(sid) {
+      return await rt().sendRequest("chat.history", {
+        session_id: sid,
+        limit: 200,
+      });
+    },
     async result(sid) {
       const h = await rt().sendRequest("chat.history", {
         session_id: sid,

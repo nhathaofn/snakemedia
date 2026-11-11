@@ -29,34 +29,18 @@ var kindRequest = map[MuseJobKind]string{
 	MuseJobVideo: "Task: Create a new video.",
 }
 
-// referenceLines say how a job's n attached images are used, worded from n.
-// The setup message has every account treat each request on its own and use
-// an attached or earlier image only when the request itself says so, so a job
-// with images must say it. The prompt may give an image any role; without
-// one, a single image is the subject and several images are separate elements
-// (never merged), each kept as drawn. Images are numbered in the order
-// attached (their file names, image_N) for the prompt to name them.
+// referenceLines say how a job's n attached images without roles are used.
+// Images are references the video tool redraws from (it has no
+// image-to-video mode). The prompt may give an image any role (a character,
+// the setting, style only); without one, a single image is the subject and
+// several images are separate elements, never merged. Images are numbered in the order attached (their
+// file names, image_N) for the prompt to name them.
 func referenceLines(kind MuseJobKind, n int) []string {
 	what := kindWord[kind]
-	keep := "keep its design, colors, details and art style exactly"
-	if kind == MuseJobVideo {
-		keep += ", consistent in every frame"
-	}
 	if n == 1 {
-		return []string{
-			fmt.Sprintf("Reference: The attached image (image 1) shows the subject of this %s; %s. "+
-				"Do not copy the image's background, framing or pose; take those from the prompt. "+
-				"If the prompt gives this unassigned image another role (for example style only or the opening frame), use only that role. An explicit requested change to an unlocked attribute overrides its appearance in this image.", what, keep),
-		}
+		return []string{fmt.Sprintf("Image 1: use it as the prompt says. If the prompt gives it no role, it shows the subject of this %s: keep its look exactly, but take background, framing and pose from the prompt.", what)}
 	}
-	return []string{
-		fmt.Sprintf("Reference: %d images are attached, numbered in the order attached (%s). "+
-			"Each image shows a separate element of this %s, such as a character, an object, a product or a setting. Do not merge them into one subject.", n, imageNames(n), what),
-		`- If the prompt says what an image is for (for example "image 1 is the main character, image 2 is the product"), follow the prompt.`,
-		fmt.Sprintf("- If it does not, include every element shown and %s.", strings.Replace(keep, "its", "each one's", 1)),
-		"- For how an element looks, use its image unless the prompt explicitly requests a change to an unlocked attribute. References do not require every element to appear in every video shot.",
-		"- Keep the art style the images share unless the prompt asks for another. Do not copy their backgrounds, framing or poses; take those from the prompt.",
-	}
+	return []string{fmt.Sprintf("Images: %s, in the order attached, each show a separate element (a character, object, product or setting); never merge them. Use each as the prompt says. If the prompt gives one no role, include its element and keep its look exactly, but take backgrounds, framing and poses from the prompt.", imageNames(n))}
 }
 
 // imageNames lists n numbered images: "image 1, image 2 and image 3", or a
@@ -81,12 +65,10 @@ var kindMime = map[MuseJobKind]string{MuseJobImage: "image/", MuseJobVideo: "vid
 // kindName words a kind in messages to the user.
 var kindName = map[MuseJobKind]string{MuseJobImage: "ảnh", MuseJobVideo: "video"}
 
-// buildMessage is the chat message sent for a job, in English like the setup
-// message: task and request rules, then how to use the attached
-// images (when there are any), and the ratio and duration asked
-// (formatLines), the video guide (longVideoLines for several clips,
-// shortVideoLines for one),
-// then the user's prompt unchanged.
+// buildMessage is the chat message sent for a job, read by Muse's agent:
+// the task and request rule, how to use the attached images (when there are
+// any), the ratio and duration asked (formatLines), the plan rule and, for a
+// video, the one-clip or long-video guide, then the user's prompt unchanged.
 func buildMessage(job MuseJob) string {
 	lines := []string{kindRequest[job.Kind]}
 	if job.Kind == MuseJobImage && job.BoardFrames > 0 {
@@ -94,7 +76,7 @@ func buildMessage(job MuseJob) string {
 	}
 	lines = append(lines, requestRules)
 	if job.SourceVideo != "" {
-		lines = append(lines, v2vLines(job)...)
+		lines = append(lines, sampleLines(job)...)
 	}
 	first := 1
 	if len(job.Frames) > 0 {
@@ -110,7 +92,7 @@ func buildMessage(job MuseJob) string {
 		default:
 			lines = append(lines, referenceLines(job.Kind, n)...)
 		}
-		lines = append(lines, videoReferenceLines(job, first)...)
+		lines = append(lines, videoReferenceLines(job)...)
 	}
 	lines = append(lines, formatLines(job)...)
 	switch {
@@ -118,6 +100,8 @@ func buildMessage(job MuseJob) string {
 		lines = append(lines, longVideoLines(job)...)
 	case job.Kind == MuseJobVideo:
 		lines = append(lines, shortVideoLines(job)...)
+	default:
+		lines = append(lines, planRule[job.Kind])
 	}
 	return strings.Join(lines, "\n") + "\nPrompt:\n" + job.Prompt
 }

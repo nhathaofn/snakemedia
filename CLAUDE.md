@@ -13,10 +13,12 @@ The notes below add what AGENTS.md does not cover.
 - Frontend, one file or name: `npm --prefix frontend run test -- src/features/muse/theme.test.ts` or `... -- -t "name"`
 - Frontend type check only: `npm --prefix frontend run typecheck`
 - `frontend/dist` must exist before any Go command (`main.go` embeds it); run `npm --prefix frontend run build` once if `go test`/`go build` fails on the embed.
-- Opt-in live tests (real Chrome / real accounts, skipped by default):
+- Data folders: `wails dev` builds (tag `dev`) and every test binary use `%AppData%\SnakeMedia-dev`, the installed release `%AppData%\SnakeMedia` (`paths.Resolve`, `paths.DevName`). Never point development at the release folder: a newer data format makes the release skip or refuse those files.
+- Opt-in live tests (real Chrome / real accounts in the dev data folder, skipped by default):
   - `SNAKEMEDIA_LIVE_EDIT=1`, `SNAKEMEDIA_LIVE_DATA`, `SNAKEMEDIA_LIVE_VIDEO`, `SNAKEMEDIA_LIVE_PROMPT` → `go test ./internal/providers/flow -run '^TestLiveVideoEdit$' -v -count=1`
+  - `SNAKEMEDIA_MUSE_CONSOLE=<script.json>` → `go test ./internal/providers/muse -run '^TestLiveConsole$' -v -count=1 -timeout 3h` (talks to Muse from a script: new chats or follow-ups in the same chat, saves sent text, replies, raw chat history and files; `SNAKEMEDIA_FFMPEG` adds frame strips; spends quota)
   - `SNAKEMEDIA_TEST_MUSE=1` → `go test ./internal/providers/muse -v -count=1` (opens muse.ai in a real Chrome)
-  - `SNAKEMEDIA_LIVE_APP=list,credits,flow-image,flow-video,muse-image,muse-video` → `go test . -run '^TestLiveApp$' -v -count=1` (whole app on the real data folder; paid steps spend credits/quota; `SNAKEMEDIA_LIVE_DIRECT=<ids>` sets accounts to no proxy first)
+  - `SNAKEMEDIA_LIVE_APP=list,credits,flow-image,flow-video,muse-image,muse-video` → `go test . -run '^TestLiveApp$' -v -count=1` (whole app on the dev data folder; paid steps spend credits/quota; `SNAKEMEDIA_LIVE_DIRECT=<ids>` sets accounts to no proxy first)
   - `SNAKEMEDIA_TEST_CHROME=1` → `go test ./internal/browser -run TestBrowserLifecycle -v -count=1` (local Chrome smoke test)
 - On machines with Windows Application Control, binaries built into `%TEMP%` may be blocked (go test, `wails generate module`). Retry, or point `TEMP`/`TMP` at a folder under `build/bin/` for the command.
 

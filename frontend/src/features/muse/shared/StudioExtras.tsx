@@ -113,9 +113,10 @@ export function RefModeField({ draft, update }: { draft: MuseDraft; update: Draf
 }
 
 /**
- * Storyboard: Muse draws the opening frame of each scene first, then makes
- * the video from them, which keeps people, outfit, setting and product the
- * same across scenes at the cost of one more generation.
+ * Storyboard: Muse draws one image per scene first, then makes the video
+ * with them as references (Muse has no image-to-video), which keeps people,
+ * outfit, setting and product the same across scenes at the cost of one more
+ * generation.
  */
 export function StoryboardField({ draft, update }: { draft: MuseDraft; update: DraftUpdate }) {
   const maxFrames = useMuseStore((s) => s.options?.maxBoardFrames ?? 0);
@@ -132,7 +133,7 @@ export function StoryboardField({ draft, update }: { draft: MuseDraft; update: D
           <option value={0}>Không, làm video thẳng</option>
           {Array.from({ length: maxFrames }, (_, i) => i + 1).map((n) => (
             <option key={n} value={n}>
-              {n} khung mở đầu
+              {n} ảnh cảnh
             </option>
           ))}
         </select>
@@ -149,14 +150,15 @@ export function StoryboardField({ draft, update }: { draft: MuseDraft; update: D
       )}
       {draft.boardFrames > 0 && (
         <span className="studio-field-hint">
-          Tốn thêm 1 lượt ảnh mỗi prompt; video gắn các khung theo thứ tự cảnh.
+          Tốn thêm 1 lượt ảnh mỗi prompt; video dùng các ảnh cảnh làm tham chiếu theo thứ tự cảnh,
+          không bắt đầu đúng từ ảnh.
         </span>
       )}
     </div>
   );
 }
 
-/** A video whose camera, timing and motion every prompt recreates (v2v). */
+/** A sample video every prompt remakes as a similar new video (Muse has no v2v). */
 export function SourceVideoField({ draft, update }: { draft: MuseDraft; update: DraftUpdate }) {
   const addToast = useAppStore((s) => s.addToast);
   const pick = async () => {
@@ -196,7 +198,7 @@ export function SourceVideoField({ draft, update }: { draft: MuseDraft; update: 
         <span className="studio-field-hint">
           {draft.sourceVideo
             ? draft.sourceVideo.fileName
-            : 'Muse làm lại theo góc máy, nhịp và chuyển động của video này.'}
+            : 'Muse xem vài khung hình rồi làm video mới tương tự (không phải sửa video, không nghe tiếng). Thoại lấy từ prompt.'}
         </span>
       </div>
     </div>

@@ -17,3 +17,4 @@
 | [0013](0013-muse-long-video.md) | Muse Long Videos: the App's Guide, a Status Line, Continue in the Same Chat | Accepted | 2026-10-28 |
 | [0014](0014-muse-assets-roles-storyboard.md) | Muse Asset Library, Reference Roles, Storyboard and Source Video | Accepted | 2026-10-28 |
 | [0015](0015-external-tools-on-demand.md) | External Tools: One Manifest, Found First, Downloaded Only When a Feature Needs Them | Accepted | 2026-10-31 |
+| [0016](0016-muse-message-brief.md) | Muse Messages: a Short Brief for the Agent, the Prompt for the Scene | Accepted | 2026-11-11 |

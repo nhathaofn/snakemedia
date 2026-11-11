@@ -24,8 +24,8 @@ func TestLongVideoMessage(t *testing.T) {
 		"Make it as 3 clips",
 		"clip 1: 0-10s, clip 2: 10-20s, clip 3: 20-30s",
 		"STATUS: DONE",
-		"The prompt is the plan.",
-		"opens as a film cut to a new camera angle",
+		"The prompt is the plan:",
+		"opens as a cut to a new camera angle",
 		"\nPrompt:\na fox hunts in the snow",
 	} {
 		if !strings.Contains(msg, want) {
@@ -48,7 +48,7 @@ func TestLongVideoMessage(t *testing.T) {
 		t.Errorf("the one-clip guide names a genre's details:\n%s", oneClip)
 	}
 	withRefs := buildMessage(MuseJob{Kind: MuseJobVideo, Prompt: "p", Duration: 20, References: []string{"r"}})
-	if !strings.Contains(withRefs, "The attached images are the anchors") || strings.Contains(withRefs, "Before clip 1, generate") {
+	if !strings.Contains(withRefs, "Use the attached images as anchors") || strings.Contains(withRefs, "Before clip 1, make") {
 		t.Errorf("a video with images got generated anchors:\n%s", withRefs)
 	}
 }
@@ -113,7 +113,7 @@ func TestLongVideoContinuesInTheSameChat(t *testing.T) {
 	if reads < 3 {
 		t.Fatalf("the job ended on the old reply (reads = %d)", reads)
 	}
-	if len(page.sends) != 1 || len(page.sendTos) != 1 || !strings.HasPrefix(page.sendTos[0], "s1: Continue the same video project") {
+	if len(page.sends) != 1 || len(page.sendTos) != 1 || !strings.HasPrefix(page.sendTos[0], "s1: Continue the same video") {
 		t.Fatalf("sends = %v, sendTos = %v", page.sends, page.sendTos)
 	}
 }

@@ -235,7 +235,7 @@ func roleLines(kind MuseJobKind, info []MuseRefInfo, first int) []string {
 		lines = append(lines, "Priority when they disagree:")
 		lines = append(lines, priority...)
 	}
-	lines = append(lines, "Apply each role only to its assigned attributes. For the same named subject, a face reference controls identity ahead of a full-character reference; a full-character reference controls proportions and outfit ahead of a storyboard; a product reference controls that product; a storyboard controls scene composition and wardrobe except where a full-character reference or lock fixes them. A style reference controls rendering and grading, not identity or product colors. The prompt controls actions and dialogue. The prompt may assign a role to an unassigned image, but does not override an assigned role or lock. Do not copy backgrounds, framing or poses outside an image's role, or introduce its subject into shots that do not call for it.")
+	lines = append(lines, "Apply each role only to its subject and attributes; the prompt decides actions and lines, and may give a role to an image without one. Do not copy backgrounds, framing or poses outside an image's role, or put its subject in shots that do not call for it.")
 	var locks []string
 	seen := map[string]bool{}
 	for k, ri := range info {

@@ -1,6 +1,6 @@
 # 0014. Muse Asset Library, Reference Roles, Storyboard and Source Video
 
-- **Status:** Accepted
+- **Status:** Accepted (wording amended by 0016: Muse has no image-to-video or video-to-video; storyboard images are scene references and the source video is a sample remade as a similar video)
 - **Date:** 2026-10-28
 - **Amends:** ADR 0008 (what a job attaches), ADR 0012 (a job that waits for another)
 

@@ -760,7 +760,7 @@ func (a *App) PickMuseAssetImages() models.Response[[]muse.MuseReference] {
 	return logged("PickMuseAssetImages", a.muse.ImportAssetImages(paths))
 }
 
-// PickMuseSourceVideo asks the user for a video to recreate (v2v) and
+// PickMuseSourceVideo asks the user for a sample video to remake and
 // imports it; an empty LocalURL means the dialog was closed.
 func (a *App) PickMuseSourceVideo() models.Response[muse.MuseReference] {
 	patterns := a.muse.VideoFilePatterns()
