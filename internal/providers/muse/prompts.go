@@ -2,51 +2,47 @@ package muse
 
 import "fmt"
 
-// Keep the sheet rule separate from creative direction so it can be tuned
-// without changing reference roles, locks or the user's prompt.
-const referenceSheetRule = "Reference sheets are visual guidance only, never literal video frames.\n" +
-	"Never display their grids, multiple views, neutral backgrounds or previews, including at the beginning and end.\n" +
-	"Frame 0 must already show the requested scene.\n" +
-	"If an opening image is required, create a clean single-scene frame from the references; never use the reference sheet itself."
+// The message is read by Muse's agent, not by the video model: the agent
+// applies these lines itself and passes the prompt's scene content on to its
+// media tool (seen in Muse's own account of its tool calls, TestLiveConsole,
+// 2026-11-11). So the lines below only say what the agent must do; anything
+// about the scene stays in the user's prompt. Shortening them from ~4,500 to
+// ~700 characters changed neither the format, the references nor the lines of
+// 18 test clips (docs/decisions/0016-muse-message-brief.md).
 
-// videoReferenceLines identify every affected attachment, including multiple
-// images of the same asset. Frames are separately designated scene openings;
-// first follows those frames and uses the same numbering as roleLines.
-func videoReferenceLines(job MuseJob, first int) []string {
+// requestRules open every new job's message: each request stands alone, even
+// though Muse remembers earlier chats of the account.
+const requestRules = "Use only this message and its attached images; ignore earlier chats and outputs unless this message asks to reuse them."
+
+// planRule keeps the prompt authoritative for each kind. Speaker labels are
+// named because Muse once read "X says:" aloud.
+var planRule = map[MuseJobKind]string{
+	MuseJobImage: "The prompt is the plan: keep its subjects, composition, style and any text it asks for exactly. Fill in only what it leaves open. Add no other subjects, captions or watermarks.",
+	MuseJobVideo: "The prompt is the plan: keep its subjects, action order, camera, style and every quoted line word for word, in its language, by its speaker; speaker names are labels, not words to say. Fill in only what it leaves open. Add no other characters, events or speech, and no captions, subtitles, watermarks or music it does not ask for.",
+}
+
+// fitRule asks a one-clip video to refuse rather than cut lines to fit.
+func fitRule(job MuseJob) string {
+	length := "the clip"
+	if job.Duration > 0 {
+		length = fmt.Sprintf("%d seconds", job.Duration)
+	}
+	return "If the lines and actions cannot fit in " + length + ", make nothing and say how long is needed."
+}
+
+// referenceSheetRule keeps reference images out of a video's frames.
+const referenceSheetRule = "Reference images are guidance, never frames: never show a reference sheet, its grid, multiple views or plain background, even at the start or end; frame 0 already shows the scene."
+
+// videoReferenceLines add the sheet rule to a video with reference images
+// (storyboard scene images have their own line).
+func videoReferenceLines(job MuseJob) []string {
 	if job.Kind != MuseJobVideo || len(job.References) == 0 {
 		return nil
 	}
-	lines := []string{"Reference-sheet handling applies to these attached reference images:"}
-	for k := range job.References {
-		var info MuseRefInfo
-		if len(job.RefInfo) == len(job.References) {
-			info = job.RefInfo[k]
-		}
-		label := fmt.Sprintf("image %d", first+k)
-		if info.Tag != "" {
-			label += " = @" + info.Tag
-		}
-		role := roleNames[info.Role]
-		if role == "" {
-			role = "reference"
-		}
-		lines = append(lines, fmt.Sprintf("- %s (%s): extract only its assigned visual attributes; do not display the source sheet.", label, role))
-	}
-	lines = append(lines, referenceSheetRule)
-	lines = append(lines, "An otherwise unassigned, clean single-scene image explicitly assigned by the prompt as an opening frame may initialize that scene. Separately identified storyboard opening frames initialize only their assigned scenes. A reference sheet, grid or multi-view image never qualifies as an opening frame.")
-	return lines
+	return []string{referenceSheetRule}
 }
 
-// requestRules travel with each new job: account memory is an aid, not a
-// prerequisite. Continuations use continueMessage in the existing chat.
-const requestRules = "Request rules: treat this as an independent project. Use only this request and its attached files; reuse earlier work only when this request explicitly asks for it.\n" +
-	"Intent: preserve the prompt's subjects, events, scene order, explicit timing, exact dialogue and language. Do not invent characters, events, claims or spoken lines. Complete unspecified composition, lighting and other visual details coherently without changing the meaning.\n" +
-	"Authority: selected aspect ratio and duration are the output requirements. Reference roles and locks control only their assigned subjects and attributes; the prompt controls actions, dialogue and all remaining details. A reference is not a requirement to put its subject in every shot. Do not silently change a locked attribute.\n" +
-	"Style: follow the requested medium, visual style and mood. Otherwise choose a coherent treatment suited to the content; do not force photorealism, animation, a genre or a promotional tone.\n" +
-	"Text: add no unrequested captions, subtitles, watermarks or channel names. Preserve required product markings and explicitly requested text; do not treat them as decorative captions."
-
-const pacingRule = "Pacing: follow the prompt's timing, pauses and mood. Otherwise choose a natural pace suited to the content. Do not force speech in the first second, rapid delivery, constant camera motion or slow motion. Allow time for actions, reactions and silence; do not pad with repeated events."
-
-const speechFitRule = "Before generation, check whether the exact speech and required actions fit the duration, allowing for the requested language, delivery, pauses and reactions. Word counts are estimates, not a language-independent limit. Do not speed up unnaturally, omit lines or rewrite them to fit."
-
-const audioRule = "Sound: follow the requested language, speakers, delivery, music and silence. Keep supplied dialogue word for word with its own speaker; do not translate or paraphrase it. Use on-screen generated speech for dialogue, and narration only when requested. If narration is requested without a script, write only what the request authorizes, with no new claims or events. Do not add speech to a request that supplies or asks for none. Keep voices consistent and background sound below speech; an explicit request for silence means no audio."
+// shortVideoLines are the one-clip guide: the plan and the fit check.
+func shortVideoLines(job MuseJob) []string {
+	return []string{planRule[MuseJobVideo], fitRule(job)}
+}

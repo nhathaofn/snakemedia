@@ -191,7 +191,7 @@ type MuseCapabilities struct {
 	MaxFileBytes int64          `json:"maxFileBytes"`
 	MaxFiles     int            `json:"maxFiles"`
 	ImageTypes   []MuseFileType `json:"imageTypes"`
-	// VideoTypes are the videos the composer takes (a v2v source video);
+	// VideoTypes are the videos the composer takes (a sample video);
 	// limits read before they were kept have none.
 	VideoTypes []MuseFileType `json:"videoTypes,omitempty"`
 	Models     []MuseModel    `json:"models"`

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"testing"
 )
 
 const (
@@ -42,18 +43,30 @@ type Paths struct {
 
 // Resolve returns the standard per-user locations for appName, rooted at the
 // OS user config directory (e.g. %AppData%\<appName> on Windows).
+//
+// A `wails dev` build and every test binary use DevName(appName) instead, so
+// development never writes newer data formats into the installed release's
+// folder (an older release then skips or refuses those files). External tools
+// stay shared: they are plain programs, not versioned data.
 func Resolve(appName string) (Paths, error) {
 	base, err := os.UserConfigDir()
 	if err != nil {
 		return Paths{}, fmt.Errorf("paths: resolve user config dir: %w", err)
 	}
-	p := ForRoot(filepath.Join(base, appName))
+	dataName := appName
+	if devBuild || testing.Testing() {
+		dataName = DevName(appName)
+	}
+	p := ForRoot(filepath.Join(base, dataName))
 	if cache, err := os.UserCacheDir(); err == nil {
-		p.UpdatesDir = filepath.Join(cache, appName, updatesDirName)
+		p.UpdatesDir = filepath.Join(cache, dataName, updatesDirName)
 		p.ToolsDir = filepath.Join(cache, appName, toolsDirName)
 	}
 	return p, nil
 }
+
+// DevName is the data folder name of development builds and tests.
+func DevName(appName string) string { return appName + "-dev" }
 
 // ForRoot returns the layout for an explicit data directory (useful in tests).
 func ForRoot(dataDir string) Paths {

@@ -74,12 +74,12 @@ type MuseJobRequest struct {
 	// Storyboard makes every video prompt as a storyboard image job and a
 	// video job that waits for it (storyboard.go).
 	Storyboard *MuseStoryboard `json:"storyboard,omitempty"`
-	// SourceVideo is a video imported with ImportSourceVideo whose movement
-	// every prompt recreates (v2v).
+	// SourceVideo is a sample video imported with ImportSourceVideo that every
+	// prompt remakes as a similar new video (Muse has no video-to-video).
 	SourceVideo string `json:"sourceVideo,omitempty"`
 }
 
-// MuseStoryboard asks for Frames opening frames before each video; with
+// MuseStoryboard asks for Frames scene images before each video; with
 // Review the video waits on hold until the user runs it.
 type MuseStoryboard struct {
 	Frames int  `json:"frames"`

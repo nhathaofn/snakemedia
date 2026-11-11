@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -88,8 +89,27 @@ func (s *store) loadLocked() error {
 		}
 		return s.err
 	}
+	rebaseProfiles(records, filepath.Join(filepath.Dir(s.path), "profiles"))
 	s.records, s.legacy, s.loaded = records, legacy, true
 	return nil
+}
+
+// rebaseProfiles points each profile path outside root at the folder of the
+// same name inside it. Records keep absolute paths, so a data folder copied
+// or moved elsewhere (the release data copied into the dev folder) would
+// otherwise open the other folder's profiles or be refused by the pool.
+func rebaseProfiles(records []Record, root string) {
+	for i := range records {
+		dir := records[i].ProfileDir
+		if dir == "" {
+			continue
+		}
+		rel, err := filepath.Rel(root, dir)
+		if err == nil && rel != "." && !filepath.IsAbs(rel) && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		records[i].ProfileDir = filepath.Join(root, filepath.Base(dir))
+	}
 }
 
 // readSplit reads the ID order and then each account's record file.

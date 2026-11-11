@@ -159,7 +159,7 @@ func TestStoryboardVideoWaitsForItsFrames(t *testing.T) {
 	if got := mustJob(t, p, video.ID); got.Status != MuseJobSucceeded {
 		t.Fatalf("video = %+v", got)
 	}
-	if !strings.Contains(page.sends[1], "Storyboard frames: image 1 to image 2") || len(page.attachments[1]) != 2 {
+	if !strings.Contains(page.sends[1], "Storyboard: image 1 to image 2 show") || len(page.attachments[1]) != 2 {
 		t.Fatalf("video message %q, %d files", page.sends[1], len(page.attachments[1]))
 	}
 }

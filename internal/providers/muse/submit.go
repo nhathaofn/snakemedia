@@ -72,7 +72,7 @@ func (p *Provider) planPrompts(req MuseJobRequest, prompts []string, fixed []Mus
 	return plans, nil
 }
 
-// storyboardJob is the image job that draws a video job's opening frames.
+// storyboardJob is the image job that draws a video job's scene images.
 // The frames follow the video's ratio when Muse offers it for images.
 func storyboardJob(video MuseJob, frames int) MuseJob {
 	ratio := video.Ratio
@@ -120,7 +120,7 @@ func (p *Provider) VideoFilePatterns() []string {
 	return out
 }
 
-// ImportSourceVideo copies a picked video into the media folder for v2v.
+// ImportSourceVideo copies a picked sample video into the media folder.
 func (p *Provider) ImportSourceVideo(path string) models.Response[MuseReference] {
 	caps, _ := p.knownCapabilities()
 	if caps == nil {
