@@ -75,7 +75,7 @@ function pageMain(CHUNK) {
       performance
         .getEntriesByType("resource")
         .map((e) => e.name)
-        .filter((u) => /\/static\/chunks\/[^?]+\.js(\?|$)/.test(u)),
+        .filter((u) => /\/static\/(?:immutable\/)?chunks\/[^?]+\.js(\?|$)/.test(u)),
     ),
   ];
   const source = (u) =>
@@ -150,9 +150,11 @@ function pageMain(CHUNK) {
     const lazy = new Set();
     const known = new Set(loaded.map((u) => u.split("?")[0]));
     const listLazy = (u, text) => {
-      const base = u.slice(0, u.indexOf("/static/chunks/") + 1);
+      const match = u.match(/\/static\/(?:immutable\/)?chunks\//);
+      if (!match) return;
+      const base = u.slice(0, match.index + 1);
       const query = u.includes("?") ? u.slice(u.indexOf("?")) : "";
-      for (const m of text.matchAll(/static\/chunks\/[\w.-]+\.js/g)) {
+      for (const m of text.matchAll(/static\/(?:immutable\/)?chunks\/[\w.-]+\.js/g)) {
         if (!known.has(base + m[0])) lazy.add(base + m[0] + query);
       }
     };
