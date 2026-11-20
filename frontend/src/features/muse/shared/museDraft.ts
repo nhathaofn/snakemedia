@@ -20,8 +20,6 @@ export interface MuseDraft {
   /** Storyboard frames drawn before each video (0: none), and whether the video waits for review. */
   boardFrames: number;
   boardReview: boolean;
-  /** A sample video every prompt remakes as a similar new video. */
-  sourceVideo: MuseReference | null;
 }
 
 const EMPTY: MuseDraft = {
@@ -34,7 +32,6 @@ const EMPTY: MuseDraft = {
   assetIds: [],
   boardFrames: 0,
   boardReview: false,
-  sourceVideo: null,
 };
 
 const useDrafts = create<{

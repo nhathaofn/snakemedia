@@ -2,6 +2,7 @@ package media
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -74,23 +75,74 @@ func makeThumb(src, dst string) (bool, error) {
 		return false, err
 	}
 	b := img.Bounds()
-	w, h := b.Dx(), b.Dy()
-	if max(w, h) <= thumbSize {
+	if max(b.Dx(), b.Dy()) <= thumbSize {
 		return false, nil
 	}
-	if w >= h {
-		w, h = thumbSize, max(1, h*thumbSize/w)
-	} else {
-		w, h = max(1, w*thumbSize/h), thumbSize
-	}
-	small := image.NewRGBA(image.Rect(0, 0, w, h))
-	xdraw.ApproxBiLinear.Scale(small, small.Bounds(), opaque(img), b, xdraw.Src, nil)
-	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, small, &jpeg.Options{Quality: thumbQuality}); err != nil {
+	data, err := encodeScaledJPEG(img, thumbSize, thumbQuality)
+	if err != nil {
 		return false, err
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return false, err
 	}
-	return true, utils.WriteFileAtomic(dst, buf.Bytes(), 0o600)
+	return true, utils.WriteFileAtomic(dst, data, 0o600)
+}
+
+// PreviewDataURL decodes src, scales its longest side down to maxSide when
+// larger, and returns a JPEG data URL for lightweight previews without storing
+// a copy in the media folder. Returns "" when the file cannot be decoded.
+func PreviewDataURL(src string, maxSide, quality int) string {
+	img, err := decodeImage(src)
+	if err != nil {
+		return ""
+	}
+	data, err := encodeScaledJPEG(img, maxSide, quality)
+	if err != nil {
+		return ""
+	}
+	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data)
+}
+
+func encodeScaledJPEG(img image.Image, maxSide, quality int) ([]byte, error) {
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if maxSide > 0 && max(w, h) > maxSide {
+		if w >= h {
+			w, h = maxSide, max(1, h*maxSide/w)
+		} else {
+			w, h = max(1, w*maxSide/h), maxSide
+		}
+	}
+	var src image.Image
+	if w == b.Dx() && h == b.Dy() {
+		src = opaque(img)
+	} else {
+		small := image.NewRGBA(image.Rect(0, 0, w, h))
+		xdraw.ApproxBiLinear.Scale(small, small.Bounds(), opaque(img), b, xdraw.Src, nil)
+		src = small
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, src, &jpeg.Options{Quality: quality}); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// removeThumbs deletes cached thumbnails generated for name.
+func (s *Store) removeThumbs(name string) {
+	stem := strings.TrimSuffix(name, filepath.Ext(name))
+	if stem == "" {
+		return
+	}
+	dir := filepath.Join(s.dir, thumbDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	prefix := stem + "-"
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), prefix) {
+			_ = os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
 }

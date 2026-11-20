@@ -48,6 +48,12 @@
   gap: var(--gap-field);
   padding: var(--space-6);
   overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.studio-mode-panel::-webkit-scrollbar,
+.studio-panel-scroll::-webkit-scrollbar {
+  display: none;
 }
 
 /* Account status at the foot of a mode panel */
@@ -244,6 +250,7 @@
   gap: var(--gap-related);
   padding: var(--space-6);
   overflow-y: auto;
+  scrollbar-width: none;
 }
 
 /* Groups keep their height; the column scrolls instead of squeezing them. */

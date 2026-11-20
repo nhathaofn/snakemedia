@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AccountProvider, AccountSource, AccountStatus, Theme } from '../types';
 import type { Account } from '../types';
-import { accountReady } from './accounts';
+import { accountReady, formatRemainingTime } from './accounts';
 import { errorMessage } from './errors';
 import { formatBytes } from './formatters';
 import { resolveTheme } from './theme';
@@ -59,5 +59,12 @@ describe('account helpers', () => {
     expect(accountReady(account({ status: AccountStatus.SignedOut }), now)).toBe(false);
     expect(accountReady(account({ pausedUntil: '2026-10-26T13:00:00Z' }), now)).toBe(false);
     expect(accountReady(account({ pausedUntil: '2026-10-26T11:00:00Z' }), now)).toBe(true);
+  });
+
+  it('formats remaining window duration concisely', () => {
+    expect(formatRemainingTime('2026-10-27T12:00:00Z', now)).toBe('24g');
+    expect(formatRemainingTime('2026-10-26T13:45:00Z', now)).toBe('1g 45p');
+    expect(formatRemainingTime('2026-10-26T12:20:00Z', now)).toBe('20p');
+    expect(formatRemainingTime('2026-10-26T11:00:00Z', now)).toBe('');
   });
 });

@@ -6,8 +6,6 @@ interface QueueActionsProps {
   /** Selected tasks that ended (failed or cancelled). */
   retryableCount: number;
   failedCount: number;
-  /** Whether a task is running or waiting to run: failed ones are retried only after. */
-  busy: boolean;
   removableCount: number;
   canAddReferences: boolean;
   onPickReferences: () => void;
@@ -27,7 +25,6 @@ export function QueueActions({
   selectedCount,
   retryableCount,
   failedCount,
-  busy,
   removableCount,
   canAddReferences,
   onPickReferences,
@@ -73,10 +70,8 @@ export function QueueActions({
         <>
           <IconAction
             icon={RotateCcw}
-            label={
-              busy ? 'Chạy lại các tác vụ lỗi (khi hàng đợi chạy xong)' : 'Chạy lại các tác vụ lỗi'
-            }
-            disabled={busy || failedCount === 0}
+            label="Chạy lại các tác vụ lỗi"
+            disabled={failedCount === 0}
             onClick={onRetryFailed}
           />
           <IconAction

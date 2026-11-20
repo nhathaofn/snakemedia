@@ -1,11 +1,12 @@
 import { thumbUrl } from '../../../services';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ChevronDown, Film, X } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
 import { Icon } from '../../../components/ui';
-import { api, unwrap } from '../../../services';
+import { api } from '../../../services';
 import { useAppStore } from '../../../stores';
 import { MuseRefMode } from '../../../types';
+import type { MuseAsset } from '../../../types';
 import type { MuseDraft } from './museDraft';
 import { liveAssetIds, useMuseStudioStore } from './museStudioStore';
 import { useMuseStore } from './museStore';
@@ -23,23 +24,43 @@ type DraftUpdate = (change: Partial<MuseDraft>) => void;
 /** How many consistency options a draft uses, shown on the folded group. */
 export function activeExtras(draft: MuseDraft): number {
   return (
-    (draft.assetIds.length > 0 ? 1 : 0) +
-    (draft.boardFrames > 0 ? 1 : 0) +
-    (draft.sourceVideo ? 1 : 0) +
-    (draft.refMode ? 1 : 0)
+    (draft.assetIds.length > 0 ? 1 : 0) + (draft.boardFrames > 0 ? 1 : 0) + (draft.refMode ? 1 : 0)
   );
 }
 
+/** Summarizes reference image files in Tư liệu (and fixed selections) for collapsed headers. */
+export function referenceFileSummary(
+  assets: readonly MuseAsset[],
+  chosenIds: readonly string[],
+): string {
+  const totalFiles = assets.reduce((sum, a) => sum + a.images.length, 0);
+  const chosenSet = new Set(chosenIds);
+  const chosenFiles = assets
+    .filter((a) => chosenSet.has(a.id))
+    .reduce((sum, a) => sum + a.images.length, 0);
+  if (chosenFiles > 0) return `${chosenFiles}/${totalFiles} file tham chiếu`;
+  return `${totalFiles} file tham chiếu`;
+}
+
 /**
- * The consistency tools of a create panel (assets, storyboard, source video,
- * templates) as one titled group that folds away when not needed.
+ * The consistency tools of a create panel (assets, storyboard, templates)
+ * as one titled group that folds away when not needed.
  */
-export function ExtrasGroup({ active, children }: { active: number; children: ReactNode }) {
+export function ExtrasGroup({
+  active,
+  summary,
+  children,
+}: {
+  active: number;
+  summary?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <details className="muse-extras" open={active > 0 || undefined}>
       <summary className="muse-extras-summary">
         <span>Đồng nhất nhân vật</span>
         {active > 0 && <span className="muse-extras-badge">{active}</span>}
+        {summary && <span className="muse-extras-summary-meta">{summary}</span>}
         <Icon icon={ChevronDown} size="sm" className="muse-extras-chevron" />
       </summary>
       <div className="muse-extras-body">{children}</div>
@@ -53,6 +74,7 @@ export function ExtrasGroup({ active, children }: { active: number; children: Re
  */
 export function FixedAssetsField({ draft, update }: { draft: MuseDraft; update: DraftUpdate }) {
   const { assets } = useMuseStudio();
+  const [filter, setFilter] = useState('');
   const chosen = draft.assetIds.filter((id) => assets.some((a) => a.id === id));
   if (assets.length === 0) {
     return (
@@ -61,11 +83,32 @@ export function FixedAssetsField({ draft, update }: { draft: MuseDraft; update: 
       </span>
     );
   }
+  const q = filter.trim().toLowerCase().replace(/^@/, '');
+  const shown = q
+    ? assets.filter(
+        (a) =>
+          chosen.includes(a.id) ||
+          a.tag.toLowerCase().includes(q) ||
+          a.name.toLowerCase().includes(q),
+      )
+    : assets;
   return (
     <div className="studio-field-group">
-      <span className="studio-field-label">Gắn vào mọi prompt</span>
+      <span className="studio-field-label">
+        Gắn vào mọi prompt{chosen.length > 0 ? ` (${chosen.length})` : ''}
+      </span>
+      {assets.length > 10 && (
+        <input
+          type="text"
+          className="batch-input muse-asset-filter-input"
+          value={filter}
+          placeholder="Lọc nhanh @tag…"
+          aria-label="Lọc tư liệu gắn vào mọi prompt"
+          onChange={(e) => setFilter(e.target.value)}
+        />
+      )}
       <div className="muse-asset-chips">
-        {assets.map((a) => {
+        {shown.map((a) => {
           const on = chosen.includes(a.id);
           return (
             <button
@@ -154,53 +197,6 @@ export function StoryboardField({ draft, update }: { draft: MuseDraft; update: D
           không bắt đầu đúng từ ảnh.
         </span>
       )}
-    </div>
-  );
-}
-
-/** A sample video every prompt remakes as a similar new video (Muse has no v2v). */
-export function SourceVideoField({ draft, update }: { draft: MuseDraft; update: DraftUpdate }) {
-  const addToast = useAppStore((s) => s.addToast);
-  const pick = async () => {
-    try {
-      const picked = unwrap(await api.pickMuseSourceVideo());
-      if (picked.localUrl) update({ sourceVideo: picked });
-    } catch (cause) {
-      addToast({ type: 'error', message: cause instanceof Error ? cause.message : String(cause) });
-    }
-  };
-  return (
-    <div className="studio-field-group">
-      <span className="studio-field-label">Video mẫu</span>
-      <div className="muse-video-pick">
-        {draft.sourceVideo ? (
-          <div className="muse-thumb" title={draft.sourceVideo.fileName}>
-            <video src={draft.sourceVideo.localUrl} muted preload="metadata" />
-            <button
-              type="button"
-              className="muse-thumb-remove"
-              aria-label="Bỏ video mẫu"
-              onClick={() => update({ sourceVideo: null })}
-            >
-              <Icon icon={X} size="sm" />
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            className="muse-thumb muse-thumb-add"
-            aria-label="Chọn video mẫu"
-            onClick={() => void pick()}
-          >
-            <Icon icon={Film} size="lg" />
-          </button>
-        )}
-        <span className="studio-field-hint">
-          {draft.sourceVideo
-            ? draft.sourceVideo.fileName
-            : 'Muse xem vài khung hình rồi làm video mới tương tự (không phải sửa video, không nghe tiếng). Thoại lấy từ prompt.'}
-        </span>
-      </div>
     </div>
   );
 }

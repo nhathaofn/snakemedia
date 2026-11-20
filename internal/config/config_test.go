@@ -267,3 +267,32 @@ func TestMigrate_MovesFlowFFmpegPathsToTools(t *testing.T) {
 		t.Errorf("a relative path was carried over: %q", paths["ffprobe"])
 	}
 }
+
+func TestDefaultIdleBrowserMinutesIsFiveAndOnChangeFires(t *testing.T) {
+	if got := DefaultAccountConfig().IdleBrowserMinutes; got != 5 {
+		t.Fatalf("IdleBrowserMinutes default = %d, want 5", got)
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	m, err := NewManager(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	m.OnChange(func() { calls++ })
+	cfg := m.Get()
+	cfg.Muse.ThreadsPerAccount = 3
+	if _, err := m.Update(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("OnChange calls = %d, want 1", calls)
+	}
+	bad := m.Get()
+	bad.Muse.ThreadsPerAccount = 99
+	if _, err := m.Update(bad); err == nil {
+		t.Fatal("expected invalid Update to fail")
+	}
+	if calls != 1 {
+		t.Fatalf("OnChange should not fire on failed Update: calls = %d", calls)
+	}
+}

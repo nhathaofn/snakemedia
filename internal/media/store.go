@@ -116,6 +116,20 @@ func (s *Store) Path(localURL string) (string, error) {
 	return filepath.Join(s.dir, name), nil
 }
 
+// Remove deletes the stored file behind localURL and any cached thumbnails for
+// it; missing files are ignored.
+func (s *Store) Remove(localURL string) error {
+	path, err := s.Path(localURL)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	s.removeThumbs(filepath.Base(path))
+	return nil
+}
+
 // Save copies a stored file into a folder chooseDir returns (starting at the
 // last folder used) under the next number of that folder (see OutputName),
 // never replacing an existing file. An empty folder means the user canceled.

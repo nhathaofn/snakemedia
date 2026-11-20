@@ -249,3 +249,42 @@ func TestPlanRotatesOverManyJobs(t *testing.T) {
 		t.Fatalf("shares = %v", count)
 	}
 }
+
+func TestPlanSequentialLayeringAndCapacity(t *testing.T) {
+	cfg := config.DefaultMuseConfig()
+	cfg.Mode = config.MuseModeSequential
+	cfg.ThreadsPerAccount = 2
+	now := time.Now()
+	ok := func(id string) MuseAccount {
+		return MuseAccount{ID: id, Enabled: true, Status: accounts.StatusSignedIn}
+	}
+	accs := []MuseAccount{ok("a"), ok("b"), ok("c"), ok("d")}
+
+	// 10 queued prompts across 4 accounts * 2 threads = stops at 8 assigned jobs,
+	// filling thread 1 on [a,b,c,d] first before opening thread 2 on [a,b,c,d].
+	jobs := make([]MuseJob, 10)
+	for i := range 10 {
+		jobs[i] = MuseJob{
+			ID:        fmt.Sprintf("p%02d", i+1),
+			Status:    MuseJobQueued,
+			CreatedAt: fmt.Sprintf("2026-01-01T00:00:%02dZ", i+1),
+		}
+	}
+	got := plan(jobs, accs, cfg, map[string]string{}, now)
+	if len(got) != 8 {
+		t.Fatalf("assigned %d jobs, want 8 (cap 4*2)", len(got))
+	}
+	wantAcc := []string{"a", "b", "c", "d", "a", "b", "c", "d"}
+	for i, w := range wantAcc {
+		wantJob := fmt.Sprintf("p%02d", i+1)
+		if got[i].jobID != wantJob || got[i].accountID != w {
+			t.Fatalf("slot %d = %+v, want {%s %s}", i, got[i], wantJob, w)
+		}
+	}
+
+	// Only 3 prompts: account "d" is never touched.
+	got3 := plan(jobs[:3], accs, cfg, map[string]string{}, now)
+	if len(got3) != 3 || got3[0].accountID != "a" || got3[1].accountID != "b" || got3[2].accountID != "c" {
+		t.Fatalf("partial sequential plan = %+v", got3)
+	}
+}

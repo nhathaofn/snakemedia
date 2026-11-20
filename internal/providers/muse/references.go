@@ -2,7 +2,6 @@ package muse
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -60,7 +59,6 @@ func (p *Provider) readMediaDir() []os.DirEntry {
 // sweepMedia deletes the media files among entries named with prefix whose
 // local URL is not in used and that are older than referenceRetention.
 func (p *Provider) sweepMedia(prefix string, used map[string]bool, entries []os.DirEntry) int {
-	dir := p.media.Dir()
 	cutoff := p.now().Add(-referenceRetention)
 	removed := 0
 	for _, e := range entries {
@@ -72,7 +70,7 @@ func (p *Provider) sweepMedia(prefix string, used map[string]bool, entries []os.
 		if err != nil || info.ModTime().After(cutoff) {
 			continue
 		}
-		if err := os.Remove(filepath.Join(dir, name)); err != nil {
+		if err := p.media.Remove(media.Route + name); err != nil {
 			logger.Get().Warn("muse media not removed", "file", name, "error", err)
 			continue
 		}

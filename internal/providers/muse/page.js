@@ -9,38 +9,266 @@
 // Everything here depends on muse.ai internals: when Muse changes its client,
 // fix it in this file.
 function pageMain(CHUNK) {
+  const ensureVisible = () => {
+    try {
+      const wasHidden =
+        typeof document !== "undefined" && Boolean(document?.hidden);
+      if (typeof Document !== "undefined" && Document?.prototype) {
+        const hd = Object.getOwnPropertyDescriptor(
+          Document.prototype,
+          "hidden",
+        );
+        if (!hd || hd.configurable) {
+          Object.defineProperty(Document.prototype, "hidden", {
+            get: () => false,
+            configurable: true,
+          });
+        }
+        const vd = Object.getOwnPropertyDescriptor(
+          Document.prototype,
+          "visibilityState",
+        );
+        if (!vd || vd.configurable) {
+          Object.defineProperty(Document.prototype, "visibilityState", {
+            get: () => "visible",
+            configurable: true,
+          });
+        }
+      }
+      if (
+        typeof window !== "undefined" &&
+        !window.__mssRafPatched &&
+        typeof window.requestAnimationFrame === "function" &&
+        typeof window.cancelAnimationFrame === "function"
+      ) {
+        window.__mssRafPatched = true;
+        const raf = window.requestAnimationFrame.bind(window);
+        const caf = window.cancelAnimationFrame.bind(window);
+        const pending = new Map();
+        let seq = 0;
+        window.requestAnimationFrame = (cb) => {
+          const id = ++seq;
+          let done = false;
+          const run = (ts) => {
+            if (done) return;
+            done = true;
+            pending.delete(id);
+            cb(ts);
+          };
+          pending.set(id, [
+            raf(run),
+            setTimeout(() => run(performance.now()), 32),
+          ]);
+          return id;
+        };
+        window.cancelAnimationFrame = (id) => {
+          const v = pending.get(id);
+          if (v) {
+            caf(v[0]);
+            clearTimeout(v[1]);
+            pending.delete(id);
+          }
+        };
+      }
+      if (
+        wasHidden &&
+        typeof document?.dispatchEvent === "function" &&
+        typeof Event === "function"
+      ) {
+        document.dispatchEvent(new Event("visibilitychange"));
+        if (
+          typeof window !== "undefined" &&
+          typeof window.dispatchEvent === "function"
+        ) {
+          window.dispatchEvent(new Event("focus"));
+        }
+      }
+    } catch (e) {}
+  };
+  ensureVisible();
+  const gatewaySnapshot = () => {
+    try {
+      return (
+        (typeof window !== "undefined" &&
+          window.__hatchEarlyGatewayRuntimeState?.activeRuntime?.getSnapshot?.()) ||
+        null
+      );
+    } catch (e) {
+      return null;
+    }
+  };
+  const gatewayDownKind = (snap) => {
+    if (
+      snap &&
+      snap.isConnected === false &&
+      (snap.connectionState === "error" ||
+        snap.recoveryPaused ||
+        snap.lastDialRefused)
+    ) {
+      return String(
+        snap.lastFailureKind && snap.lastFailureKind !== "none"
+          ? snap.lastFailureKind
+          : snap.connectionState || "disconnected",
+      );
+    }
+    return "";
+  };
+  const ensureGatewayReady = async (waitMs = 6000) => {
+    ensureVisible();
+    let snap = gatewaySnapshot();
+    if (!snap || snap.isConnected !== false) return null;
+    try {
+      if (typeof snap.ensureLiveConnection === "function") {
+        Promise.resolve(snap.ensureLiveConnection()).catch(() => {});
+      } else if (typeof snap.reconnect === "function") {
+        Promise.resolve(snap.reconnect()).catch(() => {});
+      }
+    } catch (e) {}
+    const deadline = Date.now() + waitMs;
+    let retried = false;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 250));
+      snap = gatewaySnapshot();
+      if (!snap || snap.isConnected !== false) return null;
+      if (snap.recoveryPaused) ensureVisible();
+      if (
+        !retried &&
+        Date.now() + waitMs / 2 >= deadline &&
+        snap.connectionState === "error"
+      ) {
+        retried = true;
+        try {
+          if (typeof snap.reconnect === "function") {
+            Promise.resolve(snap.reconnect()).catch(() => {});
+          }
+        } catch (e) {}
+      }
+    }
+    return gatewayDownKind(gatewaySnapshot()) || null;
+  };
+  const fetchTimed = async (url, opts = {}, ms = 12000) => {
+    const ac =
+      typeof AbortController === "function" ? new AbortController() : null;
+    const timer = ac && ms > 0 ? setTimeout(() => ac.abort(), ms) : null;
+    try {
+      return await fetch(url, {
+        ...opts,
+        ...(ac ? { signal: ac.signal } : {}),
+      });
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
   const rt = () =>
     window.__hatchEarlyGatewayRuntimeState.activeRuntime.getSnapshot();
   // Muse's chat object: the React context value exposing sendMessage + ensureActiveChatSendReady.
+  // Reusing the matched Fiber cuts repeated 300k-node traversals across login/send calls,
+  // while validating its pathname, DOM attachment, and live React root chain avoids staleness.
+  const CHAT_CACHE_MS = 10000;
+  let cachedChat = null;
+  const reactRootProp = (el) =>
+    Object.keys(el).find(
+      (k) => k.startsWith("__reactContainer") || k.startsWith("__reactFiber"),
+    );
+  const findReactContainer = (body) => {
+    if (body.children) {
+      const q = [body];
+      for (let i = 0; i < q.length && i < 80; i++) {
+        const el = q[i];
+        const k = reactRootProp(el);
+        if (k) return { el, prop: k };
+        const kids = el.children;
+        if (kids) {
+          for (let j = 0; j < kids.length && q.length < 80; j++) q.push(kids[j]);
+        }
+      }
+      return null;
+    }
+    for (const el of [
+      body,
+      ...(typeof document.querySelectorAll === "function"
+        ? document.querySelectorAll("body *")
+        : []),
+    ].slice(0, 80)) {
+      const k = reactRootProp(el);
+      if (k) return { el, prop: k };
+    }
+    return null;
+  };
+  const fiberMounted = (f, liveRoot) => {
+    if (!f || !f.return) return false;
+    let p = f;
+    for (let i = 0; i < 512 && p.return; i++) p = p.return;
+    return p === liveRoot || Boolean(liveRoot?.alternate && p === liveRoot.alternate);
+  };
+  const validChatValue = (v) =>
+    v &&
+    typeof v.sendMessage === "function" &&
+    typeof v.ensureActiveChatSendReady === "function"
+      ? v
+      : null;
+  const cachedChatValue = (body, curPath) => {
+    const entry = cachedChat;
+    if (!entry) return null;
+    if (
+      entry.path !== curPath ||
+      Date.now() - entry.at >= CHAT_CACHE_MS ||
+      !(body === entry.el || (typeof body.contains === "function" && body.contains(entry.el)))
+    ) {
+      cachedChat = null;
+      return null;
+    }
+    const raw = entry.el?.[entry.prop];
+    const liveRoot = raw?.stateNode?.current || raw;
+    if (!liveRoot) {
+      cachedChat = null;
+      return null;
+    }
+    if (!entry.hadReturn) {
+      const v = liveRoot === entry.fiber ? validChatValue(liveRoot.memoizedProps?.value) : null;
+      if (!v) cachedChat = null;
+      return v;
+    }
+    let live = null;
+    if (fiberMounted(entry.fiber, liveRoot)) live = entry.fiber;
+    else if (fiberMounted(entry.fiber?.alternate, liveRoot)) live = entry.fiber.alternate;
+    const v = live ? validChatValue(live.memoizedProps?.value) : null;
+    if (!v) {
+      cachedChat = null;
+      return null;
+    }
+    entry.fiber = live;
+    return v;
+  };
   const chat = () => {
     if (!document.body) return null; // navigating: the next page is not built yet
-    let root;
-    for (const el of [
-      document.body,
-      ...document.querySelectorAll("body *"),
-    ].slice(0, 80)) {
-      const k = Object.keys(el).find(
-        (k) => k.startsWith("__reactContainer") || k.startsWith("__reactFiber"),
-      );
-      if (k) {
-        root = el[k];
-        break;
-      }
-    }
-    if (!root) return null;
+    const curPath =
+      typeof location !== "undefined" ? String(location.pathname || "") : "";
+    const cached = cachedChatValue(document.body, curPath);
+    if (cached) return cached;
+    const found = findReactContainer(document.body);
+    if (!found) return null;
+    let root = found.el[found.prop];
     if (root.stateNode?.current) root = root.stateNode.current;
     const stack = [root];
     for (let n = 0; stack.length && n < 300000; n++) {
       const f = stack.pop();
-      const v = f.memoizedProps?.value;
-      if (
-        v &&
-        typeof v.sendMessage === "function" &&
-        typeof v.ensureActiveChatSendReady === "function"
-      )
+      const v = validChatValue(f.memoizedProps?.value);
+      if (v) {
+        cachedChat = {
+          el: found.el,
+          prop: found.prop,
+          fiber: f,
+          hadReturn: Boolean(f.return),
+          path: curPath,
+          at: Date.now(),
+        };
         return v;
-      if (f.child) stack.push(f.child);
-      if (f.sibling) stack.push(f.sibling);
+      }
+      const ch = f.child;
+      if (ch) stack.push(ch);
+      const sb = f.sibling;
+      if (sb) stack.push(sb);
     }
     return null;
   };
@@ -63,10 +291,25 @@ function pageMain(CHUNK) {
   const files = new Map();
   let fileSeq = 0;
   const b64 = (u8) => {
-    let s = "";
+    const parts = [];
     for (let i = 0; i < u8.length; i += 32768)
-      s += String.fromCharCode.apply(null, u8.subarray(i, i + 32768));
-    return btoa(s);
+      parts.push(String.fromCharCode.apply(null, u8.subarray(i, i + 32768)));
+    return btoa(parts.join(""));
+  };
+  const blobB64 = (blob) => {
+    if (typeof FileReader === "function") {
+      return new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => {
+          const s = String(fr.result || "");
+          const at = s.indexOf(",");
+          resolve(at >= 0 ? s.slice(at + 1) : "");
+        };
+        fr.onerror = () => reject(fr.error || new Error("FileReader failed"));
+        fr.readAsDataURL(blob);
+      });
+    }
+    return blob.arrayBuffer().then((buf) => b64(new Uint8Array(buf)));
   };
 
   // ---- Muse's own scripts: values the client keeps in its bundle ----
@@ -79,7 +322,7 @@ function pageMain(CHUNK) {
     ),
   ];
   const source = (u) =>
-    fetch(u)
+    fetchTimed(u, {}, 8000)
       .then((r) => (r.ok ? r.text() : ""))
       .catch(() => "");
   // The build the page runs: a found value is remembered per build, because
@@ -175,16 +418,20 @@ function pageMain(CHUNK) {
   const callAction = async (name, args) => {
     const id = await actionId(name);
     if (!id) return null;
-    const r = await fetch("/", {
-      method: "POST",
-      credentials: "include",
-      body: JSON.stringify(args),
-      headers: {
-        "Next-Action": id,
-        Accept: "text/x-component",
-        "Content-Type": "text/plain;charset=UTF-8",
+    const r = await fetchTimed(
+      "/",
+      {
+        method: "POST",
+        credentials: "include",
+        body: JSON.stringify(args),
+        headers: {
+          "Next-Action": id,
+          Accept: "text/x-component",
+          "Content-Type": "text/plain;charset=UTF-8",
+        },
       },
-    });
+      12000,
+    );
     if (!r.ok) {
       try {
         localStorage.removeItem(`__mss:action:${name}:${build()}`);
@@ -232,24 +479,61 @@ function pageMain(CHUNK) {
   };
 
   return {
-    async login() {
+    async login(timeoutMs) {
+      ensureVisible();
+      const path =
+        typeof location !== "undefined" ? String(location.pathname || "") : "";
+      const ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : 15000;
       try {
-        const r = await fetch("/api/session", { credentials: "include" });
-        const j = await r.json().catch(() => ({}));
+        const r = await fetchTimed(
+          "/api/session",
+          { credentials: "include" },
+          ms,
+        );
+        const raw = await r.json().catch(() => null);
+        const j = raw && typeof raw === "object" ? raw : {};
         const c = Boolean(chat());
+        const notice =
+          !c && typeof document !== "undefined" && document.body
+            ? String(document.body.innerText || "")
+                .replace(/\s+/g, " ")
+                .trim()
+                .slice(0, 600)
+            : "";
         return {
           loggedIn: r.status === 200 && c,
           chat: c,
           http: r.status,
-          status: j.status || "",
-          vm: j.vm_state || "",
+          status: String(j.status || ""),
+          vm: String(j.vm_state || ""),
+          gateway: gatewayDownKind(gatewaySnapshot()),
+          error: String(
+            j.error ||
+              j.reason ||
+              j.message ||
+              (j.banned ? "banned" : "") ||
+              (j.suspended ? "suspended" : "") ||
+              (j.disabled ? "disabled" : ""),
+          ),
+          path,
+          notice,
         };
       } catch (e) {
-        return { loggedIn: false, chat: false, http: 0, status: "", vm: "" };
+        return {
+          loggedIn: false,
+          chat: false,
+          http: 0,
+          status: "",
+          vm: "",
+          error: String(e?.message || ""),
+          path,
+          notice: "",
+        };
       }
     },
     // thread = an existing chat's sessionId: send into that chat; empty = a new thread.
     async send(text, atts, thread) {
+      ensureVisible();
       // The page may be rebuilding (the user opened another chat): wait up to 20s for the client.
       let c = chat();
       for (let k = 0; !c && k < 20; k++) {
@@ -262,16 +546,34 @@ function pageMain(CHUNK) {
           sessionId: "",
           reason: `not_ready (${location.pathname})`,
         };
-      const r = await c.sendMessage(
-        text,
-        atts,
-        thread
-          ? {
-              targetRoute: { kind: "thread", sessionId: thread },
-              waitForReadiness: true,
-            }
-          : { createNewThread: true, waitForReadiness: true },
-      );
+      const gwErr = await ensureGatewayReady();
+      if (gwErr) {
+        cachedChat = null;
+        return {
+          ok: false,
+          sessionId: "",
+          reason: `not_ready (gateway:${gwErr})`,
+        };
+      }
+      let r;
+      try {
+        r = await c.sendMessage(
+          text,
+          atts,
+          thread
+            ? {
+                targetRoute: { kind: "thread", sessionId: thread },
+                waitForReadiness: true,
+              }
+            : { createNewThread: true, waitForReadiness: true },
+        );
+      } catch (err) {
+        cachedChat = null;
+        throw err;
+      }
+      if (!r?.ok && String(r?.reason || "").startsWith("not_ready")) {
+        cachedChat = null;
+      }
       return {
         ok: Boolean(r?.ok),
         sessionId: r?.sessionId || (r?.ok ? thread : ""),
@@ -297,6 +599,82 @@ function pageMain(CHUNK) {
     async status(sid) {
       const { sessions = [] } = await sessionList();
       return sessions.find((s) => s.session_id === sid)?.status || "";
+    },
+    async sessions(fresh) {
+      ensureVisible();
+      const waitRt = async (ms = 3000) => {
+        const end = Date.now() + ms;
+        for (;;) {
+          try {
+            const snap =
+              window.__hatchEarlyGatewayRuntimeState?.activeRuntime?.getSnapshot?.();
+            if (snap && typeof snap.sendRequest === "function") return snap;
+          } catch (e) {}
+          if (Date.now() >= end) break;
+          await new Promise((r) => setTimeout(r, 150));
+        }
+        return rt();
+      };
+      let snap = await waitRt();
+      if (gatewayDownKind(snap)) {
+        const gwErr = await ensureGatewayReady(5000);
+        if (gwErr) {
+          throw new Error("gateway disconnected: " + gwErr);
+        }
+        snap = await waitRt(1500);
+      }
+      if (gatewayDownKind(snap)) {
+        throw new Error("gateway disconnected");
+      }
+      let timer = null;
+      try {
+        const { sessions = [] } = await Promise.race([
+          fresh ? snap.sendRequest("sessions.list", {}) : sessionList(),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error("sessions timeout")), 8000);
+          }),
+        ]);
+        return sessions.map((s) => ({
+          id: s.session_id || "",
+          status: s.status || "",
+        }));
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    },
+    async userMessages(sid) {
+      const h = await rt().sendRequest("chat.history", {
+        session_id: sid,
+        limit: 50,
+      });
+      const textOf = (e) => {
+        for (const v of [
+          e?.display_text,
+          e?.text,
+          e?.content,
+          e?.payload?.display_text,
+          e?.payload?.text,
+          e?.payload?.content,
+          e?.payload?.message,
+          e?.payload?.data?.text,
+          e?.payload?.data?.content,
+        ]) {
+          if (typeof v === "string" && v.trim()) return v;
+        }
+        if (Array.isArray(e?.content)) {
+          return e.content
+            .map((p) => (typeof p?.text === "string" ? p.text : ""))
+            .filter(Boolean)
+            .join("\n");
+        }
+        return "";
+      };
+      return (h.chat_events || [])
+        .filter((e) => e.role === "user")
+        .map((e) => {
+          const text = textOf(e);
+          return { text, hasText: Boolean(text) };
+        });
     },
     // The chat's raw events, tool calls included (TestLiveConsole only).
     async history(sid) {
@@ -332,18 +710,14 @@ function pageMain(CHUNK) {
       const blob = r instanceof Blob ? r : r.data;
       if (!blob || blob.size <= 0 || blob.size > maxBytes)
         throw new Error("Muse file is empty or exceeds the download limit");
+      if (blob.size <= CHUNK) {
+        return { id: 0, size: blob.size, data: await blobB64(blob) };
+      }
       files.set(++fileSeq, blob);
       return { id: fileSeq, size: blob.size };
     },
     async slice(id, i) {
-      return b64(
-        new Uint8Array(
-          await files
-            .get(id)
-            .slice(i * CHUNK, (i + 1) * CHUNK)
-            .arrayBuffer(),
-        ),
-      );
+      return blobB64(files.get(id).slice(i * CHUNK, (i + 1) * CHUNK));
     },
     closeFile(id) {
       files.delete(id);

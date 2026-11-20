@@ -1,7 +1,13 @@
 package muse
 
 import (
+	"bytes"
 	"context"
+	"image"
+	"image/color"
+	"image/png"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -226,5 +232,144 @@ func TestMentionOrderUsesPromptOffsets(t *testing.T) {
 	got := mentionedAssets("İİİİ @A rồi Bình", assets)
 	if len(got) != 2 || got[0].Tag != "a" || got[1].Tag != "b" {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+func writeTestPNG(t *testing.T, path string) {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 16, 16))
+	img.Set(0, 0, color.RGBA{R: 255, A: 255})
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestScanAssetFolderSortsNaturallyAndFiltersNonImages(t *testing.T) {
+	p := testProvider(t, &fakePage{})
+	acc := addSignedIn(t, p, "A")
+	withCaps(p, acc, 4)
+
+	dir := t.TempDir()
+	for _, name := range []string{"10.png", "2.png", "1.png", "nv-1.png", "nv.png", "notes.txt"} {
+		pPath := filepath.Join(dir, name)
+		if strings.HasSuffix(name, ".png") {
+			writeTestPNG(t, pPath)
+		} else if err := os.WriteFile(pPath, []byte("ignored"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Create an oversized image to verify error flagging without failing the scan.
+	if err := os.WriteFile(filepath.Join(dir, "11_huge.png"), make([]byte, 2<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "subdir"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	res := p.ScanAssetFolder(dir)
+	if !res.Success {
+		t.Fatalf("scan failed: %s", res.Error)
+	}
+	var names []string
+	for _, img := range res.Data.Images {
+		names = append(names, img.FileName)
+	}
+	want := []string{"1.png", "2.png", "10.png", "11_huge.png", "nv.png", "nv-1.png"}
+	if !slices.Equal(names, want) {
+		t.Fatalf("order = %v, want %v", names, want)
+	}
+	if !strings.HasPrefix(res.Data.Images[0].PreviewURL, "data:image/jpeg;base64,") {
+		t.Fatalf("expected preview data URL, got %q", res.Data.Images[0].PreviewURL)
+	}
+	if res.Data.Images[3].Error == "" || res.Data.Images[3].PreviewURL != "" {
+		t.Fatalf("oversized image should flag error and skip preview: %+v", res.Data.Images[3])
+	}
+}
+
+func TestImportAssetBatchConflictModesAndImmediateCleanup(t *testing.T) {
+	p := testProvider(t, &fakePage{})
+	acc := addSignedIn(t, p, "A")
+	withCaps(p, acc, 4)
+
+	srcDir := t.TempDir()
+	imgA := filepath.Join(srcDir, "1.png")
+	imgB := filepath.Join(srcDir, "2.png")
+	imgC := filepath.Join(srcDir, "3.png")
+	writeTestPNG(t, imgA)
+	writeTestPNG(t, imgB)
+	writeTestPNG(t, imgC)
+
+	first := p.ImportAssetBatch(MuseAssetBatchRequest{
+		Conflict: MuseConflictSkip,
+		Items: []MuseAssetBatchItem{
+			{SourcePath: imgA, Tag: "lan", Name: "Lan", Role: MuseRoleFace, Lock: "mặt"},
+			{SourcePath: imgB, Tag: "lan", Name: "Lan dup", Role: MuseRoleFace},
+			{SourcePath: imgC, Tag: "hop", Name: "Hộp", Role: MuseRoleProduct, Lock: "chữ ABC"},
+		},
+	})
+	if !first.Success || first.Data.Added != 2 || first.Data.Skipped != 1 {
+		t.Fatalf("first batch = %+v", first)
+	}
+	assets := p.assets.List()
+	oldLanImg := assets[0].Images[0]
+	oldHopImg := assets[1].Images[0]
+
+	// Overwrite @lan (not used by any job): old image should be deleted immediately.
+	over := p.ImportAssetBatch(MuseAssetBatchRequest{
+		Conflict: MuseConflictOverwrite,
+		Items: []MuseAssetBatchItem{
+			{SourcePath: imgB, Tag: "LAN", Name: "Lan mới", Role: MuseRoleCharacter, Lock: "áo đỏ"},
+		},
+	})
+	if !over.Success || over.Data.Updated != 1 || over.Data.Added != 0 {
+		t.Fatalf("overwrite = %+v", over)
+	}
+	oldLanPath, _ := p.media.Path(oldLanImg)
+	if _, err := os.Stat(oldLanPath); !os.IsNotExist(err) {
+		t.Fatalf("overwritten asset image was not deleted immediately: %v", err)
+	}
+	updatedLan, _ := p.assets.Get(assets[0].ID)
+	if updatedLan.Role != MuseRoleCharacter || updatedLan.Lock != "áo đỏ" || updatedLan.Images[0] == oldLanImg {
+		t.Fatalf("overwritten asset = %+v", updatedLan)
+	}
+
+	// Rename mode appends _2 when tag is already taken.
+	ren := p.ImportAssetBatch(MuseAssetBatchRequest{
+		Conflict: MuseConflictRename,
+		Items:    []MuseAssetBatchItem{{SourcePath: imgC, Tag: "lan", Role: MuseRoleFace}},
+	})
+	if !ren.Success || ren.Data.Added != 1 {
+		t.Fatalf("rename = %+v", ren)
+	}
+	renamed, _ := p.assets.Get(ren.Data.SavedIDs[0])
+	if renamed.Tag != "lan_2" {
+		t.Fatalf("renamed tag = %q, want lan_2", renamed.Tag)
+	}
+
+	// UpdateAssetsRole updates multiple assets in one call.
+	upd := p.UpdateAssetsRole([]string{assets[0].ID, renamed.ID}, MuseRoleSetting)
+	if !upd.Success || upd.Data != 2 {
+		t.Fatalf("UpdateAssetsRole = %+v", upd)
+	}
+
+	// Queue a job referencing oldHopImg so RemoveAssets keeps that file while deleting unused ones.
+	if _, err := p.jobs.add(MuseJob{ID: "j1", Kind: MuseJobImage, Status: MuseJobQueued, References: []string{oldHopImg}}); err != nil {
+		t.Fatal(err)
+	}
+	rem := p.RemoveAssets([]string{assets[0].ID, assets[1].ID, renamed.ID})
+	if !rem.Success || rem.Data != 3 {
+		t.Fatalf("RemoveAssets = %+v", rem)
+	}
+	hopPath, _ := p.media.Path(oldHopImg)
+	if _, err := os.Stat(hopPath); err != nil {
+		t.Fatalf("job-referenced asset image must stay on disk: %v", err)
+	}
+	newLanPath, _ := p.media.Path(updatedLan.Images[0])
+	if _, err := os.Stat(newLanPath); !os.IsNotExist(err) {
+		t.Fatalf("removed asset image must be deleted immediately: %v", err)
 	}
 }

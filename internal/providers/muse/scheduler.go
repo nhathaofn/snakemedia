@@ -48,6 +48,16 @@ func usable(acc MuseAccount, cfg config.MuseConfig, now time.Time) bool {
 	return acc.Enabled && acc.Status == accounts.StatusSignedIn && acc.NoRoute == "" && pausedUntil(acc, cfg, now).IsZero()
 }
 
+// usableForJob reports whether acc may start a queued job of kind: accounts
+// with SkipVideoCheck still handle image jobs while leaving video jobs for
+// video-capable accounts.
+func usableForJob(acc MuseAccount, kind MuseJobKind, cfg config.MuseConfig, now time.Time) bool {
+	if !usable(acc, cfg, now) {
+		return false
+	}
+	return !acc.SkipVideoCheck || kind != MuseJobVideo
+}
+
 // due leaves out the jobs held back until a later time (NextCheckAt), so plan
 // never starts them early. An unreadable hold does not hold the job.
 func due(jobs []MuseJob, now time.Time) []MuseJob {
@@ -69,6 +79,30 @@ type assignment struct {
 	accountID string
 }
 
+// apiCapacity describes the active worker capacity reported by muse2api's
+// /readyz endpoint.
+type apiCapacity struct {
+	driver   string
+	accounts int
+	tabs     int
+}
+
+// apiConcurrency returns how many concurrent jobs SnakeMedia should dispatch
+// when UseAPI is enabled. When muse2api reports available accounts, each
+// account gets ThreadsPerAccount slots (bounded by browser tabs if reported,
+// never below the available account count). Otherwise it falls back to
+// max(cfg.ThreadsPerAccount, 2).
+func apiConcurrency(cfg config.MuseConfig, cap apiCapacity) int {
+	if cap.accounts > 0 {
+		want := cap.accounts * max(cfg.ThreadsPerAccount, 1)
+		if cap.tabs > 0 && (cap.driver == "" || cap.driver == "browser") {
+			want = max(cap.accounts, min(want, cap.tabs))
+		}
+		return max(want, 2)
+	}
+	return max(cfg.ThreadsPerAccount, 2)
+}
+
 // plan chooses which jobs start now, and where. It is pure: running maps job
 // IDs already being worked on to their account.
 //
@@ -77,6 +111,44 @@ type assignment struct {
 // every usable account (signed in, enabled, routed, not resting), up to
 // ThreadsPerAccount each, oldest first.
 func plan(jobs []MuseJob, accs []MuseAccount, cfg config.MuseConfig, running map[string]string, now time.Time, previous ...MuseJobMode) []assignment {
+	return planWithCapacity(jobs, accs, cfg, running, now, apiCapacity{}, previous...)
+}
+
+func planWithCapacity(jobs []MuseJob, accs []MuseAccount, cfg config.MuseConfig, running map[string]string, now time.Time, cap apiCapacity, previous ...MuseJobMode) []assignment {
+	if cfg.UseAPI {
+		busyAPI := 0
+		for _, accID := range running {
+			if accID == "api" {
+				busyAPI++
+			}
+		}
+		concurrency := apiConcurrency(cfg, cap)
+		var out []assignment
+		for _, job := range jobs {
+			if _, ok := running[job.ID]; ok || job.Status != MuseJobProcessing || job.AccountID != "api" || job.SessionID == "" {
+				continue
+			}
+			if busyAPI < concurrency {
+				busyAPI++
+				out = append(out, assignment{jobID: job.ID, accountID: "api"})
+			}
+		}
+		var queued []MuseJob
+		for _, job := range due(jobs, now) {
+			if _, ok := running[job.ID]; !ok && job.Status == MuseJobQueued && !job.Held && !waitsForBoard(job) {
+				queued = append(queued, job)
+			}
+		}
+		queued = sortQueued(queued, previous...)
+		for _, job := range queued {
+			if busyAPI >= concurrency {
+				break
+			}
+			busyAPI++
+			out = append(out, assignment{jobID: job.ID, accountID: "api"})
+		}
+		return out
+	}
 	busy := make(map[string]int, len(accs))
 	for _, accID := range running {
 		busy[accID]++
@@ -96,7 +168,7 @@ func plan(jobs []MuseJob, accs []MuseAccount, cfg config.MuseConfig, running map
 	}
 
 	for _, job := range jobs {
-		if _, ok := running[job.ID]; ok || job.Status != MuseJobProcessing || job.SessionID == "" {
+		if _, ok := running[job.ID]; ok || job.Status != MuseJobProcessing || (job.SessionID == "" && !(job.Sending && job.PreSendTracked)) {
 			continue
 		}
 		// Quota does not matter here: the generation already happened.
@@ -111,6 +183,33 @@ func plan(jobs []MuseJob, accs []MuseAccount, cfg config.MuseConfig, running map
 			queued = append(queued, job)
 		}
 	}
+	queued = sortQueued(queued, previous...)
+	for _, job := range queued {
+		var pool []MuseAccount
+		for _, acc := range accs {
+			if usableForJob(acc, job.Kind, cfg, now) && canTake(acc) {
+				pool = append(pool, acc)
+			}
+		}
+		if len(pool) == 0 {
+			continue
+		}
+		slices.SortStableFunc(pool, func(a, b MuseAccount) int {
+			if d := busy[a.ID] - busy[b.ID]; d != 0 {
+				return d
+			}
+			if cfg.Mode == config.MuseModeSequential {
+				return 0
+			}
+			return compareShare(a, b, cfg, now)
+		})
+		take(job, pool[0])
+	}
+	return out
+}
+
+// sortQueued orders queued jobs oldest-first and alternates single/batch turns.
+func sortQueued(queued []MuseJob, previous ...MuseJobMode) []MuseJob {
 	slices.SortStableFunc(queued, func(a, b MuseJob) int {
 		switch {
 		case a.CreatedAt < b.CreatedAt:
@@ -124,28 +223,7 @@ func plan(jobs []MuseJob, accs []MuseAccount, cfg config.MuseConfig, running map
 	if len(previous) > 0 {
 		last = previous[0]
 	}
-	queued = fairQueue(queued, last)
-	for _, job := range queued {
-		var pool []MuseAccount
-		for _, acc := range accs {
-			if usable(acc, cfg, now) && canTake(acc) {
-				pool = append(pool, acc)
-			}
-		}
-		if len(pool) == 0 {
-			break
-		}
-		if cfg.Mode != config.MuseModeSequential {
-			slices.SortStableFunc(pool, func(a, b MuseAccount) int {
-				if d := busy[a.ID] - busy[b.ID]; d != 0 {
-					return d
-				}
-				return compareShare(a, b, cfg, now)
-			})
-		}
-		take(job, pool[0])
-	}
-	return out
+	return fairQueue(queued, last)
 }
 
 // fairQueue alternates modes while preserving FIFO within each mode. Empty

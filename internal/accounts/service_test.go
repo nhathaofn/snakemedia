@@ -226,8 +226,11 @@ func TestImportCookiesKeepsOnlySiteCookies(t *testing.T) {
 		t.Fatal(res.Error)
 	}
 	rec, _ := s.Record(res.Data.ID)
-	if len(rec.Cookies) != 1 || rec.Cookies[0].Name != "sid" || rec.Name != "Muse 1" {
+	if len(rec.Cookies) != 1 || rec.Cookies[0].Name != "sid" || rec.Name != "Muse 1" || rec.Proxy != proxy.None {
 		t.Fatalf("record = %+v", rec)
+	}
+	if list := s.List(ProviderMuse).Data; len(list) == 0 || list[0].NoRoute != "" {
+		t.Fatalf("newly created account with no proxy list should stay direct: %+v", list)
 	}
 	if res := s.ImportCookies(ProviderMuse, "", `[{"name":"x","value":"2","domain":".evil.test"}]`); res.Success {
 		t.Fatal("import without site cookies accepted")
@@ -392,6 +395,8 @@ func TestReapedBrowserForgetsRoute(t *testing.T) {
 	s, pool, _ := testService(t, Inspection{SignedIn: true})
 	rec := seed(t, s, Record{Account: Account{ID: "a", Proxy: "1.2.3.4:8080"}})
 	t.Cleanup(s.proxies.Close)
+	var closedIDs []string
+	s.OnBrowserClosed(func(r Record) { closedIDs = append(closedIDs, r.ID) })
 	s.Start(context.Background(), nil)
 	if _, err := s.Browser(context.Background(), "a"); err != nil {
 		t.Fatal(err)
@@ -408,6 +413,9 @@ func TestReapedBrowserForgetsRoute(t *testing.T) {
 	onClosed(rec.ProfileDir)
 	if u, err := s.ProxyURL("a"); err == nil || u != nil {
 		t.Fatalf("reaped browser kept its route: %v %v", u, err)
+	}
+	if len(closedIDs) != 1 || closedIDs[0] != "a" {
+		t.Fatalf("OnBrowserClosed got %v, want [a]", closedIDs)
 	}
 }
 
@@ -452,5 +460,195 @@ func TestSameRoute(t *testing.T) {
 	b.URL = &url.URL{Scheme: "http", Host: "127.0.0.1:5001"}
 	if sameRoute(a, b) || sameRoute(a, proxy.Route{Key: a.Key}) || sameRoute(a, proxy.Route{Key: "x", URL: a.URL}) {
 		t.Fatal("different routes match")
+	}
+}
+
+func TestCloseHeadlessIfIdle(t *testing.T) {
+	s, pool, _ := testService(t, Inspection{SignedIn: true})
+	seed(t, s, Record{Account: Account{ID: "a"}, ProfileDir: filepath.Join(pool.root, "a")})
+
+	if err := s.CloseHeadlessIfIdle("missing"); err == nil {
+		t.Fatal("expected error for missing account")
+	}
+	if err := s.CloseHeadlessIfIdle("a"); err != nil || len(pool.closed) != 0 {
+		t.Fatalf("no browser running: err=%v closed=%v", err, pool.closed)
+	}
+
+	_, _ = pool.Get(context.Background(), filepath.Join(pool.root, "a"), browser.Want{Visible: true})
+	if err := s.CloseHeadlessIfIdle("a"); err != nil || len(pool.closed) != 0 {
+		t.Fatalf("visible browser closed unexpectedly: err=%v closed=%v", err, pool.closed)
+	}
+
+	_, _ = pool.Get(context.Background(), filepath.Join(pool.root, "a"), browser.Want{Visible: false})
+	release := pool.Acquire(filepath.Join(pool.root, "a"))
+	if err := s.CloseHeadlessIfIdle("a"); !errors.Is(err, browser.ErrProfileBusy) || len(pool.closed) != 0 {
+		t.Fatalf("in-use browser closed unexpectedly: err=%v closed=%v", err, pool.closed)
+	}
+	release()
+
+	if err := s.CloseHeadlessIfIdle("a"); err != nil || len(pool.closed) != 1 {
+		t.Fatalf("idle headless browser not closed: err=%v closed=%v", err, pool.closed)
+	}
+}
+
+type checkerSite struct {
+	*fakeSite
+	videoCalls int
+	checkFn    func(ctx context.Context, b *browser.Browser, rec Record, insp Inspection) (Inspection, error)
+}
+
+func (c *checkerSite) CheckVideo(ctx context.Context, b *browser.Browser, rec Record, insp Inspection) (Inspection, error) {
+	c.videoCalls++
+	return c.checkFn(ctx, b, rec, insp)
+}
+
+func TestCheckVideoCheckerFatalLimitAndAutoResume(t *testing.T) {
+	t.Run("regular Check stays fast and skips VideoChecker", func(t *testing.T) {
+		s, pool, base := testService(t, Inspection{SignedIn: true, Identity: "a@x"})
+		site := &checkerSite{
+			fakeSite: base,
+			checkFn: func(context.Context, *browser.Browser, Record, Inspection) (Inspection, error) {
+				t.Fatal("Check must not invoke VideoChecker")
+				return Inspection{}, nil
+			},
+		}
+		s.sites[ProviderMuse] = site
+		seed(t, s, Record{Account: Account{ID: "a"}})
+		res := s.Check(context.Background(), "a")
+		if !res.Success || site.videoCalls != 0 || len(pool.closed) != 1 {
+			t.Fatalf("quick check failed: res=%+v videoCalls=%d closed=%v", res, site.videoCalls, pool.closed)
+		}
+	})
+
+	t.Run("fatal from Inspect stops polling immediately and disables account", func(t *testing.T) {
+		s, pool, base := testService(t, Inspection{Fatal: "dead account", DisableAccount: true})
+		seed(t, s, Record{Account: Account{ID: "a"}})
+		res := s.Check(context.Background(), "a")
+		if res.Success || res.Data.Status != StatusError || res.Data.Enabled {
+			t.Fatalf("fatal inspect check = %+v", res)
+		}
+		if base.calls != 1 {
+			t.Fatalf("Inspect called %d times, want 1", base.calls)
+		}
+		if len(pool.closed) != 1 {
+			t.Fatalf("headless browser not closed after check: closed=%v", pool.closed)
+		}
+	})
+
+	t.Run("VideoChecker fatal marks StatusError and disables", func(t *testing.T) {
+		s, _, base := testService(t, Inspection{SignedIn: true, Identity: "a@x"})
+		site := &checkerSite{
+			fakeSite: base,
+			checkFn: func(context.Context, *browser.Browser, Record, Inspection) (Inspection, error) {
+				return Inspection{SignedIn: true, Identity: "a@x", Fatal: "Tài khoản chết", DisableAccount: true}, nil
+			},
+		}
+		s.sites[ProviderMuse] = site
+		seed(t, s, Record{Account: Account{ID: "a"}})
+		res := s.CheckVideo(context.Background(), "a")
+		if res.Success || res.Data.Status != StatusError || res.Data.Enabled || res.Error == "" || site.videoCalls != 1 {
+			t.Fatalf("checker fatal = %+v (calls=%d)", res, site.videoCalls)
+		}
+	})
+
+	t.Run("24h limit auto-disables and auto-resumes when deadline passes", func(t *testing.T) {
+		now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+		s, _, base := testService(t, Inspection{SignedIn: true, Identity: "a@x"})
+		s.now = func() time.Time { return now }
+		until := now.Add(24 * time.Hour)
+		site := &checkerSite{
+			fakeSite: base,
+			checkFn: func(context.Context, *browser.Browser, Record, Inspection) (Inspection, error) {
+				return Inspection{
+					SignedIn:       true,
+					Identity:       "a@x",
+					DisableAccount: true,
+					AutoResume:     true,
+					PausedUntil:    until,
+					Note:           "Hết hạn tạo video 24h",
+				}, nil
+			},
+		}
+		s.sites[ProviderMuse] = site
+		seed(t, s, Record{Account: Account{ID: "a"}})
+		// Also seed a manually disabled account that must stay off after 24h.
+		seed(t, s, Record{Account: Account{ID: "manual"}})
+		s.SetEnabled("manual", false)
+
+		res := s.CheckVideo(context.Background(), "a")
+		if !res.Success || res.Data.Enabled || !res.Data.AutoResume || res.Data.PausedUntil == "" {
+			t.Fatalf("24h pause check = %+v", res)
+		}
+
+		// Before 24h passes, List must keep account disabled.
+		now = now.Add(23 * time.Hour)
+		list := s.List(ProviderMuse).Data
+		if got := findAcc(list, "a"); got.Enabled || !got.AutoResume {
+			t.Fatalf("resumed too early: %+v", got)
+		}
+
+		// Once 24h elapses, List/ResumeExpired enables "a" but keeps "manual" off.
+		now = now.Add(2 * time.Hour)
+		list = s.List(ProviderMuse).Data
+		if got := findAcc(list, "a"); !got.Enabled || got.AutoResume || got.PausedUntil != "" {
+			t.Fatalf("auto-resume failed: %+v", got)
+		}
+		if man := findAcc(list, "manual"); man.Enabled {
+			t.Fatalf("manually disabled account unexpectedly auto-enabled: %+v", man)
+		}
+	})
+}
+
+func findAcc(list []Account, id string) Account {
+	for _, a := range list {
+		if a.ID == id {
+			return a
+		}
+	}
+	return Account{}
+}
+
+func TestAddAccountCreatesOnlyWithoutLaunchingChromeAndDefaultsToNoProxy(t *testing.T) {
+	s, pool, _ := testService(t, Inspection{SignedIn: true})
+	res := s.Add(context.Background(), ProviderMuse, "Nick mới")
+	if !res.Success {
+		t.Fatalf("Add failed: %s", res.Error)
+	}
+	if res.Data.Proxy != proxy.None || res.Data.NoRoute != "" || res.Data.Status != StatusUnverified {
+		t.Fatalf("new browser account must default to no proxy & unverified, got %+v", res.Data)
+	}
+	if len(pool.wants) != 0 {
+		t.Fatalf("Add unexpectedly launched Chrome: %+v", pool.wants)
+	}
+	if openRes := s.OpenBrowser(context.Background(), res.Data.ID); !openRes.Success {
+		t.Fatalf("OpenBrowser failed: %s", openRes.Error)
+	}
+	if len(pool.wants) != 1 || pool.wants[0].Route != proxy.DirectRoute {
+		t.Fatalf("manual OpenBrowser did not start direct: %+v", pool.wants)
+	}
+}
+
+func TestVideoCheckDisabledStaysSignedInAndToggleable(t *testing.T) {
+	s, _, base := testService(t, Inspection{SignedIn: true, Identity: "a@x"})
+	site := &checkerSite{
+		fakeSite: base,
+		checkFn: func(context.Context, *browser.Browser, Record, Inspection) (Inspection, error) {
+			return Inspection{
+				SignedIn:           true,
+				Identity:           "a@x",
+				VideoCheckDisabled: true,
+				Note:               "Không tạo được video (chỉ tạo ảnh)",
+			}, nil
+		},
+	}
+	s.sites[ProviderMuse] = site
+	seed(t, s, Record{Account: Account{ID: "a"}})
+
+	res := s.CheckVideo(context.Background(), "a")
+	if !res.Success || res.Data.Status != StatusSignedIn || !res.Data.Enabled || !res.Data.SkipVideoCheck {
+		t.Fatalf("video-disabled check = %+v", res)
+	}
+	if toggle := s.SetVideoCheck("a", true); !toggle.Success || toggle.Data.SkipVideoCheck {
+		t.Fatalf("re-enabling video check failed: %+v", toggle)
 	}
 }

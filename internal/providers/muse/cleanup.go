@@ -3,6 +3,7 @@ package muse
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +12,10 @@ import (
 	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/models"
 )
+
+// cleanConcurrency bounds simultaneous headless cleanup browsers so cleaning
+// many accounts stays light on RAM and avoids synchronized traffic spikes.
+const cleanConcurrency = 2
 
 // MuseCleanResult is how "Dọn đoạn chat phụ" went on one account.
 type MuseCleanResult struct {
@@ -50,24 +55,46 @@ func (p *Provider) CleanChats(ctx context.Context) models.Response[[]MuseCleanRe
 		return fail[[]MuseCleanResult](errors.New("Không có tài khoản Muse nào đã đăng nhập."), models.CodeUnavailable)
 	}
 	results := make([]MuseCleanResult, len(signedIn))
+	sem := make(chan struct{}, cleanConcurrency)
 	var wg sync.WaitGroup
+	reservedIdx := 0
 	for i, rec := range signedIn {
 		results[i] = MuseCleanResult{AccountID: rec.ID, Account: rec.Label()}
 		if !p.reserveForClean(rec.ID) {
 			results[i].Error = errCleanBusy.Error()
 			continue
 		}
+		idx := reservedIdx
+		reservedIdx++
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			defer logger.Recover("dọn chat Muse", func(err error) { results[i].Error = err.Error() })
 			defer p.endClean(rec.ID)
+			defer logger.Recover("dọn chat Muse", func(err error) { results[i].Error = err.Error() })
+			if idx > 0 {
+				delay := time.Duration(idx) * time.Duration(1000+rand.IntN(1500)) * time.Millisecond
+				if delay > 6*time.Second {
+					delay = 6 * time.Second
+				}
+				if err := p.sleep(ctx, delay); err != nil {
+					results[i].Error = err.Error()
+					return
+				}
+			}
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				results[i].Error = ctx.Err().Error()
+				return
+			}
 			reply, err := p.cleanAccount(ctx, rec, text, cfg.VideoTimeoutMinutes)
 			results[i].Reply = reply
 			if err != nil {
 				results[i].Error = err.Error()
 				logger.Get().Warn("muse chat cleanup failed", "account", rec.ID, "error", err)
 			}
+			p.closeIdleBrowserIfDone(rec.ID)
 		}()
 	}
 	wg.Wait()

@@ -248,6 +248,10 @@
   text-decoration: underline;
 }
 
+.account-link-warn {
+  color: var(--warning);
+}
+
 .account-mono {
   font-family: var(--font-mono);
   color: var(--text-secondary);
@@ -256,6 +260,108 @@
 .account-note {
   font-size: var(--font-size-small);
   color: var(--text-secondary);
+}
+
+.account-note-error {
+  color: var(--danger);
+}
+
+.account-row-window > span:last-child {
+  color: var(--warning);
+}
+
+/* Proxy picker popup */
+
+.proxy-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-field);
+  padding: var(--space-8);
+}
+
+.proxy-option-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.proxy-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-6);
+  width: 100%;
+  padding: var(--space-5) var(--space-6);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--font-size-small);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--transition-fast),
+    background-color var(--transition-fast);
+}
+
+.proxy-option:hover:not(:disabled) {
+  border-color: var(--primary);
+  background: var(--bg-tertiary);
+}
+
+.proxy-option:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.proxy-option-active {
+  border-color: var(--primary);
+}
+
+.proxy-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.proxy-option-desc {
+  font-size: var(--font-size-caption);
+  color: var(--text-secondary);
+}
+
+.proxy-option-badge {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: var(--space-2);
+  color: var(--primary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+}
+
+.proxy-modal-empty {
+  margin: 0;
+  font-size: var(--font-size-small);
+  color: var(--text-secondary);
+}
+
+.proxy-custom-form {
+  padding-top: var(--space-4);
+  border-top: var(--border-width) solid var(--border-color);
+}
+
+.proxy-custom-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.proxy-custom-row .accounts-input {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .account-actions {

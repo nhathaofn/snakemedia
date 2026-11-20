@@ -196,3 +196,38 @@ func InjectCookies(ctx context.Context, port int, policy config.AccountConfig, c
 	}
 	return errors.New("Chrome của tài khoản chưa có tab để nạp cookie.")
 }
+
+// ReadCookies reads cookies matching accept from a running browser via CDP.
+func ReadCookies(ctx context.Context, port int, policy config.AccountConfig, accept func(domain string) bool) ([]Cookie, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(policy.RequestTimeoutSeconds)*time.Second)
+	defer cancel()
+	targets, err := Targets(ctx, port, policy)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range targets {
+		if t.Type != "page" {
+			continue
+		}
+		conn, err := Dial(ctx, t, port, 0)
+		if err != nil {
+			return nil, err
+		}
+		defer conn.Close()
+		var reply struct {
+			Cookies []Cookie `json:"cookies"`
+		}
+		if err := conn.Call(ctx, "Network.getAllCookies", nil, &reply); err != nil {
+			return nil, err
+		}
+		var out []Cookie
+		for _, c := range reply.Cookies {
+			if c.Name == "" || (accept != nil && !accept(c.Domain)) {
+				continue
+			}
+			out = append(out, c)
+		}
+		return out, nil
+	}
+	return nil, errors.New("Chrome của tài khoản chưa có tab để đọc cookie.")
+}

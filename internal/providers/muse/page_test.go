@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -379,5 +380,352 @@ func TestChromePageWithoutMuseTab(t *testing.T) {
 	page := &chromePage{port: f.port, policy: config.DefaultAccountConfig(), callTimeout: 5 * time.Second}
 	if _, err := page.Login(context.Background()); err != errTabMissing {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestPageSessionsAndUserMessages(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is needed to execute the page script")
+	}
+	script := `const assert = require('node:assert/strict');
+let listCalls = 0;
+let sessionsPayload = [{ session_id: 's0', status: 'completed' }];
+const historyMap = {
+  s1: {
+    chat_events: [
+      { role: 'user', display_text: 'Task: Create a new video.\nprompt:\nhello world' },
+      { role: 'assistant', display_text: 'ok' }
+    ]
+  },
+  s2: {
+    chat_events: [
+      { role: 'user', content: [{ text: 'part 1' }, { text: 'part 2' }] }
+    ]
+  },
+  s3: {
+    chat_events: [{ role: 'user' }]
+  }
+};
+global.window = {
+  __hatchEarlyGatewayRuntimeState: {
+    activeRuntime: {
+      getSnapshot: () => ({
+        async sendRequest(method, params) {
+          if (method === 'sessions.list') {
+            listCalls++;
+            return { sessions: sessionsPayload };
+          }
+          if (method === 'chat.history') {
+            return historyMap[params.session_id] || { chat_events: [] };
+          }
+          throw new Error('unexpected ' + method);
+        }
+      })
+    }
+  }
+};
+const page = (` + pageSource + `)(1024);
+(async () => {
+  const first = await page.sessions(false);
+  assert.deepEqual(first, [{ id: 's0', status: 'completed' }]);
+  sessionsPayload = [{ session_id: 's1', status: 'running' }, { session_id: 's0', status: 'completed' }];
+  // Cached within LIST_SHARE_MS when fresh is false, bypassed when fresh is true.
+  const cached = await page.sessions(false);
+  assert.equal(cached.length, 1);
+  assert.equal(listCalls, 1);
+  const fresh = await page.sessions(true);
+  assert.equal(fresh.length, 2);
+  assert.equal(listCalls, 2);
+  const u1 = await page.userMessages('s1');
+  assert.deepEqual(u1, [{ text: 'Task: Create a new video.\nprompt:\nhello world', hasText: true }]);
+  const u2 = await page.userMessages('s2');
+  assert.deepEqual(u2, [{ text: 'part 1\npart 2', hasText: true }]);
+  const u3 = await page.userMessages('s3');
+  assert.deepEqual(u3, [{ text: '', hasText: false }]);
+})().catch(e => { console.error(e); process.exitCode = 1; });`
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, node)
+	cmd.Stdin = strings.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("page sessions/userMessages: %v\n%s", err, out)
+	}
+}
+
+func TestChromePagePreSendErrorsWrappedForSendNotReads(t *testing.T) {
+	ctx := context.Background()
+
+	// 1. Missing tab -> Login returns errTabMissing directly; Send/SendTo wrap preSendError.
+	fNoTab := newFakeDevTools(t, "https://example.com/")
+	pNoTab := newTestPage(fNoTab)
+	if _, err := pNoTab.Login(ctx); err != errTabMissing {
+		t.Fatalf("login missing tab = %v, want errTabMissing", err)
+	}
+	if _, err := pNoTab.Send(ctx, "hi", nil); !errors.Is(err, errTabMissing) || !isPreSendError(err) {
+		t.Fatalf("send missing tab = %v", err)
+	}
+	if _, err := pNoTab.SendTo(ctx, "s1", "hi"); !errors.Is(err, errTabMissing) || !isPreSendError(err) {
+		t.Fatalf("sendTo missing tab = %v", err)
+	}
+
+	// 2. Away from muse.ai -> Send wraps preSendError without running send on tab.
+	fAway := newFakeDevTools(t, "https://muse.ai/")
+	fAway.set(func(f *fakeDevTools) { f.away = true })
+	pAway := newTestPage(fAway)
+	if _, err := pAway.Send(ctx, "hi", nil); !errors.Is(err, errTabMissing) || !isPreSendError(err) {
+		t.Fatalf("send away = %v", err)
+	}
+	if n := fAway.ran("send"); n != 0 {
+		t.Fatalf("away send ran %d times", n)
+	}
+
+	// 3. CDP unreachable -> Send wraps preSendError.
+	fDown := newFakeDevTools(t, "https://muse.ai/")
+	fDown.server.Close()
+	pDown := newTestPage(fDown)
+	if _, err := pDown.Send(ctx, "hi", nil); err == nil || !isPreSendError(err) {
+		t.Fatalf("send cdp down = %v", err)
+	}
+
+	// 4. Dropped after send started -> NOT preSendError.
+	fDrop := newFakeDevTools(t, "https://muse.ai/")
+	fDrop.set(func(f *fakeDevTools) { f.dropOn = "send" })
+	pDrop := newTestPage(fDrop)
+	if _, err := pDrop.Send(ctx, "hi", nil); err == nil || isPreSendError(err) {
+		t.Fatalf("send drop in-flight = %v", err)
+	}
+}
+
+func isPreSendError(err error) bool {
+	var pre *preSendError
+	return errors.As(err, &pre)
+}
+
+func TestPageScriptWaitsBrieflyForRuntimeInSessions(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is needed to execute the page script")
+	}
+	script := `const assert = require('node:assert/strict');
+global.document = { body: { children: [], contains: () => false } };
+global.location = { pathname: '/' };
+global.window = {};
+setTimeout(() => {
+  global.window.__hatchEarlyGatewayRuntimeState = {
+    activeRuntime: {
+      getSnapshot: () => ({
+        async sendRequest(method) {
+          assert.equal(method, 'sessions.list');
+          return { sessions: [{ session_id: 's1', status: 'running' }] };
+        }
+      })
+    }
+  };
+}, 180);
+const page = (` + pageSource + `)(1024);
+(async () => {
+  const list = await page.sessions(true);
+  assert.deepEqual(list, [{ id: 's1', status: 'running' }]);
+})().catch(e => { console.error(e); process.exitCode = 1; });`
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, node)
+	cmd.Stdin = strings.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("page sessions runtime wait: %v\n%s", err, out)
+	}
+}
+
+func TestChromePageInlineOpenDownloadSkipsSliceAndClose(t *testing.T) {
+	f := newFakeDevTools(t, MuseURL)
+	payload := []byte("small-webp-image-payload")
+	f.answers["open"] = func([]json.RawMessage) any {
+		return map[string]any{
+			"id":   0,
+			"size": len(payload),
+			"data": base64.StdEncoding.EncodeToString(payload),
+		}
+	}
+	f.answers["slice"] = func([]json.RawMessage) any {
+		t.Error("slice should not be called for inline open payload")
+		return ""
+	}
+	f.answers["closeFile"] = func([]json.RawMessage) any {
+		t.Error("closeFile should not be called when open did not retain a file handle")
+		return nil
+	}
+	page := newTestPage(f)
+	defer page.Close()
+	var out bytes.Buffer
+	n, err := page.Download(context.Background(), "/out.webp", &out)
+	if err != nil || n != int64(len(payload)) || !bytes.Equal(out.Bytes(), payload) {
+		t.Fatalf("inline download = (%d, %v), bytes=%q", n, err, out.Bytes())
+	}
+	if f.ran("slice") != 0 || f.ran("closeFile") != 0 {
+		t.Fatalf("unexpected slice=%d closeFile=%d", f.ran("slice"), f.ran("closeFile"))
+	}
+}
+
+func TestPageScriptCachesChatAndInlinesSmallDownload(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is needed to execute the page script")
+	}
+	script := `const assert = require('node:assert/strict');
+let fiberScans = 0;
+const client = { ensureActiveChatSendReady() {}, sendMessage: async () => ({ ok: true, sessionId: 's1' }) };
+const rootHost = { stateNode: null };
+const chatFiber = { return: rootHost, memoizedProps: { value: client } };
+const rootFiber = new Proxy({ tag: 3, child: chatFiber }, {
+  get(target, prop) {
+    if (prop === 'child') fiberScans++;
+    return target[prop];
+  }
+});
+chatFiber.return = rootFiber;
+rootHost.stateNode = { current: rootFiber };
+const rootEl = { __reactContainer$test: rootHost };
+const bodyEl = {
+  children: [rootEl],
+  contains(el) { return el === bodyEl || el === rootEl; }
+};
+global.document = { body: bodyEl };
+global.location = { pathname: '/' };
+global.fetch = async () => ({ status: 200, async json() { return {}; } });
+const fakeFiles = {
+  '/small.webp': new Blob([new Uint8Array([1, 2, 3, 4])]),
+  '/large.mp4': new Blob([new Uint8Array(1500).fill(65)])
+};
+global.window = {
+  __hatchEarlyGatewayRuntimeState: {
+    activeRuntime: {
+      getSnapshot: () => ({
+        async sendRequest(method, params) {
+          if (method === 'fs.raw') return { data: fakeFiles['/' + params.path.replace(/^\/+/, '')] };
+          throw new Error('unexpected ' + method);
+        }
+      })
+    }
+  }
+};
+const page = (` + pageSource + `)(1024);
+(async () => {
+  await page.login();
+  await page.login();
+  await page.send('hello', [], '');
+  assert.equal(fiberScans, 1, 'chat() should cache fiber across login and send');
+
+  // Route change invalidates cache.
+  global.location.pathname = '/settings';
+  const away = await page.login();
+  assert.equal(away.chat, true); // tree still exists in this mock, but had to rescan on path change
+  assert.equal(fiberScans, 2);
+
+  // Unmounted chat fiber returns null instead of stale client.
+  global.location.pathname = '/';
+  await page.login();
+  chatFiber.return = null;
+  rootFiber.child = null;
+  const unmounted = await page.login();
+  assert.equal(unmounted.chat, false);
+
+  // Small blob <= CHUNK (1024) inlines data with id=0; large blob uses slice + closeFile.
+  const small = await page.open('/small.webp', 10000);
+  assert.equal(small.id, 0);
+  assert.equal(small.size, 4);
+  assert.equal(Buffer.from(small.data, 'base64').toString('hex'), '01020304');
+
+  const big = await page.open('/large.mp4', 10000);
+  assert.ok(big.id > 0);
+  assert.equal(big.size, 1500);
+  const c0 = Buffer.from(await page.slice(big.id, 0), 'base64');
+  const c1 = Buffer.from(await page.slice(big.id, 1), 'base64');
+  assert.equal(c0.length, 1024);
+  assert.equal(c1.length, 476);
+  page.closeFile(big.id);
+
+  // Stalled /api/session fetch aborts at timeoutMs rather than hanging the CDP call.
+  global.fetch = (_url, opts) => new Promise((_resolve, reject) => {
+    opts.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+  });
+  const timedOut = await page.login(40);
+  assert.equal(timedOut.loggedIn, false);
+  assert.equal(timedOut.error, 'aborted');
+})().catch(e => { console.error(e); process.exitCode = 1; });`
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, node)
+	cmd.Stdin = strings.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("page cache/download: %v\n%s", err, out)
+	}
+}
+
+func TestPageScriptEnforcesVisibilityAndFastFailsUnreachableGateway(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is needed to execute the page script")
+	}
+	script := `const assert = require('node:assert/strict');
+class MockDoc {}
+let hiddenState = true;
+Object.defineProperty(MockDoc.prototype, 'hidden', { get: () => hiddenState, configurable: true });
+Object.defineProperty(MockDoc.prototype, 'visibilityState', { get: () => hiddenState ? 'hidden' : 'visible', configurable: true });
+let visEvents = 0, sendCalls = 0, reconnectCalls = 0;
+global.Document = MockDoc;
+global.Event = function(type) { this.type = type; };
+const client = {
+  ensureActiveChatSendReady() {},
+  sendMessage: async () => { sendCalls++; return { ok: true, sessionId: 'ok-1' }; }
+};
+const doc = new MockDoc();
+doc.body = { __reactFiber: { memoizedProps: { value: client } }, querySelectorAll: () => [] };
+doc.dispatchEvent = (e) => { if (e?.type === 'visibilitychange') visEvents++; };
+global.document = doc;
+global.location = { pathname: '/' };
+let simNow = 1000;
+Date.now = () => simNow;
+const realSetTimeout = setTimeout;
+global.setTimeout = (fn, ms) => realSetTimeout(() => { simNow += Math.max(ms, 1); fn(); }, 1);
+let snap = {
+  connectionState: 'error',
+  isConnected: false,
+  recoveryPaused: true,
+  lastFailureKind: 'gateway_unreachable',
+  lastDialRefused: true,
+  ensureLiveConnection() { reconnectCalls++; }
+};
+global.window = {
+  dispatchEvent() {},
+  __hatchEarlyGatewayRuntimeState: { activeRuntime: { getSnapshot: () => snap } }
+};
+const page = (` + pageSource + `)(1024);
+(async () => {
+  // Initial load overrode Document.prototype and fired visibilitychange because document.hidden was true.
+  assert.equal(doc.hidden, false);
+  assert.equal(doc.visibilityState, 'visible');
+  assert.ok(visEvents >= 1);
+
+  // Dead gateway returns not_ready quickly without invoking sendMessage.
+  const dead = await page.send('prompt 1', [], '');
+  assert.equal(dead.ok, false);
+  assert.ok(dead.reason.startsWith('not_ready (gateway:'), dead.reason);
+  assert.equal(sendCalls, 0);
+  assert.ok(reconnectCalls >= 1);
+
+  // Once reconnect wakes gateway, send proceeds normally.
+  snap.ensureLiveConnection = () => { snap.isConnected = true; snap.connectionState = 'connected'; snap.recoveryPaused = false; };
+  const ok = await page.send('prompt 2', [], '');
+  assert.equal(ok.ok, true);
+  assert.equal(ok.sessionId, 'ok-1');
+  assert.equal(sendCalls, 1);
+})().catch(e => { console.error(e); process.exitCode = 1; });`
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, node)
+	cmd.Stdin = strings.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("gateway wake/fast-fail test failed: %v\n%s", err, out)
 	}
 }

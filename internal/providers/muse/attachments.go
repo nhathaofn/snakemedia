@@ -11,6 +11,7 @@ import (
 	"image/png"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"SnakeMedia/internal/logger"
 	"golang.org/x/image/draw"
@@ -23,12 +24,51 @@ const (
 	// This is a conservative app budget, not a claimed platform limit.
 	museInlineRequestBudget = 4 << 20
 	// Leave space for the chat client's gateway envelope and metadata.
-	museRequestReserve     = 128 << 10
-	museReferenceEdge      = 2048
-	museReferenceQuality   = 85
-	museReferenceMinEdge   = 128
-	museReferenceMaxPixels = 64 << 20
+	museRequestReserve      = 128 << 10
+	museReferenceEdge       = 2048
+	museReferenceQuality    = 85
+	museReferenceMinEdge    = 128
+	museReferenceMaxPixels  = 64 << 20
+	attachReduceConcurrency = 4
 )
+
+func parallelIndex(n, workers int, fn func(int) error) error {
+	if n <= 0 {
+		return nil
+	}
+	if n == 1 || workers <= 1 {
+		for i := range n {
+			if err := fn(i); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	w := min(n, workers)
+	jobs := make(chan int)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	wg.Add(w)
+	for range w {
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				errs[i] = fn(i)
+			}
+		}()
+	}
+	for i := range n {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // inlineRequestBytes counts JSON escaping of the complete app message and
 // base64 attachments. The reserve covers fields added by Muse's chat client.
@@ -77,7 +117,7 @@ func prepareAttachments(job MuseJob, atts []Attachment, caps *MuseCapabilities) 
 		return nil, &inputError{msg: "Không đủ dung lượng để đính kèm ảnh vào lệnh Muse."}
 	}
 	out := append([]Attachment(nil), atts...)
-	changed := 0
+	var toReduce []int
 	for i, att := range out {
 		if att.Category != "image" {
 			continue
@@ -85,13 +125,20 @@ func prepareAttachments(job MuseJob, atts []Attachment, caps *MuseCapabilities) 
 		if len(att.DataBase64) <= target && int64(base64.StdEncoding.DecodedLen(len(att.DataBase64))) <= caps.MaxFileBytes {
 			continue
 		}
+		toReduce = append(toReduce, i)
+	}
+	if err := parallelIndex(len(toReduce), attachReduceConcurrency, func(idx int) error {
+		att := out[toReduce[idx]]
 		prepared, err := reduceAttachment(att, target, caps)
 		if err != nil {
-			return nil, &inputError{msg: fmt.Sprintf("Không thể giảm dung lượng ảnh %s để gửi Muse: %v", att.Filename, err)}
+			return &inputError{msg: fmt.Sprintf("Không thể giảm dung lượng ảnh %s để gửi Muse: %v", att.Filename, err)}
 		}
-		out[i] = prepared
-		changed++
+		out[toReduce[idx]] = prepared
+		return nil
+	}); err != nil {
+		return nil, err
 	}
+	changed := len(toReduce)
 	after := inlineRequestBytes(text, out)
 	if after > museInlineRequestBudget {
 		return nil, &inputError{msg: "Tổng dung lượng lệnh vẫn quá lớn để gửi Muse sau khi giảm ảnh."}
@@ -126,7 +173,10 @@ func reduceAttachment(att Attachment, target int, caps *MuseCapabilities) (Attac
 	if !useJPEG && !pngOK {
 		return att, fmt.Errorf("Muse không hỗ trợ định dạng phù hợp để giảm ảnh")
 	}
-	for edge := museReferenceEdge; ; edge = max(museReferenceMinEdge, edge*3/4) {
+	prevW, prevH := 0, 0
+	bounds := img.Bounds()
+	startEdge := min(museReferenceEdge, max(info.Width, info.Height))
+	for edge := max(museReferenceMinEdge, startEdge); ; edge = max(museReferenceMinEdge, edge*3/4) {
 		w, h := info.Width, info.Height
 		if max(w, h) > edge {
 			if w >= h {
@@ -137,15 +187,26 @@ func reduceAttachment(att Attachment, target int, caps *MuseCapabilities) (Attac
 				h = edge
 			}
 		}
-		dst := image.NewNRGBA(image.Rect(0, 0, w, h))
-		draw.CatmullRom.Scale(dst, dst.Bounds(), img, img.Bounds(), draw.Src, nil)
+		if w == prevW && h == prevH {
+			if edge == museReferenceMinEdge {
+				break
+			}
+			continue
+		}
+		prevW, prevH = w, h
+		var scaled image.Image = img
+		if w != bounds.Dx() || h != bounds.Dy() {
+			dst := image.NewNRGBA(image.Rect(0, 0, w, h))
+			draw.BiLinear.Scale(dst, dst.Bounds(), img, bounds, draw.Src, nil)
+			scaled = dst
+		}
 		var encoded bytes.Buffer
 		ext, mime := ".png", pngMime
 		if useJPEG {
 			ext, mime = ".jpg", jpegMime
-			err = jpeg.Encode(&encoded, dst, &jpeg.Options{Quality: museReferenceQuality})
+			err = jpeg.Encode(&encoded, scaled, &jpeg.Options{Quality: museReferenceQuality})
 		} else {
-			err = png.Encode(&encoded, dst)
+			err = png.Encode(&encoded, scaled)
 		}
 		if err != nil {
 			return att, err
@@ -160,4 +221,89 @@ func reduceAttachment(att Attachment, target int, caps *MuseCapabilities) (Attac
 		}
 	}
 	return att, fmt.Errorf("không thể giữ ảnh trong ngân sách dữ liệu của lệnh")
+}
+
+const (
+	maxCachedAttachments = 32
+	attachmentTargetStep = 64 << 10
+)
+
+type attachmentCacheKey struct {
+	path         string
+	modTime      int64
+	size         int64
+	maxFileBytes int64
+	targetBucket int
+	capsSig      string
+}
+
+type cachedAttachment struct {
+	ext        string
+	mimeType   string
+	dataBase64 string
+}
+
+// attachmentCache bounds repeated disk reads, image scaling and base64
+// encoding when a batch reuses the same reference images across many prompts.
+type attachmentCache struct {
+	mu    sync.Mutex
+	order []attachmentCacheKey
+	items map[attachmentCacheKey]cachedAttachment
+}
+
+func newAttachmentCache() *attachmentCache {
+	return &attachmentCache{items: make(map[attachmentCacheKey]cachedAttachment)}
+}
+
+func (c *attachmentCache) clear() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	clear(c.items)
+	c.order = nil
+	c.mu.Unlock()
+}
+
+func (c *attachmentCache) get(k attachmentCacheKey) (cachedAttachment, bool) {
+	if c == nil {
+		return cachedAttachment{}, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	v, ok := c.items[k]
+	return v, ok
+}
+
+func (c *attachmentCache) put(k attachmentCacheKey, v cachedAttachment) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.items[k]; !exists {
+		if len(c.order) >= maxCachedAttachments {
+			oldest := c.order[0]
+			c.order = c.order[1:]
+			delete(c.items, oldest)
+		}
+		c.order = append(c.order, k)
+	}
+	c.items[k] = v
+}
+
+func attachmentTargetBucket(target int) int {
+	if target <= attachmentTargetStep {
+		return target
+	}
+	return (target / attachmentTargetStep) * attachmentTargetStep
+}
+
+func capsSignature(caps *MuseCapabilities) string {
+	if caps == nil {
+		return ""
+	}
+	jpg, _ := caps.imageMime(".jpg")
+	png, _ := caps.imageMime(".png")
+	return jpg + "|" + png
 }

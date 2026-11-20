@@ -3,6 +3,7 @@ package accounts
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"SnakeMedia/internal/browser"
 	"SnakeMedia/internal/models"
@@ -26,6 +27,7 @@ func notFoundOr(err error) models.Code {
 
 // List returns the accounts of provider ("" for all) in saved order.
 func (s *Service) List(provider Provider) models.Response[[]Account] {
+	s.ResumeExpired()
 	list, err := s.public(provider)
 	if err != nil {
 		return fail[[]Account](err, models.CodeInternal)
@@ -33,26 +35,22 @@ func (s *Service) List(provider Provider) models.Response[[]Account] {
 	return models.SuccessResponse(list)
 }
 
-// Add saves a new account and opens Chrome on the provider's page for the
-// user to sign in; a watcher records the session once the page has one.
-func (s *Service) Add(ctx context.Context, provider Provider, name string) models.Response[Account] {
-	site, err := s.site(provider)
+// Add saves a new Chrome-backed account without launching Chrome immediately, so
+// the user can configure its proxy first and open Chrome manually when ready.
+func (s *Service) Add(_ context.Context, provider Provider, name string) models.Response[Account] {
+	if _, err := s.site(provider); err != nil {
+		return fail[Account](err, models.CodeInvalidArgument)
+	}
+	clean, err := cleanName(name)
 	if err != nil {
 		return fail[Account](err, models.CodeInvalidArgument)
 	}
-	if name, err = cleanName(name); err != nil {
-		return fail[Account](err, models.CodeInvalidArgument)
-	}
-	rec := s.newRecord(provider, name, SourceBrowser)
+	rec := s.newRecord(provider, clean, SourceBrowser)
+	rec.Message = "Chọn proxy (nếu cần) rồi bấm Mở Chrome để đăng nhập."
 	if err := s.store.add(rec); err != nil {
 		return fail[Account](err, models.CodeInternal)
 	}
 	s.notify()
-	if err := s.signIn(ctx, rec, site); err != nil {
-		s.Update(rec.ID, func(r *Record) { r.Status, r.Message = StatusError, err.Error() })
-		return fail[Account](err, models.CodeUnavailable)
-	}
-	rec, _ = s.store.get(rec.ID)
 	return models.SuccessResponse(rec.Account)
 }
 
@@ -104,9 +102,19 @@ func (s *Service) ReplaceCookies(id, raw string) models.Response[Account] {
 	return models.SuccessResponse(updated.Account)
 }
 
-// Check confirms the account's session and reads its usage.
+// Check confirms the account's session and reads its usage quickly without
+// sending a media generation probe.
 func (s *Service) Check(ctx context.Context, id string) models.Response[Account] {
-	rec, err := s.check(ctx, id)
+	return checkResponse(s.check(ctx, id))
+}
+
+// CheckVideo confirms the session and sends a test video generation probe on
+// sites that implement VideoChecker.
+func (s *Service) CheckVideo(ctx context.Context, id string) models.Response[Account] {
+	return checkResponse(s.checkVideo(ctx, id))
+}
+
+func checkResponse(rec Record, err error) models.Response[Account] {
 	if err != nil {
 		if rec.ID == "" {
 			return fail[Account](err, notFoundOr(err))
@@ -147,8 +155,27 @@ func (s *Service) Rename(id, name string) models.Response[Account] {
 func (s *Service) SetEnabled(id string, enabled bool) models.Response[Account] {
 	rec, err := s.Update(id, func(r *Record) {
 		r.Enabled = enabled
+		r.AutoResume = false
 		if enabled {
 			r.PausedUntil = ""
+			if strings.Contains(r.Message, "tạm nghỉ") || strings.Contains(r.Message, "tự tắt") {
+				r.Message = ""
+			}
+		}
+	})
+	if err != nil {
+		return fail[Account](err, notFoundOr(err))
+	}
+	return models.SuccessResponse(rec.Account)
+}
+
+// SetVideoCheck toggles video creation probing/scheduling for an account while
+// keeping image generation enabled.
+func (s *Service) SetVideoCheck(id string, enabled bool) models.Response[Account] {
+	rec, err := s.Update(id, func(r *Record) {
+		r.SkipVideoCheck = !enabled
+		if enabled && (strings.Contains(r.Message, "chỉ tạo ảnh") || strings.Contains(r.Message, "tắt kiểm tra tạo video")) {
+			r.Message = ""
 		}
 	})
 	if err != nil {

@@ -26,7 +26,7 @@ func TestLongVideoMessage(t *testing.T) {
 		"STATUS: DONE",
 		"The prompt is the plan:",
 		"opens as a cut to a new camera angle",
-		"\nPrompt:\na fox hunts in the snow",
+		"\nprompt:\na fox hunts in the snow",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("message lacks %q:\n%s", want, msg)

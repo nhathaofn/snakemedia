@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -118,32 +119,44 @@ func TestNotifyCoalescesChanges(t *testing.T) {
 		s, _, _ := testService(t)
 		seed(t, s, Record{Account: Account{ID: "a"}})
 		s.notifyDelay = 250 * time.Millisecond
+		var mu sync.Mutex
 		count, changes := 0, 0
 		var latest []Account
+		snap := func() (int, int, []Account) {
+			mu.Lock()
+			defer mu.Unlock()
+			return count, changes, latest
+		}
 		s.Start(t.Context(), func(e events.Event, data any) {
 			if e == events.EventAccountsUpdated {
+				mu.Lock()
 				count++
 				latest, _ = data.([]Account)
+				mu.Unlock()
 			}
 		})
-		s.OnChange(func() { changes++ })
+		s.OnChange(func() {
+			mu.Lock()
+			changes++
+			mu.Unlock()
+		})
 		for _, message := range []string{"one", "two", "three", "four", "latest"} {
 			if _, err := s.Update("a", func(r *Record) { r.Message = message }); err != nil {
 				t.Fatal(err)
 			}
 		}
 		synctest.Wait()
-		if count != 0 || changes != 0 {
+		if gotCount, gotChanges, _ := snap(); gotCount != 0 || gotChanges != 0 {
 			t.Fatal("notification fired before its coalescing window ended")
 		}
 		time.Sleep(s.notifyDelay)
 		synctest.Wait()
-		if count != 1 || changes != 1 || len(latest) != 1 || latest[0].Message != "latest" {
-			t.Fatalf("coalesced events=%d listeners=%d latest=%+v", count, changes, latest)
+		if gotCount, gotChanges, gotLatest := snap(); gotCount != 1 || gotChanges != 1 || len(gotLatest) != 1 || gotLatest[0].Message != "latest" {
+			t.Fatalf("coalesced events=%d listeners=%d latest=%+v", gotCount, gotChanges, gotLatest)
 		}
 		time.Sleep(2 * s.notifyDelay)
 		synctest.Wait()
-		if count != 1 || changes != 1 {
+		if gotCount, gotChanges, _ := snap(); gotCount != 1 || gotChanges != 1 {
 			t.Fatal("a completed burst emitted extra notifications")
 		}
 		if _, err := s.Update("a", func(r *Record) { r.Message = "next" }); err != nil {
@@ -151,8 +164,8 @@ func TestNotifyCoalescesChanges(t *testing.T) {
 		}
 		time.Sleep(s.notifyDelay)
 		synctest.Wait()
-		if count != 2 || changes != 2 || len(latest) != 1 || latest[0].Message != "next" {
-			t.Fatalf("next burst events=%d listeners=%d latest=%+v", count, changes, latest)
+		if gotCount, gotChanges, gotLatest := snap(); gotCount != 2 || gotChanges != 2 || len(gotLatest) != 1 || gotLatest[0].Message != "next" {
+			t.Fatalf("next burst events=%d listeners=%d latest=%+v", gotCount, gotChanges, gotLatest)
 		}
 	})
 }

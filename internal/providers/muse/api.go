@@ -86,6 +86,17 @@ type MuseStoryboard struct {
 	Review bool `json:"review"`
 }
 
+// MuseJobsFormatRequest updates Ratio and/or Duration on unstarted jobs of
+// kind and mode (or the named IDs). Nil fields leave the existing value intact;
+// empty ratio or 0 duration switches back to prompt-defined format.
+type MuseJobsFormatRequest struct {
+	Kind     MuseJobKind `json:"kind"`
+	Mode     MuseJobMode `json:"mode"`
+	IDs      []string    `json:"ids,omitempty"`
+	Ratio    *string     `json:"ratio,omitempty"`
+	Duration *int        `json:"duration,omitempty"`
+}
+
 // MusePromptCheck is what a prompt will attach and the hints about it.
 type MusePromptCheck struct {
 	Tags     []string `json:"tags"`
@@ -111,6 +122,27 @@ var errLimitsUnknown = errors.New("Chưa đọc được giới hạn đính kè
 // account (Muse's limits belong to its build, not to one account), with the
 // models any account offers.
 func (p *Provider) knownCapabilities() (*MuseCapabilities, []MuseModel) {
+	if p.cfg.Get().Muse.UseAPI {
+		latest := &MuseCapabilities{
+			MaxFileBytes: 100 * 1024 * 1024,
+			MaxFiles:     4,
+			ImageTypes: []MuseFileType{
+				{Mime: "image/png", Extensions: []string{".png"}},
+				{Mime: "image/jpeg", Extensions: []string{".jpg", ".jpeg"}},
+				{Mime: "image/webp", Extensions: []string{".webp"}},
+			},
+			VideoTypes: []MuseFileType{
+				{Mime: "video/mp4", Extensions: []string{".mp4"}},
+			},
+			Models: []MuseModel{
+				{ID: "sora-2", Name: "Sora 2 (Video)"},
+				{ID: "muse-image", Name: "Muse Image"},
+				{ID: "muse-chat", Name: "Muse Chat"},
+			},
+			CheckedAt: p.now().UTC().Format(time.RFC3339),
+		}
+		return latest, latest.Models
+	}
 	records, err := p.accounts.Records(accounts.ProviderMuse)
 	if err != nil {
 		return nil, nil
@@ -184,29 +216,53 @@ func (p *Provider) importImages(paths []string, prefix string) models.Response[[
 	}
 	out := make([]MuseReference, 0, len(paths))
 	for _, path := range paths {
-		ext := strings.ToLower(filepath.Ext(path))
-		mime, ok := caps.imageMime(ext)
-		if !ok {
-			return fail[[]MuseReference](fmt.Errorf("Muse không nhận định dạng của %s (nhận %s).", filepath.Base(path), strings.Join(caps.extensions(), ", ")), models.CodeInvalidArgument)
-		}
-		info, err := os.Stat(path)
-		if err != nil || !info.Mode().IsRegular() {
-			return fail[[]MuseReference](fmt.Errorf("Không đọc được %s.", filepath.Base(path)), models.CodeInvalidArgument)
-		}
-		if info.Size() > caps.MaxFileBytes {
-			return fail[[]MuseReference](fmt.Errorf("%s lớn hơn %d MB, giới hạn một file của Muse.", filepath.Base(path), caps.MaxFileBytes>>20), models.CodeInvalidArgument)
-		}
-		data, err := os.ReadFile(path)
+		ref, err := p.importOneImage(caps, path, prefix)
 		if err != nil {
-			return fail[[]MuseReference](err, models.CodeInternal)
+			code := models.CodeInvalidArgument
+			if errors.Is(err, errImageWrite) {
+				code = models.CodeInternal
+			}
+			return fail[[]MuseReference](err, code)
 		}
-		url, err := p.media.Put(prefix+uuid.NewString(), mime, ext, data)
-		if err != nil {
-			return fail[[]MuseReference](err, models.CodeInternal)
-		}
-		out = append(out, MuseReference{LocalURL: url, FileName: filepath.Base(path), Size: info.Size()})
+		out = append(out, ref)
 	}
 	return models.SuccessResponse(out)
+}
+
+var errImageWrite = errors.New("image write failed")
+
+// checkImageFile validates that path is a regular image file Muse accepts.
+func checkImageFile(caps *MuseCapabilities, path string) (mime, ext string, size int64, err error) {
+	ext = strings.ToLower(filepath.Ext(path))
+	mime, ok := caps.imageMime(ext)
+	if !ok {
+		return "", "", 0, fmt.Errorf("Muse không nhận định dạng của %s (nhận %s).", filepath.Base(path), strings.Join(caps.extensions(), ", "))
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return "", "", 0, fmt.Errorf("Không đọc được %s.", filepath.Base(path))
+	}
+	if info.Size() > caps.MaxFileBytes {
+		return "", "", 0, fmt.Errorf("%s lớn hơn %d MB, giới hạn một file của Muse.", filepath.Base(path), caps.MaxFileBytes>>20)
+	}
+	return mime, ext, info.Size(), nil
+}
+
+// importOneImage validates path against caps and stores a copy in p.media.
+func (p *Provider) importOneImage(caps *MuseCapabilities, path, prefix string) (MuseReference, error) {
+	mime, ext, size, err := checkImageFile(caps, path)
+	if err != nil {
+		return MuseReference{}, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return MuseReference{}, fmt.Errorf("%w: %w", errImageWrite, err)
+	}
+	url, err := p.media.Put(prefix+uuid.NewString(), mime, ext, data)
+	if err != nil {
+		return MuseReference{}, fmt.Errorf("%w: %w", errImageWrite, err)
+	}
+	return MuseReference{LocalURL: url, FileName: filepath.Base(path), Size: size}, nil
 }
 
 // SubmitJobs queues Repeat jobs (at least one) for every non-empty prompt.
@@ -483,7 +539,7 @@ func (p *Provider) CancelJob(id string) models.Response[MuseJob] {
 		if ended = j.finished(); ended {
 			return
 		}
-		j.Status, j.Step, j.Error, j.Sending = MuseJobCancelled, "", "Đã huỷ", false
+		j.Status, j.Step, j.Error, j.Sending, j.Held, j.Paused = MuseJobCancelled, "", "Đã huỷ", false, false, false
 		j.FinishedAt = p.now().UTC().Format(time.RFC3339)
 	})
 	if err != nil {
@@ -510,7 +566,7 @@ func (p *Provider) RetryJob(id string) models.Response[MuseJob] {
 		return j.Status == MuseJobFailed || j.Status == MuseJobCancelled
 	}, func(j *MuseJob) {
 		resetForRetry(j)
-		j.Attempts = 0
+		j.Attempts, j.Held, j.Paused = 0, false, false
 	})
 	if err != nil {
 		return fail[MuseJob](err, idleCode(err))
@@ -537,17 +593,166 @@ func (p *Provider) RemoveJob(id string) models.Response[bool] {
 	return models.SuccessResponse(true)
 }
 
-// RunJobs removes the Held flag from queued jobs so the scheduler picks them up.
+// RunJobs removes the Held/Paused flags from queued jobs so the scheduler picks them up.
 func (p *Provider) RunJobs(ids []string) models.Response[int] {
 	changed := p.updateJobs(ids, func(job *MuseJob) bool {
-		if !job.Held {
+		if !job.Held && !job.Paused {
 			return false
 		}
-		job.Held = false
+		job.Held, job.Paused = false, false
 		return true
 	})
 	if len(changed) > 0 {
 		p.trigger()
+	}
+	return models.SuccessResponse(len(changed))
+}
+
+// RetryJobs queues ended jobs (including jobs Muse may already have accepted)
+// again in a new chat in one atomic write, moving them into Chờ chạy.
+func (p *Provider) RetryJobs(ids []string) models.Response[int] {
+	if len(ids) == 0 {
+		return models.SuccessResponse(0)
+	}
+	want := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
+	p.mu.Lock()
+	var eligible []string
+	for _, j := range p.jobs.list() {
+		if _, active := p.running[j.ID]; active || !want[j.ID] {
+			continue
+		}
+		if j.Status == MuseJobFailed || j.Status == MuseJobCancelled {
+			eligible = append(eligible, j.ID)
+		}
+	}
+	var changed []MuseJob
+	var err error
+	if len(eligible) > 0 {
+		changed, err = p.jobs.updateMany(eligible, func(j *MuseJob) bool {
+			if _, active := p.running[j.ID]; active {
+				return false
+			}
+			if j.Status != MuseJobFailed && j.Status != MuseJobCancelled {
+				return false
+			}
+			resetForRetry(j)
+			j.Attempts, j.Held, j.Paused = 0, false, false
+			return true
+		})
+	}
+	p.mu.Unlock()
+	if err != nil {
+		return fail[int](err, models.CodeInternal)
+	}
+	for _, job := range changed {
+		p.emit(events.EventMuseJobUpdated, job)
+	}
+	if len(changed) > 0 {
+		p.trigger()
+	}
+	return models.SuccessResponse(len(changed))
+}
+
+// UpdateJobsFormat updates Ratio and/or Duration on unstarted jobs that Muse
+// has not accepted yet, so format changes after queueing prompts take effect.
+func (p *Provider) UpdateJobsFormat(req MuseJobsFormatRequest) models.Response[int] {
+	if req.Ratio == nil && req.Duration == nil {
+		return models.SuccessResponse(0)
+	}
+	byID := len(req.IDs) > 0
+	if !byID {
+		if !req.Kind.valid() {
+			return fail[int](errors.New("Loại tác vụ không hợp lệ."), models.CodeInvalidArgument)
+		}
+		if !req.Mode.valid() {
+			return fail[int](errors.New("Chế độ tác vụ không hợp lệ."), models.CodeInvalidArgument)
+		}
+	}
+	if req.Kind != "" {
+		ratio := ""
+		if req.Ratio != nil {
+			ratio = *req.Ratio
+		}
+		duration := 0
+		if req.Duration != nil {
+			duration = *req.Duration
+		}
+		if err := checkFormat(req.Kind, ratio, duration); err != nil {
+			return fail[int](err, models.CodeInvalidArgument)
+		}
+	}
+
+	p.mu.Lock()
+	var ids []string
+	for _, j := range p.jobs.list() {
+		if _, active := p.running[j.ID]; active || j.mayBePaid() {
+			continue
+		}
+		if byID {
+			if slices.Contains(req.IDs, j.ID) && (j.Status == MuseJobQueued || j.Status == MuseJobFailed || j.Status == MuseJobCancelled) {
+				ids = append(ids, j.ID)
+			}
+			continue
+		}
+		if j.Status == MuseJobQueued && inScope(j, req.Kind, req.Mode) {
+			ids = append(ids, j.ID)
+		}
+	}
+	var changed []MuseJob
+	var updateErr error
+	if len(ids) > 0 {
+		changed, updateErr = p.jobs.updateMany(ids, func(j *MuseJob) bool {
+			if _, active := p.running[j.ID]; active || j.mayBePaid() {
+				return false
+			}
+			if byID {
+				if j.Status != MuseJobQueued && j.Status != MuseJobFailed && j.Status != MuseJobCancelled {
+					return false
+				}
+			} else if j.Status != MuseJobQueued || !inScope(*j, req.Kind, req.Mode) {
+				return false
+			}
+			updated := false
+			if req.Ratio != nil {
+				wantRatio := *req.Ratio
+				if j.Kind == MuseJobImage && j.BoardFrames > 0 {
+					// Keep storyboard image ratios within what Muse offers for images.
+					if wantRatio != "" {
+						if _, ok := ratioFor(wantRatio, MuseJobImage); !ok {
+							wantRatio = ""
+						}
+					}
+				} else if wantRatio != "" {
+					if _, ok := ratioFor(wantRatio, j.Kind); !ok {
+						wantRatio = j.Ratio
+					}
+				}
+				if j.Ratio != wantRatio {
+					j.Ratio = wantRatio
+					updated = true
+				}
+			}
+			if req.Duration != nil && j.Kind == MuseJobVideo {
+				wantDur := *req.Duration
+				if wantDur == 0 || slices.Contains(museDurations, wantDur) {
+					if j.Duration != wantDur {
+						j.Duration = wantDur
+						updated = true
+					}
+				}
+			}
+			return updated
+		})
+	}
+	p.mu.Unlock()
+	if updateErr != nil {
+		return fail[int](updateErr, models.CodeInternal)
+	}
+	for _, job := range changed {
+		p.emit(events.EventMuseJobUpdated, job)
 	}
 	return models.SuccessResponse(len(changed))
 }
@@ -577,7 +782,7 @@ func (p *Provider) HoldQueued(kind MuseJobKind, mode MuseJobMode) models.Respons
 		if !holdable(*job) {
 			return false
 		}
-		job.Held = true
+		job.Held, job.Paused = true, true
 		return true
 	})
 	return models.SuccessResponse(len(changed))
@@ -603,7 +808,7 @@ func (p *Provider) RetryFailed(kind MuseJobKind, mode MuseJobMode) models.Respon
 			return false
 		}
 		resetForRetry(job)
-		job.Attempts, job.Held = 0, false
+		job.Attempts, job.Held, job.Paused = 0, false, false
 		return true
 	})
 	if len(changed) > 0 {
@@ -664,8 +869,9 @@ func (p *Provider) EditAndRetry(id, prompt string) models.Response[MuseJob] {
 		return j.Status == MuseJobQueued || j.finished()
 	}, func(j *MuseJob) {
 		held := j.Status == MuseJobQueued && j.Held
+		paused := j.Status == MuseJobQueued && j.Paused
 		resetForRetry(j)
-		j.Prompt, j.Attempts, j.Held = prompt, 0, held
+		j.Prompt, j.Attempts, j.Held, j.Paused = prompt, 0, held, paused
 	})
 	if err != nil {
 		return fail[MuseJob](err, idleCode(err))

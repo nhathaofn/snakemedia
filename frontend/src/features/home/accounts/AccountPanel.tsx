@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Button, Card } from '../../../components/ui';
 import { api, unwrap } from '../../../services';
 import type { Account, AccountProvider } from '../../../types';
@@ -9,8 +9,7 @@ export type PanelMode =
   | { kind: 'browser' }
   | { kind: 'cookies' }
   | { kind: 'replace'; account: Account }
-  | { kind: 'rename'; account: Account }
-  | { kind: 'proxy'; account: Account };
+  | { kind: 'rename'; account: Account };
 
 interface AccountPanelProps {
   mode: PanelMode;
@@ -25,15 +24,13 @@ const titles = (mode: PanelMode, provider: AccountProvider): string => {
   const site = accountProviderLabels[provider];
   switch (mode.kind) {
     case 'browser':
-      return `Thêm tài khoản ${site}: đăng nhập trong Chrome`;
+      return `Thêm tài khoản ${site} (Chrome)`;
     case 'cookies':
       return `Thêm tài khoản ${site} từ cookie`;
     case 'replace':
       return `Dán cookie mới cho "${mode.account.name}"`;
     case 'rename':
       return `Đổi tên "${mode.account.name}"`;
-    case 'proxy':
-      return `Proxy cho "${mode.account.name}"`;
   }
 };
 
@@ -53,29 +50,6 @@ export const AccountPanel: React.FC<AccountPanelProps> = ({
 }) => {
   const [name, setName] = useState(mode.kind === 'rename' ? mode.account.name : '');
   const [cookies, setCookies] = useState('');
-  const [proxyChoice, setProxyChoice] = useState('');
-  const [customProxy, setCustomProxy] = useState('');
-  const [listed, setListed] = useState<string[]>([]);
-
-  useEffect(() => {
-    if (mode.kind !== 'proxy') return;
-    const current = mode.account.proxy;
-    let active = true;
-    void api.getProxies().then((res) => {
-      if (!active) return;
-      const lines = res.success && res.data ? proxyLines(res.data) : [];
-      setListed(lines);
-      if (current === '' || current === 'none' || lines.includes(current)) {
-        setProxyChoice(current);
-      } else {
-        setProxyChoice('custom');
-        setCustomProxy(current);
-      }
-    });
-    return () => {
-      active = false;
-    };
-  }, [mode]);
 
   const onSubmit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -90,10 +64,6 @@ export const AccountPanel: React.FC<AccountPanelProps> = ({
         );
       case 'rename':
         return submit(async () => unwrap(await api.renameAccount(mode.account.id, name)));
-      case 'proxy': {
-        const line = proxyChoice === 'custom' ? customProxy.trim() : proxyChoice;
-        return submit(async () => unwrap(await api.setAccountProxy(mode.account.id, line)));
-      }
     }
   };
 
@@ -135,50 +105,14 @@ export const AccountPanel: React.FC<AccountPanelProps> = ({
 
         {mode.kind === 'browser' && (
           <p className="accounts-hint">
-            Một cửa sổ Chrome riêng cho tài khoản này sẽ mở {site}. Đăng nhập xong, app tự nhận và
-            lưu phiên; tài khoản dùng proxy theo danh sách ở mục Proxy.
+            Tạo hồ sơ Chrome riêng cho tài khoản {site}. Chrome chưa mở ngay để bạn chỉnh proxy (mặc
+            định không dùng proxy), sau đó tự bấm &quot;Mở Chrome&quot; trên thẻ để đăng nhập.
           </p>
-        )}
-
-        {mode.kind === 'proxy' && (
-          <>
-            <label className="accounts-field">
-              <span>Chế độ</span>
-              <select
-                className="accounts-input"
-                value={proxyChoice}
-                onChange={(e) => setProxyChoice(e.target.value)}
-              >
-                <option value="">Tự chọn từ danh sách proxy</option>
-                <option value="none">Không dùng proxy (kết nối trực tiếp)</option>
-                {listed.map((line) => (
-                  <option key={line} value={line}>
-                    {line}
-                  </option>
-                ))}
-                <option value="custom">Proxy riêng…</option>
-              </select>
-            </label>
-            {proxyChoice === 'custom' && (
-              <label className="accounts-field">
-                <span>Dòng proxy (ip:port, ip:port:user:pass, socks5://…, proxyvn:KEY…)</span>
-                <input
-                  className="accounts-input"
-                  value={customProxy}
-                  autoFocus
-                  onChange={(e) => setCustomProxy(e.target.value)}
-                />
-              </label>
-            )}
-            <p className="accounts-hint">
-              Chrome của tài khoản khởi động lại với proxy mới ở lần dùng kế tiếp.
-            </p>
-          </>
         )}
 
         <div className="accounts-form-actions">
           <Button type="submit" variant="primary" isLoading={busy}>
-            {mode.kind === 'browser' ? 'Mở Chrome' : 'Lưu'}
+            {mode.kind === 'browser' ? 'Tạo tài khoản' : 'Lưu'}
           </Button>
           <Button type="button" variant="ghost" onClick={onCancel}>
             Huỷ

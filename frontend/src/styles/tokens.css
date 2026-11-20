@@ -133,7 +133,15 @@
   --muse-asset-card-min: 180px;
   --muse-template-card-min: 300px;
   --muse-asset-dialog-width: 620px;
+  --muse-batch-dialog-width: 1020px;
+  --muse-batch-table-max-height: 320px;
+  --muse-batch-col-tag: 130px;
+  --muse-batch-col-role: 120px;
+  --muse-batch-col-lock: 180px;
   --muse-asset-image-size: 120px;
+  --muse-asset-chips-max-height: 156px;
+  --muse-preview-thumb-size: 44px;
+  --muse-asset-check-size: 20px;
   --muse-lead-max: 640px;
   --muse-result-width: 240px;
   /* Placeholder heights for off-screen list items (content-visibility). */

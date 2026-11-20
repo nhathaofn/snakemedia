@@ -66,10 +66,13 @@ export function screenKind(job: MuseJob): MuseJobKind {
 /** Queue filter: every job, one status, or the jobs on hold. */
 export type QueueFilter = 'all' | MuseJobStatus | 'held';
 
-/** Whether job shows under filter. */
+/** Whether job shows under filter; only user-paused queued jobs count as Tạm dừng. */
 export function matchesFilter(job: MuseJob, filter: QueueFilter): boolean {
   if (filter === 'all') return true;
-  if (filter === 'held') return !!job.held;
+  if (filter === 'held') return job.status === MuseJobStatus.Queued && !!job.paused;
+  if (filter === MuseJobStatus.Queued) {
+    return job.status === MuseJobStatus.Queued && !job.paused;
+  }
   return job.status === filter;
 }
 

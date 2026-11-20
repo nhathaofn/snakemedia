@@ -14,11 +14,11 @@ export function useConfigSection<K extends SectionKey>(key: K) {
   const { update, saving } = useConfigUpdate();
 
   const patch = useCallback(
-    (change: Partial<AppConfig[K]>) => {
-      if (!useAppStore.getState().config) return;
+    (change: Partial<AppConfig[K]>): Promise<boolean> => {
+      if (!useAppStore.getState().config) return Promise.resolve(false);
       // Built from the config being saved, so a retry after a conflict keeps
       // what another screen changed in this section.
-      void update((cfg) => ({ [key]: { ...cfg[key], ...change } }) as Partial<AppConfig>);
+      return update((cfg) => ({ [key]: { ...cfg[key], ...change } }) as Partial<AppConfig>);
     },
     [key, update],
   );

@@ -92,6 +92,12 @@ type MuseConfig struct {
 	// ImageFormat is what Muse images (made as WebP) are saved as, in a batch
 	// folder or by the download button.
 	ImageFormat ImageFormat `json:"imageFormat"`
+	// UseAPI enables running Muse jobs through the muse2api gateway instead of local browser accounts.
+	UseAPI bool `json:"useApi"`
+	// APIEndpoint is the base URL of muse2api (e.g. "http://127.0.0.1:18610/v1").
+	APIEndpoint string `json:"apiEndpoint"`
+	// APIKey is the Bearer key for muse2api authentication.
+	APIKey string `json:"apiKey"`
 }
 
 // MaxMuseSetupMessage caps the setup message, in characters.
@@ -130,6 +136,9 @@ func DefaultMuseConfig() MuseConfig {
 		SetupMessage:        defaultMuseSetupMessage,
 		CleanupMessage:      defaultMuseCleanupMessage,
 		ImageFormat:         ImageFormatPNG,
+		UseAPI:              false,
+		APIEndpoint:         "http://127.0.0.1:18610/v1",
+		APIKey:              "",
 	}
 }
 

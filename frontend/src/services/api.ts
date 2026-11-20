@@ -14,6 +14,7 @@ import type {
   FlowImageTask,
   FlowImageTaskReference,
   FlowImageTaskRequest,
+  FlowImageTaskSettingsRequest,
   FlowModel,
   FlowProjectImage,
   FlowVideoModel,
@@ -23,13 +24,18 @@ import type {
   GeneratedVideoItem,
   ImportVideoResult,
   MediaDirectoryResult,
+  MuseAPIStatus,
   MuseJob,
   MuseJobKind,
   MuseJobMode,
   MuseJobRequest,
+  MuseJobsFormatRequest,
   MuseLibraryItem,
   MuseCleanResult,
   MuseAsset,
+  MuseAssetBatchRequest,
+  MuseAssetBatchResult,
+  MuseAssetFolderScan,
   MusePromptCheck,
   MusePromptTemplate,
   MuseOptions,
@@ -137,12 +143,16 @@ export const api = {
   replaceAccountCookies: (id: string, cookies: string) =>
     invoke<Account>('ReplaceAccountCookies', () => Backend.ReplaceAccountCookies(id, cookies)),
   checkAccount: (id: string) => invoke<Account>('CheckAccount', () => Backend.CheckAccount(id)),
+  checkAccountVideo: (id: string) =>
+    invoke<Account>('CheckAccountVideo', () => Backend.CheckAccountVideo(id)),
   openAccountBrowser: (id: string) =>
     invoke<Account>('OpenAccountBrowser', () => Backend.OpenAccountBrowser(id)),
   renameAccount: (id: string, name: string) =>
     invoke<Account>('RenameAccount', () => Backend.RenameAccount(id, name)),
   setAccountEnabled: (id: string, enabled: boolean) =>
     invoke<Account>('SetAccountEnabled', () => Backend.SetAccountEnabled(id, enabled)),
+  setAccountVideoCheck: (id: string, enabled: boolean) =>
+    invoke<Account>('SetAccountVideoCheck', () => Backend.SetAccountVideoCheck(id, enabled)),
   setAccountProxy: (id: string, proxyLine: string) =>
     invoke<Account>('SetAccountProxy', () => Backend.SetAccountProxy(id, proxyLine)),
   rotateAccountIP: (id: string) =>
@@ -205,6 +215,8 @@ export const api = {
     invoke<FlowImageQueueState>('GetFlowImageTasks', Backend.GetFlowImageTasks),
   submitFlowImageTasks: (req: FlowImageTaskRequest) =>
     invoke<FlowImageTask[]>('SubmitFlowImageTasks', () => Backend.SubmitFlowImageTasks(req)),
+  updateFlowImageTasksSettings: (req: FlowImageTaskSettingsRequest) =>
+    invoke<number>('UpdateFlowImageTasksSettings', () => Backend.UpdateFlowImageTasksSettings(req)),
   runFlowImageTasks: (ids: string[]) =>
     invoke<number>('RunFlowImageTasks', () => Backend.RunFlowImageTasks(ids)),
   holdFlowImageTasks: (ids: string[]) =>
@@ -233,6 +245,8 @@ export const api = {
       Backend.ImportFlowProjectImageReference(accountID, projectID, mode, mediaID),
     ),
   getMuseOptions: () => invoke<MuseOptions>('GetMuseOptions', Backend.GetMuseOptions),
+  checkMuseAPI: (endpoint: string, apiKey: string) =>
+    invoke<MuseAPIStatus>('CheckMuseAPI', () => Backend.CheckMuseAPI(endpoint, apiKey)),
   pickMuseReferences: () =>
     invoke<MuseReference[]>('PickMuseReferences', Backend.PickMuseReferences),
   submitMuseJobs: (req: MuseJobRequest) =>
@@ -240,10 +254,14 @@ export const api = {
   listMuseJobs: () => invoke<MuseJob[]>('ListMuseJobs', Backend.ListMuseJobs),
   cancelMuseJob: (id: string) => invoke<MuseJob>('CancelMuseJob', () => Backend.CancelMuseJob(id)),
   retryMuseJob: (id: string) => invoke<MuseJob>('RetryMuseJob', () => Backend.RetryMuseJob(id)),
+  retryMuseJobs: (ids: string[]) =>
+    invoke<number>('RetryMuseJobs', () => Backend.RetryMuseJobs(ids)),
   retrySaveMuseJob: (id: string) =>
     invoke<MuseJob>('RetrySaveMuseJob', () => Backend.RetrySaveMuseJob(id)),
   removeMuseJob: (id: string) => invoke<boolean>('RemoveMuseJob', () => Backend.RemoveMuseJob(id)),
   runMuseJobs: (ids: string[]) => invoke<number>('RunMuseJobs', () => Backend.RunMuseJobs(ids)),
+  updateMuseJobsFormat: (req: MuseJobsFormatRequest) =>
+    invoke<number>('UpdateMuseJobsFormat', () => Backend.UpdateMuseJobsFormat(req)),
   holdMuseQueued: (kind: MuseJobKind, mode: MuseJobMode) =>
     invoke<number>('HoldMuseQueued', () => Backend.HoldMuseQueued(kind, mode)),
   retryMuseFailed: (kind: MuseJobKind, mode: MuseJobMode) =>
@@ -263,6 +281,12 @@ export const api = {
     invoke<MuseAsset>('SaveMuseAsset', () => Backend.SaveMuseAsset(asset)),
   removeMuseAssets: (ids: string[]) =>
     invoke<number>('RemoveMuseAssets', () => Backend.RemoveMuseAssets(ids)),
+  updateMuseAssetsRole: (ids: string[], role: MuseAsset['role']) =>
+    invoke<number>('UpdateMuseAssetsRole', () => Backend.UpdateMuseAssetsRole(ids, role)),
+  pickMuseAssetFolder: () =>
+    invoke<MuseAssetFolderScan>('PickMuseAssetFolder', Backend.PickMuseAssetFolder),
+  importMuseAssetBatch: (req: MuseAssetBatchRequest) =>
+    invoke<MuseAssetBatchResult>('ImportMuseAssetBatch', () => Backend.ImportMuseAssetBatch(req)),
   pickMuseAssetImages: () =>
     invoke<MuseReference[]>('PickMuseAssetImages', Backend.PickMuseAssetImages),
   pickMuseSourceVideo: () =>

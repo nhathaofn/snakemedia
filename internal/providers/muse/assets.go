@@ -25,6 +25,7 @@ const (
 	MuseRoleFace       MuseRefRole = "face"
 	MuseRoleCharacter  MuseRefRole = "character"
 	MuseRoleProduct    MuseRefRole = "product"
+	MuseRoleProp       MuseRefRole = "prop"
 	MuseRoleStoryboard MuseRefRole = "storyboard"
 	MuseRoleSetting    MuseRefRole = "setting"
 	MuseRoleStyle      MuseRefRole = "style"
@@ -35,7 +36,7 @@ var AllMuseRefRoles = []struct {
 	TSName string
 }{
 	{MuseRoleNone, "None"}, {MuseRoleFace, "Face"}, {MuseRoleCharacter, "Character"}, {MuseRoleProduct, "Product"},
-	{MuseRoleStoryboard, "Storyboard"}, {MuseRoleSetting, "Setting"}, {MuseRoleStyle, "Style"},
+	{MuseRoleProp, "Prop"}, {MuseRoleStoryboard, "Storyboard"}, {MuseRoleSetting, "Setting"}, {MuseRoleStyle, "Style"},
 }
 
 func (r MuseRefRole) valid() bool {
@@ -129,16 +130,26 @@ func (p *Provider) ListAssets() models.Response[[]MuseAsset] {
 	return models.SuccessResponse(p.assets.List())
 }
 
+// normalizeAssetFields trims user text and strips a leading @ from the tag.
+func normalizeAssetFields(tag, name, lock string) (string, string, string, error) {
+	tag = strings.TrimPrefix(strings.TrimSpace(tag), "@")
+	name = strings.TrimSpace(name)
+	lock = strings.TrimSpace(lock)
+	if !tagPattern.MatchString(tag) {
+		return "", "", "", errors.New("Tag chỉ gồm chữ, số, - và _ (tối đa 40 ký tự).")
+	}
+	return tag, name, lock, nil
+}
+
 // SaveAsset adds an asset (empty ID) or replaces one. Images must be files of
 // the asset library (ImportAssetImages); images an asset no longer uses are
-// deleted unless a job still attaches them.
+// deleted immediately unless another asset or job still attaches them.
 func (p *Provider) SaveAsset(a MuseAsset) models.Response[MuseAsset] {
-	a.Tag = strings.TrimPrefix(strings.TrimSpace(a.Tag), "@")
-	a.Name = strings.TrimSpace(a.Name)
-	a.Lock = strings.TrimSpace(a.Lock)
-	if !tagPattern.MatchString(a.Tag) {
-		return fail[MuseAsset](errors.New("Tag chỉ gồm chữ, số, - và _ (tối đa 40 ký tự)."), models.CodeInvalidArgument)
+	tag, name, lock, err := normalizeAssetFields(a.Tag, a.Name, a.Lock)
+	if err != nil {
+		return fail[MuseAsset](err, models.CodeInvalidArgument)
 	}
+	a.Tag, a.Name, a.Lock = tag, name, lock
 	if !a.Role.valid() {
 		return fail[MuseAsset](errors.New("Vai trò ảnh không hợp lệ."), models.CodeInvalidArgument)
 	}
@@ -150,11 +161,14 @@ func (p *Provider) SaveAsset(a MuseAsset) models.Response[MuseAsset] {
 			return fail[MuseAsset](errors.New("Ảnh tư liệu phải được thêm từ màn Tư liệu."), models.CodeInvalidArgument)
 		}
 	}
+	p.assetMu.Lock()
+	defer p.assetMu.Unlock()
 	for _, other := range p.assets.List() {
 		if other.ID != a.ID && strings.EqualFold(other.Tag, a.Tag) {
 			return fail[MuseAsset](fmt.Errorf("Tag @%s đã có.", a.Tag), models.CodeInvalidArgument)
 		}
 	}
+	var oldImages []string
 	if a.ID == "" {
 		a.ID = uuid.NewString()
 		a.CreatedAt = p.now().UTC().Format(time.RFC3339)
@@ -163,6 +177,7 @@ func (p *Provider) SaveAsset(a MuseAsset) models.Response[MuseAsset] {
 		}
 	} else {
 		saved, err := p.assets.Update(a.ID, func(old *MuseAsset) {
+			oldImages = slices.Clone(old.Images)
 			a.CreatedAt = old.CreatedAt
 			*old = a
 		})
@@ -171,23 +186,77 @@ func (p *Provider) SaveAsset(a MuseAsset) models.Response[MuseAsset] {
 		}
 		a = saved
 	}
+	p.removeUnusedAssetMedia(oldImages)
 	p.sweepAssetImages()
 	return models.SuccessResponse(a)
 }
 
-// RemoveAssets deletes assets; jobs already queued keep their images.
+// RemoveAssets deletes assets and immediately frees their unused asset images
+// from disk; images still referenced by remaining assets or jobs stay intact.
 func (p *Provider) RemoveAssets(ids []string) models.Response[int] {
-	n, err := p.assets.RemoveWhere(func(a MuseAsset) bool { return slices.Contains(ids, a.ID) })
+	p.assetMu.Lock()
+	defer p.assetMu.Unlock()
+	var dropped []string
+	n, err := p.assets.RemoveWhere(func(a MuseAsset) bool {
+		if !slices.Contains(ids, a.ID) {
+			return false
+		}
+		dropped = append(dropped, a.Images...)
+		return true
+	})
 	if err != nil {
 		return fail[int](err, models.CodeInternal)
 	}
+	p.removeUnusedAssetMedia(dropped)
 	p.sweepAssetImages()
 	return models.SuccessResponse(n)
+}
+
+// UpdateAssetsRole assigns role to all selected assets in a single write.
+func (p *Provider) UpdateAssetsRole(ids []string, role MuseRefRole) models.Response[int] {
+	if !role.valid() {
+		return fail[int](errors.New("Vai trò ảnh không hợp lệ."), models.CodeInvalidArgument)
+	}
+	if len(ids) == 0 {
+		return models.SuccessResponse(0)
+	}
+	p.assetMu.Lock()
+	defer p.assetMu.Unlock()
+	changed, err := p.assets.UpdateMany(ids, func(a *MuseAsset) bool {
+		if a.Role == role {
+			return false
+		}
+		a.Role = role
+		return true
+	})
+	if err != nil {
+		return fail[int](err, models.CodeInternal)
+	}
+	return models.SuccessResponse(len(changed))
 }
 
 // ImportAssetImages copies picked images into the media folder for an asset.
 func (p *Provider) ImportAssetImages(paths []string) models.Response[[]MuseReference] {
 	return p.importImages(paths, assetPrefix)
+}
+
+// removeUnusedAssetMedia immediately deletes candidate asset files (and their
+// cached thumbnails) that no remaining asset and no job still references.
+func (p *Provider) removeUnusedAssetMedia(candidates []string) {
+	if len(candidates) == 0 {
+		return
+	}
+	used := p.usedAssetImages(p.jobs.list())
+	seen := make(map[string]bool, len(candidates))
+	for _, url := range candidates {
+		if seen[url] || used[url] || !strings.HasPrefix(url, media.Route+assetPrefix) {
+			continue
+		}
+		seen[url] = true
+		if err := p.media.Remove(url); err != nil {
+			logger.Get().Warn("muse asset media not removed", "url", url, "error", err)
+		}
+	}
 }
 
 // sweepAssetImages deletes asset images no asset and no job uses. An image

@@ -33,11 +33,12 @@ func BuildArgs(opts LaunchOptions) []string {
 		"--disable-sync",
 		"--disable-default-apps",
 		"--disable-component-update",
+		"--disable-blink-features=AutomationControlled",
 		// The only --disable-features flag: Chrome keeps just the last one given.
 		"--disable-features=Translate,OptimizationHints,MediaRouter",
 	}
 	if opts.Headless {
-		args = append(args, "--headless=new", "--hide-scrollbars", "--mute-audio")
+		args = append(args, "--headless=new", "--window-size=1366,768", "--hide-scrollbars", "--mute-audio")
 	}
 	if len(opts.ExtraArgs) > 0 {
 		args = append(args, opts.ExtraArgs...)

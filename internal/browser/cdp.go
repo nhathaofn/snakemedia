@@ -53,24 +53,39 @@ func LocalJSON(ctx context.Context, port int, path string, policy config.Account
 }
 
 func devtools(ctx context.Context, method string, port int, path string, policy config.AccountConfig, out any) error {
-	req, err := http.NewRequestWithContext(ctx, method, fmt.Sprintf("http://127.0.0.1:%d%s", port, path), nil)
+	status, data, err := devtoolsRequest(ctx, method, port, path, policy)
 	if err != nil {
 		return err
 	}
-	client := &http.Client{Timeout: time.Duration(policy.RequestTimeoutSeconds) * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.Do(req)
-	if err != nil {
-		return errors.New("Chrome CDP chưa sẵn sàng.")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if status != http.StatusOK {
 		return errors.New("Chrome CDP trả về phản hồi không hợp lệ.")
 	}
-	data, err := ReadBounded(resp.Body, policy.MaxResponseBytes)
-	if err != nil {
-		return err
+	if out == nil {
+		return nil
 	}
 	return json.Unmarshal(data, out)
+}
+
+func devtoolsRequest(ctx context.Context, method string, port int, path string, policy config.AccountConfig) (int, []byte, error) {
+	req, err := http.NewRequestWithContext(ctx, method, fmt.Sprintf("http://127.0.0.1:%d%s", port, path), nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	timeout := time.Duration(policy.RequestTimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	client := &http.Client{Timeout: timeout, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, errors.New("Chrome CDP chưa sẵn sàng.")
+	}
+	defer resp.Body.Close()
+	data, err := ReadBounded(resp.Body, policy.MaxResponseBytes)
+	if err != nil {
+		return resp.StatusCode, nil, err
+	}
+	return resp.StatusCode, data, nil
 }
 
 // Targets lists the browser's tabs and other debuggable targets.
@@ -85,6 +100,21 @@ func NewTab(ctx context.Context, port int, policy config.AccountConfig) (Target,
 	var created Target
 	err := devtools(ctx, http.MethodPut, port, "/json/new?about:blank", policy, &created)
 	return created, err
+}
+
+// CloseTab closes the tab identified by targetID, ignoring an already-closed tab.
+func CloseTab(ctx context.Context, port int, policy config.AccountConfig, targetID string) error {
+	if targetID == "" {
+		return nil
+	}
+	status, _, err := devtoolsRequest(ctx, http.MethodGet, port, "/json/close/"+url.PathEscape(targetID), policy)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK && status != http.StatusNotFound {
+		return errors.New("Chrome CDP trả về phản hồi không hợp lệ.")
+	}
+	return nil
 }
 
 // Call sends one CDP command on conn and waits for its reply. Replies to other
@@ -143,8 +173,8 @@ func (e *EvalError) Error() string { return "Lỗi trong trang: " + e.Detail }
 func Evaluate(ctx context.Context, conn *websocket.Conn, id int, expression string, out any) error {
 	var reply struct {
 		Result struct {
-			Type  string `json:"type"`
-			Value string `json:"value"`
+			Type  string          `json:"type"`
+			Value json.RawMessage `json:"value"`
 		} `json:"result"`
 		Exception *struct {
 			Text      string `json:"text"`
@@ -167,10 +197,14 @@ func Evaluate(ctx context.Context, conn *websocket.Conn, id int, expression stri
 		}
 		return &EvalError{Detail: detail}
 	}
-	if reply.Result.Value == "" || (reply.Result.Type != "" && reply.Result.Type != "string") {
+	if len(reply.Result.Value) == 0 || (reply.Result.Type != "" && reply.Result.Type != "string") {
 		return errors.New("Trang trả về dữ liệu không hợp lệ.")
 	}
-	return json.Unmarshal([]byte(reply.Result.Value), out)
+	var s string
+	if err := json.Unmarshal(reply.Result.Value, &s); err != nil || s == "" {
+		return errors.New("Trang trả về dữ liệu không hợp lệ.")
+	}
+	return json.Unmarshal([]byte(s), out)
 }
 
 // Conn is one DevTools connection to a target that numbers its own commands
