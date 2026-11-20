@@ -73,8 +73,10 @@ type ImageTask struct {
 	// Index is the prompt's place in its batch (from 1); saved files are
 	// numbered with it (media.OutputName).
 	Index int `json:"index,omitempty"`
-	// Held tasks wait in the queue until the user starts them.
+	// Held tasks wait in the queue until the user starts them. Paused marks
+	// tasks paused after running (shown under Tạm dừng, vs Chờ chạy).
 	Held      bool            `json:"held,omitempty"`
+	Paused    bool            `json:"paused,omitempty"`
 	Status    ImageTaskStatus `json:"status"`
 	Step      string          `json:"step,omitempty"`
 	RequestID string          `json:"requestId,omitempty"`
@@ -119,6 +121,16 @@ type ImageTaskRequest struct {
 	OutputDir   string               `json:"outputDir"`
 	// Hold adds the tasks without starting them.
 	Hold bool `json:"hold"`
+}
+
+// ImageTaskSettingsRequest updates model, aspect ratio and/or quality on
+// queued tasks (or the named IDs) that have not sent a request to Flow yet.
+// Empty fields leave the task's existing value intact.
+type ImageTaskSettingsRequest struct {
+	IDs         []string     `json:"ids,omitempty"`
+	ModelID     string       `json:"modelId,omitempty"`
+	AspectRatio string       `json:"aspectRatio,omitempty"`
+	Quality     ImageQuality `json:"quality,omitempty"`
 }
 
 // ImageQueueState is what the queue screen loads: the tasks and a warning
@@ -887,6 +899,63 @@ func onlyImageStepChanged(a, b ImageTask) bool {
 	return reflect.DeepEqual(a, b)
 }
 
+func (q *imageQueue) isRunning(id string) bool {
+	q.mu.Lock()
+	_, ok := q.running[id]
+	q.mu.Unlock()
+	return ok
+}
+
+// UpdateImageTasksSettings applies model, ratio and/or quality changes to
+// tasks that have not sent a request yet (queued tasks when IDs is empty).
+func (s *Provider) UpdateImageTasksSettings(req ImageTaskSettingsRequest) models.Response[int] {
+	modelID := strings.TrimSpace(req.ModelID)
+	ratio := strings.TrimSpace(req.AspectRatio)
+	var quality ImageQuality
+	if req.Quality != "" {
+		var err error
+		quality, err = normalizeImageQuality(req.Quality)
+		if err != nil {
+			return queueFail[int](err, models.CodeInvalidArgument)
+		}
+	}
+	if modelID == "" && ratio == "" && quality == "" {
+		return models.SuccessResponse(0)
+	}
+	q := s.queue
+	byID := len(req.IDs) > 0
+	n, err := q.updateSelected(req.IDs, func(t *ImageTask) bool {
+		if q.isRunning(t.ID) || t.RequestID != "" {
+			return false
+		}
+		if byID {
+			if t.Status != ImageTaskQueued && t.Status != ImageTaskFailed && t.Status != ImageTaskCancelled {
+				return false
+			}
+		} else if t.Status != ImageTaskQueued {
+			return false
+		}
+		changed := false
+		if modelID != "" && t.ModelID != modelID {
+			t.ModelID = modelID
+			changed = true
+		}
+		if ratio != "" && t.AspectRatio != ratio {
+			t.AspectRatio = ratio
+			changed = true
+		}
+		if quality != "" && t.Quality != quality {
+			t.Quality = quality
+			changed = true
+		}
+		return changed
+	})
+	if err != nil {
+		return queueFail[int](err, models.CodeInternal)
+	}
+	return models.SuccessResponse(n)
+}
+
 // RunImageTasks releases held queued tasks (all when ids is empty).
 func (s *Provider) RunImageTasks(ids []string) models.Response[int] {
 	return s.setHeld(ids, false)
@@ -901,10 +970,21 @@ func (s *Provider) HoldImageTasks(ids []string) models.Response[int] {
 func (s *Provider) setHeld(ids []string, held bool) models.Response[int] {
 	q := s.queue
 	updated, _ := q.updateSelected(ids, func(t *ImageTask) bool {
-		if t.Status != ImageTaskQueued || t.Held == held {
+		if t.Status != ImageTaskQueued {
 			return false
 		}
-		t.Held = held
+		if held {
+			// Only active waiting tasks (not already held) transition to Tạm dừng.
+			if t.Held {
+				return false
+			}
+			t.Held, t.Paused = true, true
+			return true
+		}
+		if !t.Held && !t.Paused {
+			return false
+		}
+		t.Held, t.Paused = false, false
 		return true
 	})
 	q.trigger()
@@ -962,7 +1042,7 @@ func (s *Provider) EditImageTask(id, prompt string) models.Response[ImageTask] {
 			return
 		}
 		t.Status, t.Error, t.Step, t.NextCheckAt, t.FinishedAt = ImageTaskQueued, "", "", "", ""
-		t.RequestID, t.Rechecks, t.Held, t.RefusedBy = "", 0, false, nil
+		t.RequestID, t.Rechecks, t.Held, t.Paused, t.RefusedBy = "", 0, false, false, nil
 		t.Results, t.SavedFiles, t.SavedPaths = []GeneratedImageItem{}, []string{}, nil
 	})
 	if err != nil {
@@ -984,7 +1064,7 @@ func (s *Provider) RetryImageTasks(ids []string) models.Response[int] {
 			return false
 		}
 		t.Status, t.Error, t.Step, t.NextCheckAt, t.FinishedAt = ImageTaskQueued, "", "", "", ""
-		t.Rechecks, t.Held, t.RefusedBy = 0, false, nil
+		t.Rechecks, t.Held, t.Paused, t.RefusedBy = 0, false, false, nil
 		if t.RequestID == "" && len(unsaved(*t)) == 0 {
 			t.Results, t.SavedFiles, t.SavedPaths = []GeneratedImageItem{}, []string{}, nil
 		}

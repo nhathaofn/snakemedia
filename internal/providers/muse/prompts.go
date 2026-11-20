@@ -1,7 +1,5 @@
 package muse
 
-import "fmt"
-
 // The message is read by Muse's agent, not by the video model: the agent
 // applies these lines itself and passes the prompt's scene content on to its
 // media tool (seen in Muse's own account of its tool calls, TestLiveConsole,
@@ -21,14 +19,13 @@ var planRule = map[MuseJobKind]string{
 	MuseJobVideo: "The prompt is the plan: keep its subjects, action order, camera, style and every quoted line word for word, in its language, by its speaker; speaker names are labels, not words to say. Fill in only what it leaves open. Add no other characters, events or speech, and no captions, subtitles, watermarks or music it does not ask for.",
 }
 
-// fitRule asks a one-clip video to refuse rather than cut lines to fit.
-func fitRule(job MuseJob) string {
-	length := "the clip"
-	if job.Duration > 0 {
-		length = fmt.Sprintf("%d seconds", job.Duration)
-	}
-	return "If the lines and actions cannot fit in " + length + ", make nothing and say how long is needed."
+// fitRule instructs Muse to always produce a video and never refuse or return text.
+func fitRule(_ MuseJob) string {
+	return "Always generate the video, even if a line feels long for the clip: start the line as early as possible, keep a natural pace, and let any remaining time be a silent hold on the ending state. Never refuse, and never return text instead of a video."
 }
+
+// wardrobeExceptionRule lets per-shot wardrobe lines override locked reference outfits.
+const wardrobeExceptionRule = `Wardrobe exception: locks and reference images govern identity only - face, hair, body, and for settings the layout, materials and light. Whenever the prompt contains a "Wardrobe this shot" line, that line overrides any outfit named in a lock or shown in a reference image.`
 
 // referenceSheetRule keeps reference images out of a video's frames.
 const referenceSheetRule = "Reference images are guidance, never frames: never show a reference sheet, its grid, multiple views or plain background, even at the start or end; frame 0 already shows the scene."
@@ -39,7 +36,7 @@ func videoReferenceLines(job MuseJob) []string {
 	if job.Kind != MuseJobVideo || len(job.References) == 0 {
 		return nil
 	}
-	return []string{referenceSheetRule}
+	return []string{wardrobeExceptionRule, referenceSheetRule}
 }
 
 // shortVideoLines are the one-clip guide: the plan and the fit check.

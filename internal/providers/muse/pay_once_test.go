@@ -175,6 +175,25 @@ func TestRetryFailedSkipsAcceptedJobs(t *testing.T) {
 	}
 }
 
+func TestRetryJobsRetriesAllSelectedIncludingPaidAndClearsPause(t *testing.T) {
+	p := testProvider(t, &fakePage{})
+	jobs := submit(t, p, MuseJobVideo, "plain", "accepted", "unknown")
+	p.jobs.update(jobs[0].ID, func(j *MuseJob) { j.Status, j.Held, j.Paused = MuseJobFailed, true, true })
+	p.jobs.update(jobs[1].ID, func(j *MuseJob) { j.Status, j.SessionID = MuseJobFailed, "s1" })
+	p.jobs.update(jobs[2].ID, func(j *MuseJob) { j.Status, j.SendUnknown = MuseJobCancelled, true })
+
+	res := p.RetryJobs([]string{jobs[0].ID, jobs[1].ID, jobs[2].ID})
+	if !res.Success || res.Data != 3 {
+		t.Fatalf("RetryJobs = %+v, want 3", res)
+	}
+	for _, j := range jobs {
+		got := mustJob(t, p, j.ID)
+		if got.Status != MuseJobQueued || got.Held || got.Paused || got.SessionID != "" || got.SendUnknown {
+			t.Fatalf("retried job %s not reset cleanly: %+v", j.Prompt, got)
+		}
+	}
+}
+
 // Bulk actions of one screen leave the other screen's jobs alone; a job from a
 // journal written before modes existed belongs to Hàng loạt.
 func TestBulkActionsStayInTheirMode(t *testing.T) {

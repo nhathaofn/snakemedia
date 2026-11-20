@@ -102,7 +102,7 @@ export const MuseSettingsPage: React.FC = () => {
         </SettingRow>
         <SettingRow
           label="Luồng mỗi tài khoản"
-          hint="Mọi tài khoản đã đăng nhập và đang dùng được đều tự nhận việc; tài khoản hết lượt, lỗi proxy hay đăng xuất tự được bỏ qua."
+          hint="Mọi tài khoản đã đăng nhập và đang dùng được đều tự nhận việc (khi bật Muse API, nhân với số tài khoản khả dụng trên muse2api); tài khoản hết lượt, lỗi proxy hay đăng xuất tự được bỏ qua."
         >
           <NumberSetting
             aria-label="Luồng mỗi tài khoản"

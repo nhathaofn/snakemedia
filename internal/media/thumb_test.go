@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -66,5 +67,18 @@ func TestThumbFallsBackToOriginal(t *testing.T) {
 	}
 	if rec := get(t, store, Route+"..%5Csecret.png?"+ThumbQuery); rec.Header().Get("Content-Type") == "image/jpeg" {
 		t.Fatal("a path outside the media folder made a thumbnail")
+	}
+}
+
+func TestPreviewDataURLScalesDownAndFallsBackEmpty(t *testing.T) {
+	dir := t.TempDir()
+	imgPath := filepath.Join(dir, "wide.png")
+	writePNG(t, imgPath, 800, 400)
+	got := PreviewDataURL(imgPath, 120, 72)
+	if !strings.HasPrefix(got, "data:image/jpeg;base64,") {
+		t.Fatalf("unexpected data URL: %q", got)
+	}
+	if PreviewDataURL(filepath.Join(dir, "missing.png"), 120, 72) != "" {
+		t.Fatal("missing file must return empty data URL")
 	}
 }

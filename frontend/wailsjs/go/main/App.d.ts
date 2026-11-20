@@ -19,7 +19,11 @@ export function CancelMuseJob(arg1:string):Promise<models.Response_SnakeMedia_in
 
 export function CheckAccount(arg1:string):Promise<models.Response_SnakeMedia_internal_accounts_Account_>;
 
+export function CheckAccountVideo(arg1:string):Promise<models.Response_SnakeMedia_internal_accounts_Account_>;
+
 export function CheckForUpdate():Promise<models.Response_SnakeMedia_internal_updater_Release_>;
+
+export function CheckMuseAPI(arg1:string,arg2:string):Promise<models.Response_SnakeMedia_internal_providers_muse_MuseAPIStatus_>;
 
 export function CheckMusePrompt(arg1:string,arg2:Array<string>):Promise<models.Response_SnakeMedia_internal_providers_muse_MusePromptCheck_>;
 
@@ -83,6 +87,8 @@ export function ImportAccountCookies(arg1:accounts.Provider,arg2:string,arg3:str
 
 export function ImportFlowProjectImageReference(arg1:string,arg2:string,arg3:flow.ImageProjectMode,arg4:string):Promise<models.Response_SnakeMedia_internal_providers_flow_ImageTaskReference_>;
 
+export function ImportMuseAssetBatch(arg1:muse.MuseAssetBatchRequest):Promise<models.Response_SnakeMedia_internal_providers_muse_MuseAssetBatchResult_>;
+
 export function InstallTool(arg1:string):Promise<models.Response_SnakeMedia_internal_tools_Tool_>;
 
 export function InstallUpdate():Promise<models.Response_bool_>;
@@ -116,6 +122,8 @@ export function OpenLogFolder():Promise<models.Response_bool_>;
 export function OpenMuseOutputFolder():Promise<models.Response_bool_>;
 
 export function PickFlowImageReferences():Promise<models.Response___SnakeMedia_internal_providers_flow_ImageTaskReference_>;
+
+export function PickMuseAssetFolder():Promise<models.Response_SnakeMedia_internal_providers_muse_MuseAssetFolderScan_>;
 
 export function PickMuseAssetImages():Promise<models.Response___SnakeMedia_internal_providers_muse_MuseReference_>;
 
@@ -159,6 +167,8 @@ export function RetryMuseFailed(arg1:muse.MuseJobKind,arg2:muse.MuseJobMode):Pro
 
 export function RetryMuseJob(arg1:string):Promise<models.Response_SnakeMedia_internal_providers_muse_MuseJob_>;
 
+export function RetryMuseJobs(arg1:Array<string>):Promise<models.Response_int_>;
+
 export function RetrySaveMuseJob(arg1:string):Promise<models.Response_SnakeMedia_internal_providers_muse_MuseJob_>;
 
 export function RevealFile(arg1:string):Promise<models.Response_bool_>;
@@ -183,10 +193,18 @@ export function SetAccountEnabled(arg1:string,arg2:boolean):Promise<models.Respo
 
 export function SetAccountProxy(arg1:string,arg2:string):Promise<models.Response_SnakeMedia_internal_accounts_Account_>;
 
+export function SetAccountVideoCheck(arg1:string,arg2:boolean):Promise<models.Response_SnakeMedia_internal_accounts_Account_>;
+
 export function SubmitFlowImageTasks(arg1:flow.ImageTaskRequest):Promise<models.Response___SnakeMedia_internal_providers_flow_ImageTask_>;
 
 export function SubmitMuseJobs(arg1:muse.MuseJobRequest):Promise<models.Response___SnakeMedia_internal_providers_muse_MuseJob_>;
 
 export function UpdateConfig(arg1:config.AppConfig):Promise<models.Response_SnakeMedia_internal_config_AppConfig_>;
+
+export function UpdateFlowImageTasksSettings(arg1:flow.ImageTaskSettingsRequest):Promise<models.Response_int_>;
+
+export function UpdateMuseAssetsRole(arg1:Array<string>,arg2:muse.MuseRefRole):Promise<models.Response_int_>;
+
+export function UpdateMuseJobsFormat(arg1:muse.MuseJobsFormatRequest):Promise<models.Response_int_>;
 
 export function UploadSourceVideo(arg1:string):Promise<models.Response_SnakeMedia_internal_providers_flow_UploadedSourceVideo_>;

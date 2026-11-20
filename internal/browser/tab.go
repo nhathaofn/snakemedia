@@ -72,6 +72,7 @@ func Navigate(ctx context.Context, t Target, port int, site Site) error {
 	}
 	defer conn.Close()
 	if site.Boot != "" {
+		_ = conn.Call(ctx, "Page.enable", nil, nil)
 		if err := conn.Call(ctx, "Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": site.Boot}, nil); err != nil {
 			return err
 		}
@@ -86,6 +87,9 @@ func Navigate(ctx context.Context, t Target, port int, site Site) error {
 	// not a failure to reach the site.
 	if res.ErrorText != "" && res.ErrorText != "net::ERR_ABORTED" {
 		return &NavigateError{URL: site.Home, Text: res.ErrorText}
+	}
+	if site.Boot != "" {
+		_ = conn.Call(ctx, "Runtime.evaluate", map[string]any{"expression": site.Boot}, nil)
 	}
 	return nil
 }

@@ -15,17 +15,21 @@ import (
 const MuseURL = "https://muse.ai/"
 
 // chunkSize is how much of a result file one page call returns (base64-encoded).
-const chunkSize = 2 << 20
+const chunkSize = 4 << 20
 
 // LoginState is what the page reports about its own session.
 type LoginState struct {
 	LoggedIn bool `json:"loggedIn"`
 	// Chat reports whether Muse's chat client is on the page; a signed-in tab
 	// on another route (settings, a shared link) has none until it goes home.
-	Chat   bool   `json:"chat"`
-	HTTP   int    `json:"http"`
-	Status string `json:"status"`
-	VM     string `json:"vm"`
+	Chat    bool   `json:"chat"`
+	HTTP    int    `json:"http"`
+	Status  string `json:"status"`
+	VM      string `json:"vm"`
+	Gateway string `json:"gateway,omitempty"`
+	Error   string `json:"error,omitempty"`
+	Path    string `json:"path,omitempty"`
+	Notice  string `json:"notice,omitempty"`
 }
 
 // Attachment is one image sent with a prompt, in the shape Muse's client expects.
@@ -54,6 +58,32 @@ type SendDiagnostics struct {
 	DeliveryState   string `json:"deliveryState,omitempty"`
 	RequestTimedOut bool   `json:"requestTimedOut,omitempty"`
 }
+
+// SessionInfo is one chat entry returned by Muse's sessions.list.
+type SessionInfo struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+}
+
+// UserEvent is one user message read back from Muse's chat.history.
+type UserEvent struct {
+	Text    string `json:"text"`
+	HasText bool   `json:"hasText"`
+}
+
+// sessionTracker is an optional capability of Page used to reconcile sends
+// whose answer was lost against Muse's chat history.
+type sessionTracker interface {
+	Sessions(ctx context.Context, fresh bool) ([]SessionInfo, error)
+	UserMessages(ctx context.Context, sessionID string) ([]UserEvent, error)
+}
+
+// preSendError marks a send failure that happened before any JavaScript call
+// ran in the Muse tab, so no message could have left the app.
+type preSendError struct{ err error }
+
+func (e *preSendError) Error() string { return e.err.Error() }
+func (e *preSendError) Unwrap() error { return e.err }
 
 // ResultMedia is one file an assistant message produced in the session sandbox.
 type ResultMedia struct {

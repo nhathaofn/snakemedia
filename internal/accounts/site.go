@@ -2,6 +2,7 @@ package accounts
 
 import (
 	"context"
+	"time"
 
 	"SnakeMedia/internal/browser"
 )
@@ -35,6 +36,25 @@ type Inspection struct {
 	Resume bool
 	// Note is shown on a signed-in account (a remark, not an error).
 	Note string
+	// Fatal marks the account itself unusable (banned, dead, or unable to
+	// generate): Check sets StatusError without waiting out PageReadySeconds.
+	Fatal string
+	// DisableAccount turns Enabled off when Fatal or PausedUntil is set.
+	DisableAccount bool
+	// PausedUntil rests the account until this time on a timed limit (e.g. 24h).
+	PausedUntil time.Time
+	AutoResume  bool
+	// VideoCheckDisabled marks SkipVideoCheck on the account while keeping it
+	// SignedIn and Enabled so it keeps running image jobs.
+	VideoCheckDisabled bool
+	// VideoVerified confirms Check generated a video and clears SkipVideoCheck.
+	VideoVerified bool
+}
+
+// VideoChecker is an optional extension of Site run only when the user
+// explicitly triggers a video creation check (keeping regular Check fast).
+type VideoChecker interface {
+	CheckVideo(ctx context.Context, b *browser.Browser, rec Record, insp Inspection) (Inspection, error)
 }
 
 // SignInFollowUp is a Site with a step of its own once the user has signed in

@@ -116,15 +116,21 @@ type MuseJob struct {
 	RepliesSeen int `json:"repliesSeen,omitempty"`
 	// Rechecks counts failed attempts to read back a job Muse already accepted.
 	Rechecks int `json:"rechecks,omitempty"`
-	// Held jobs wait in the queue until the user runs them.
+	// Held jobs wait in the queue until the user runs them. Paused marks jobs
+	// that were paused after running (shown under Tạm dừng, vs Chờ chạy).
 	Held      bool          `json:"held,omitempty"`
+	Paused    bool          `json:"paused,omitempty"`
 	Status    MuseJobStatus `json:"status"`
 	Step      string        `json:"step,omitempty"`
 	AccountID string        `json:"accountId,omitempty"`
 	SessionID string        `json:"sessionId,omitempty"`
 	// Sending is set just before a send and cleared once Muse answers; still set
-	// after a restart means the outcome is unknown.
-	Sending bool `json:"sending,omitempty"`
+	// after a restart means the outcome is unknown. PreSendTracked and
+	// PreSendSessions record the account's chat IDs right before Sending
+	// becomes true so a lost send or restart can reconcile against Muse.
+	Sending         bool     `json:"sending,omitempty"`
+	PreSendTracked  bool     `json:"preSendTracked,omitempty"`
+	PreSendSessions []string `json:"preSendSessions,omitempty"`
 	// SendUnknown marks a job failed because its send's answer was lost: Muse
 	// may have made it, so sending it again may pay twice.
 	SendUnknown bool     `json:"sendUnknown,omitempty"`
@@ -164,8 +170,10 @@ func resetForRetry(j *MuseJob) {
 // again starts a fresh chat from its first turn.
 func resetForQueue(j *MuseJob) {
 	j.Status, j.Step, j.Error, j.FormatNote, j.ChangeNote = MuseJobQueued, "", "", "", ""
+	j.Paused = false
 	j.Continues, j.RepliesSeen = 0, 0
 	j.AccountID, j.SessionID, j.Sending, j.SendUnknown, j.Rechecks = "", "", false, false, 0
+	j.PreSendTracked, j.PreSendSessions = false, nil
 	j.Files, j.SavedFiles = []string{}, []string{}
 	j.OutputPaths, j.SaveError = nil, ""
 	j.StartedAt, j.SentAt, j.FinishedAt = "", "", ""

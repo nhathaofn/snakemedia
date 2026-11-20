@@ -6,7 +6,7 @@ import { AccountWarning } from '../../../components/accounts';
 import { Icon } from '../../../components/ui';
 import { useNow } from '../../../hooks';
 import { api, unwrap } from '../../../services';
-import { useAccountsStore } from '../../../stores';
+import { useAccountsStore, useAppStore } from '../../../stores';
 import { AccountProvider, MuseJobKind } from '../../../types';
 import type { MuseOptions, MuseReference } from '../../../types';
 import { accountReady, formatBytes } from '../../../utils';
@@ -26,8 +26,17 @@ export function MusePanel({ children }: { children: ReactNode }) {
  * clock itself (rests end over time), so the panel does not re-render on it.
  */
 function MuseAccountStatus() {
+  const useApi = useAppStore((s) => s.config?.muse?.useApi);
   const accounts = useAccountsStore((s) => s.accounts);
   const now = useNow();
+  if (useApi) {
+    return (
+      <div className="studio-status is-ready">
+        <span className="status-dot active" />
+        <span>Muse API (muse2api) sẵn sàng</span>
+      </div>
+    );
+  }
   const ready = accounts.filter(
     (a) => a.provider === AccountProvider.Muse && accountReady(a, now),
   ).length;
@@ -136,12 +145,15 @@ export function FormatFields({
   ratio,
   duration,
   onChange,
+  onUserChange,
 }: {
   kind: MuseJobKind;
   options: MuseOptions | null;
   ratio: string;
   duration: number;
   onChange: (change: { ratio?: string; duration?: number }) => void;
+  /** Fired only on explicit user selection (never on stale-value resets). */
+  onUserChange?: (change: { ratio?: string; duration?: number }) => void;
 }) {
   const ratios = (options?.ratios ?? []).filter((r) => r.kinds.includes(kind));
   const video = kind === MuseJobKind.Video;
@@ -152,6 +164,10 @@ export function FormatFields({
   useEffect(() => {
     if (stale) onChange({ duration: 0 });
   }, [stale, onChange]);
+  const pick = (change: { ratio?: string; duration?: number }) => {
+    onChange(change);
+    onUserChange?.(change);
+  };
   return (
     <div className="muse-format-fields">
       <label className="studio-field-group">
@@ -159,7 +175,7 @@ export function FormatFields({
         <select
           className="batch-input batch-select"
           value={ratio}
-          onChange={(e) => onChange({ ratio: e.target.value })}
+          onChange={(e) => pick({ ratio: e.target.value })}
         >
           <option value="">Theo prompt</option>
           {ratios.map((r) => (
@@ -175,7 +191,7 @@ export function FormatFields({
           <select
             className="batch-input batch-select"
             value={duration}
-            onChange={(e) => onChange({ duration: Number(e.target.value) })}
+            onChange={(e) => pick({ duration: Number(e.target.value) })}
           >
             <option value={0}>Theo prompt</option>
             {durations.map((d) => (

@@ -27,7 +27,7 @@ interface TaskRowProps {
 function statusLabel(task: FlowImageTask): string {
   switch (task.status) {
     case FlowImageTaskStatus.Queued:
-      return task.held ? 'Tạm dừng' : 'Chờ chạy';
+      return task.paused ? 'Tạm dừng' : 'Chờ chạy';
     case FlowImageTaskStatus.Running:
       return 'Đang chạy';
     case FlowImageTaskStatus.Succeeded:
@@ -40,7 +40,7 @@ function statusLabel(task: FlowImageTask): string {
 }
 
 function toneOf(task: FlowImageTask): QueueTone {
-  if (task.status === FlowImageTaskStatus.Queued) return task.held ? 'held' : 'queued';
+  if (task.status === FlowImageTaskStatus.Queued) return task.paused ? 'held' : 'queued';
   return task.status as QueueTone;
 }
 
@@ -59,6 +59,7 @@ export const TaskRow = memo(function TaskRow({
   const overflow = Math.max(task.references.length - shownReferences.length, 0);
   const results = task.results.filter((result) => result.localUrl);
   const saved = task.savedPaths?.[0];
+  const format = [task.aspectRatio, task.quality].filter(Boolean).join(' · ');
   return (
     <div className={`queue-table-row${selected ? ' is-selected' : ''}`} role="row">
       <span className="queue-table-index" role="cell">
@@ -138,7 +139,8 @@ export const TaskRow = memo(function TaskRow({
       <QueueProgress
         tone={toneOf(task)}
         label={statusLabel(task)}
-        detail={running ? task.step : undefined}
+        title={format || undefined}
+        detail={running ? task.step : format || undefined}
         error={ended || task.status === FlowImageTaskStatus.Succeeded ? task.error : undefined}
         savedPath={task.status === FlowImageTaskStatus.Succeeded ? saved : undefined}
         onReveal={saved ? () => actions.reveal(saved) : undefined}

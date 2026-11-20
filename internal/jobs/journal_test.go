@@ -222,3 +222,29 @@ func TestUpdateManySavesOnceAndReturnsChanged(t *testing.T) {
 		}
 	}
 }
+
+func TestSaveBatchAddsAndUpdatesAtomically(t *testing.T) {
+	j, path := open(t, 0)
+	if err := j.Add(rec{ID: "a", Step: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.SaveBatch([]rec{{ID: "b", Step: "new"}}, []rec{{ID: "a", Done: true, Step: "updated"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.SaveBatch([]rec{{ID: "c"}}, []rec{{ID: "missing"}}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing update should fail with ErrNotFound, got %v", err)
+	}
+	if _, ok := j.Get("c"); ok {
+		t.Fatal("failed SaveBatch mutated in-memory state")
+	}
+	again := New(path, Options[rec]{})
+	if err := again.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if a, ok := again.Get("a"); !ok || !a.Done || a.Step != "updated" {
+		t.Fatalf("a after reload: %+v", a)
+	}
+	if b, ok := again.Get("b"); !ok || b.Step != "new" {
+		t.Fatalf("b after reload: %+v", b)
+	}
+}

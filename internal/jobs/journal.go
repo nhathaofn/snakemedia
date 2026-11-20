@@ -205,6 +205,46 @@ func (j *Journal[T]) AddTrimming(records ...T) ([]string, error) {
 	return trimmed, j.saveLocked()
 }
 
+// SaveBatch applies updates to existing records and appends adds in one
+// atomic write. Memory is restored if validation or writing fails.
+func (j *Journal[T]) SaveBatch(adds []T, updates []T) error {
+	if len(adds) == 0 && len(updates) == 0 {
+		return nil
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.blocked != nil {
+		return j.blocked
+	}
+	prev := slices.Clone(j.items)
+	seenAdd := make(map[string]bool, len(adds))
+	for _, u := range updates {
+		i, ok := j.byID[u.JobID()]
+		if !ok {
+			j.items = prev
+			return ErrNotFound
+		}
+		j.items[i] = u
+	}
+	for _, a := range adds {
+		id := a.JobID()
+		if _, dup := j.byID[id]; dup || seenAdd[id] {
+			j.items = prev
+			return fmt.Errorf("tác vụ %s đã có", id)
+		}
+		seenAdd[id] = true
+	}
+	j.items = append(j.items, adds...)
+	j.trimLocked()
+	j.reindexLocked()
+	if err := j.saveLocked(); err != nil {
+		j.items = prev
+		j.reindexLocked()
+		return err
+	}
+	return nil
+}
+
 // Update applies change to a record and persists the journal, unless the
 // journal's Transient option calls the change progress only. The returned
 // record is a copy taken before the write.

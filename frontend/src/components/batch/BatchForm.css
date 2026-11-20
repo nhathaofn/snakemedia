@@ -140,15 +140,65 @@
 
 .batch-config-title {
   display: flex;
+  width: 100%;
   min-height: 30px;
   align-items: center;
   margin: 0;
   padding: var(--space-2) var(--space-4);
+  border: 0;
   border-bottom: var(--border-width) solid var(--border-color);
   background: var(--bg-tertiary);
   color: var(--text-primary);
+  font: inherit;
   font-size: var(--font-size-small);
   font-weight: var(--font-weight-semibold);
+  text-align: left;
+}
+
+.batch-config-toggle {
+  gap: var(--space-3);
+  cursor: pointer;
+}
+
+.batch-config-toggle.is-collapsed {
+  border-bottom: 0;
+}
+
+.batch-config-toggle:hover {
+  color: var(--primary);
+}
+
+.batch-config-badge {
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-full);
+  background: var(--primary);
+  color: var(--text-on-primary);
+  font-size: var(--font-size-caption);
+}
+
+.batch-config-summary {
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-regular);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-config-chevron {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform var(--transition-fast);
+}
+
+.batch-config-summary + .batch-config-chevron {
+  margin-left: 0;
+}
+
+.batch-config-toggle[aria-expanded='true'] .batch-config-chevron {
+  transform: rotate(180deg);
 }
 
 .batch-config-content {

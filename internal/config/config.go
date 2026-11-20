@@ -160,7 +160,18 @@ type Manager struct {
 	config AppConfig
 	path   string
 	// readOnly refuses every save (ErrNewerConfig) for the rest of the run.
-	readOnly error
+	readOnly  error
+	listeners []func()
+}
+
+// OnChange registers fn to run after any successful Update.
+func (m *Manager) OnChange(fn func()) {
+	if fn == nil {
+		return
+	}
+	m.mu.Lock()
+	m.listeners = append(m.listeners, fn)
+	m.mu.Unlock()
 }
 
 // NewManager loads configuration from path. It always returns a usable manager:
@@ -200,20 +211,30 @@ func (m *Manager) Update(cfg AppConfig) (AppConfig, error) {
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if m.readOnly != nil {
-		return m.config, m.readOnly
+		res := m.config
+		m.mu.Unlock()
+		return res, m.readOnly
 	}
 	if cfg.Revision != 0 && cfg.Revision != m.config.Revision {
-		return m.config, ErrConflict
+		res := m.config
+		m.mu.Unlock()
+		return res, ErrConflict
 	}
 	cfg.Revision = m.config.Revision + 1
 	if err := m.write(cfg); err != nil {
-		return m.config, err
+		res := m.config
+		m.mu.Unlock()
+		return res, err
 	}
 	m.config = cfg.clone()
-	return m.config.clone(), nil
+	out := m.config.clone()
+	listeners := append([]func(){}, m.listeners...)
+	m.mu.Unlock()
+	for _, fn := range listeners {
+		fn()
+	}
+	return out, nil
 }
 
 func (m *Manager) load() error {

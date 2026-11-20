@@ -9,15 +9,30 @@ import {
   Shield,
   Trash2,
   User,
+  Video,
 } from 'lucide-react';
 import { Button, Card, Icon } from '../../../components/ui';
-import { AccountSource } from '../../../types';
+import { AccountProvider, AccountSource, AccountStatus } from '../../../types';
 import type { Account } from '../../../types';
-import { accountPaused, accountStatusLabels, formatAccountTime } from '../../../utils';
+import {
+  accountPaused,
+  accountStatusLabels,
+  formatAccountTime,
+  formatRemainingTime,
+} from '../../../utils';
 
 /** What a card asks its page to do. */
 export type AccountAction =
-  'check' | 'open' | 'proxy' | 'rotate' | 'cookies' | 'rename' | 'toggle' | 'remove';
+  | 'check'
+  | 'checkVideo'
+  | 'open'
+  | 'proxy'
+  | 'rotate'
+  | 'cookies'
+  | 'rename'
+  | 'toggle'
+  | 'videoCheck'
+  | 'remove';
 
 interface AccountCardProps {
   account: Account;
@@ -35,6 +50,8 @@ export function proxyLabel(account: Account): string {
 }
 
 export const AccountCard: React.FC<AccountCardProps> = ({ account, now, busy, onAction }) => {
+  const paused = accountPaused(account, now);
+  const remaining = paused ? formatRemainingTime(account.pausedUntil, now) : '';
   const working = (action: AccountAction) => busy === action;
   const act = (action: AccountAction) => () => onAction(action, account);
   const secondary: {
@@ -43,6 +60,12 @@ export const AccountCard: React.FC<AccountCardProps> = ({ account, now, busy, on
     label: string;
     hidden?: boolean;
   }[] = [
+    {
+      action: 'checkVideo',
+      icon: Video,
+      label: 'Kiểm tra tạo video',
+      hidden: account.provider !== AccountProvider.Muse || !!account.skipVideoCheck,
+    },
     { action: 'proxy', icon: Shield, label: 'Đổi proxy' },
     {
       action: 'rotate',
@@ -76,7 +99,11 @@ export const AccountCard: React.FC<AccountCardProps> = ({ account, now, busy, on
             <span className="account-tag">
               {account.source === AccountSource.Cookies ? 'Cookie' : 'Chrome'}
             </span>
-            {!account.enabled && <span className="account-tag">Đang tắt</span>}
+            {!account.enabled && (
+              <span className="account-tag">
+                {paused && account.autoResume ? 'Tự tắt (chờ 24h)' : 'Đang tắt'}
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -97,10 +124,28 @@ export const AccountCard: React.FC<AccountCardProps> = ({ account, now, busy, on
             {account.proxyIp && <span className="account-mono"> · {account.proxyIp}</span>}
           </span>
         </div>
-        {accountPaused(account, now) && (
+        {paused && (
+          <div className="account-row account-row-window">
+            <span>{account.autoResume ? 'Dùng lại được lúc' : 'Tạm nghỉ tới'}</span>
+            <span>
+              {formatAccountTime(account.pausedUntil)}
+              {remaining ? ` (còn ${remaining})` : ''}
+            </span>
+          </div>
+        )}
+        {account.provider === AccountProvider.Muse && (
           <div className="account-row">
-            <span>Tạm nghỉ tới</span>
-            <span>{formatAccountTime(account.pausedUntil)}</span>
+            <span>Kiểm tra tạo video</span>
+            <span>
+              <button
+                type="button"
+                className={`account-link${account.skipVideoCheck ? ' account-link-warn' : ''}`}
+                disabled={!!busy}
+                onClick={act('videoCheck')}
+              >
+                {account.skipVideoCheck ? 'Đã tắt (chỉ tạo ảnh)' : 'Đang bật'}
+              </button>
+            </span>
           </div>
         )}
         <div className="account-row">
@@ -110,7 +155,15 @@ export const AccountCard: React.FC<AccountCardProps> = ({ account, now, busy, on
       </div>
 
       {(account.message || account.noRoute) && (
-        <div className="account-note">{account.noRoute || account.message}</div>
+        <div
+          className={`account-note${
+            account.status === AccountStatus.Error || account.status === AccountStatus.SignedOut
+              ? ' account-note-error'
+              : ''
+          }`}
+        >
+          {account.noRoute || account.message}
+        </div>
       )}
 
       <div className="account-actions">

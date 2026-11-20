@@ -1,0 +1,198 @@
+.muse-api-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-6);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  transition: border-color var(--transition-fast);
+}
+
+.muse-api-card.is-active {
+  border-color: var(--primary);
+}
+
+.muse-api-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+
+.muse-api-title-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.muse-api-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background: var(--feedback-primary-bg);
+  color: var(--primary);
+}
+
+.muse-api-title {
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+}
+
+.muse-api-subtitle {
+  font-size: var(--font-size-small);
+  color: var(--text-secondary);
+}
+
+.muse-api-toggle-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.muse-api-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+}
+
+.muse-api-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+}
+
+.muse-api-dot.is-on {
+  background: var(--success);
+}
+
+.muse-api-dot.is-off {
+  background: var(--text-muted);
+}
+
+.muse-api-status-badge.is-on {
+  background: var(--feedback-success-bg);
+  color: var(--success);
+  border: var(--border-width) solid var(--feedback-success-border);
+}
+
+.muse-api-status-badge.is-off {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  border: var(--border-width) solid var(--border-color);
+}
+
+.muse-api-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: var(--border-width) solid var(--border-color);
+}
+
+.muse-api-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+}
+
+@media (max-width: 768px) {
+  .muse-api-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
+.muse-api-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.muse-api-label {
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-secondary);
+}
+
+.muse-api-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.muse-api-input.muse-api-input--with-toggle {
+  padding-right: 38px;
+}
+
+.muse-api-input {
+  width: 100%;
+  height: 36px;
+  padding: 0 var(--space-3);
+  font-size: var(--font-size-small);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: inherit;
+  transition: border-color var(--transition-fast);
+}
+
+.muse-api-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.muse-api-key-toggle {
+  position: absolute;
+  right: var(--space-2);
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: var(--space-1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.muse-api-key-toggle:hover {
+  color: var(--text-primary);
+}
+
+.muse-api-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.muse-api-result {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-small);
+}
+
+.muse-api-result.is-success {
+  background: var(--feedback-success-bg);
+  border: var(--border-width) solid var(--feedback-success-border);
+  color: var(--success);
+}
+
+.muse-api-result.is-error {
+  background: var(--feedback-danger-bg);
+  border: var(--border-width) solid var(--feedback-danger-border);
+  color: var(--danger);
+}

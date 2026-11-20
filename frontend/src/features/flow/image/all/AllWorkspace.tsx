@@ -64,7 +64,7 @@ export function AllWorkspace() {
     return TASK_FILTERS.map(({ value, label }, i) => ({ value, label, count: counts[i] }));
   }, [tasks]);
   // Selection and bulk actions cover only the tasks the filter shows.
-  const { notRunning, selectedTasks, retryable, failed, busy, removable, allSelected, targets } =
+  const { notRunning, selectedTasks, retryable, failed, removable, allSelected, targets } =
     useMemo(() => {
       const notRunning = shown.filter((task) => task.status !== FlowImageTaskStatus.Running);
       const selectedTasks = notRunning.filter((task) => selected.has(task.id));
@@ -77,11 +77,6 @@ export function AllWorkspace() {
             task.status === FlowImageTaskStatus.Cancelled,
         ),
         failed: tasks.filter((task) => task.status === FlowImageTaskStatus.Failed),
-        busy: tasks.some(
-          (task) =>
-            task.status === FlowImageTaskStatus.Running ||
-            (task.status === FlowImageTaskStatus.Queued && !task.held),
-        ),
         removable: tasks.filter((task) => task.status !== FlowImageTaskStatus.Running),
         allSelected: notRunning.length > 0 && notRunning.every((task) => selected.has(task.id)),
         // References go to the selected tasks, or to every task that can take them.
@@ -200,7 +195,6 @@ export function AllWorkspace() {
               selectedCount={selectedTasks.length}
               retryableCount={retryable.length}
               failedCount={failed.length}
-              busy={busy}
               removableCount={removable.length}
               canAddReferences={models.length > 0}
               onPickReferences={() => void pickReferences()}

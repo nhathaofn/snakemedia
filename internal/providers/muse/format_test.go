@@ -18,22 +18,23 @@ func TestMessageAsksForRatioAndDuration(t *testing.T) {
 		job  MuseJob
 		want string
 	}{
-		{MuseJob{Kind: MuseJobImage, Prompt: "p"}, "Task: Create a new image.\n" + img + "\nPrompt:\np"},
+		{MuseJob{Kind: MuseJobImage, Prompt: "p"}, "Task: Create a new image.\n" + img + "\nprompt:\np"},
 		{MuseJob{Kind: MuseJobImage, Prompt: "p", Ratio: "3:4"},
-			"Task: Create a new image.\nAspect ratio: 3:4 (portrait)\n" + img + "\nPrompt:\np"},
+			"Task: Create a new image.\nAspect ratio: 3:4 (portrait)\n" + img + "\nprompt:\np"},
 		{MuseJob{Kind: MuseJobVideo, Prompt: "p", Ratio: "16:9", Duration: 10},
-			"Task: Create a new video.\nAspect ratio: 16:9 (landscape)\nDuration: 10 seconds\n" + clip(10) + "\nPrompt:\np"},
-		{MuseJob{Kind: MuseJobVideo, Prompt: "p", Duration: 10}, "Task: Create a new video.\nDuration: 10 seconds\n" + clip(10) + "\nPrompt:\np"},
+			"Task: Create a new video.\nAspect ratio: 16:9 (landscape)\nDuration: 10 seconds\n" + clip(10) + "\nprompt:\np"},
+		{MuseJob{Kind: MuseJobVideo, Prompt: "p", Duration: 10}, "Task: Create a new video.\nDuration: 10 seconds\n" + clip(10) + "\nprompt:\np"},
 		// An image never asks for a length, nor for a ratio it is not offered.
-		{MuseJob{Kind: MuseJobImage, Prompt: "p", Duration: 5}, "Task: Create a new image.\n" + img + "\nPrompt:\np"},
+		{MuseJob{Kind: MuseJobImage, Prompt: "p", Duration: 5}, "Task: Create a new image.\n" + img + "\nprompt:\np"},
 		// One attached image takes the role the prompt gives it, else it is
 		// the subject; the ratio asked wins over the image's shape.
 		{MuseJob{Kind: MuseJobVideo, Prompt: "p", References: []string{"r"}, Ratio: "1:1", Duration: 10},
 			"Task: Create a new video.\n" +
 				"Image 1: use it as the prompt says. If the prompt gives it no role, it shows the subject of this video: keep its look exactly, but take background, framing and pose from the prompt.\n" +
+				wardrobeExceptionRule + "\n" +
 				referenceSheetRule + "\n" +
 				"Aspect ratio: 1:1 (square). Frame the video in this ratio, not in the shape of the attached images.\n" +
-				"Duration: 10 seconds\n" + clip(10) + "\nPrompt:\np"},
+				"Duration: 10 seconds\n" + clip(10) + "\nprompt:\np"},
 	}
 	for _, c := range cases {
 		c.want = strings.Replace(c.want, "\n", "\n"+requestRules+"\n", 1)
@@ -160,5 +161,78 @@ func TestEditKeepsHoldOfWaitingJob(t *testing.T) {
 	p.updateJob(job.ID, func(j *MuseJob) { j.Status = MuseJobFailed })
 	if res := p.EditAndRetry(job.ID, "c"); !res.Success || res.Data.Held || res.Data.Status != MuseJobQueued {
 		t.Fatalf("failed edit = %+v", res)
+	}
+}
+
+func TestUpdateJobsFormatUpdatesUnstartedQueueAndStoryboard(t *testing.T) {
+	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"completed"}}
+	page.events, page.files = videoResult("/v.mp4", []byte("v"))
+	p := testProvider(t, page)
+	acc := addSignedIn(t, p, "A")
+	withCaps(p, acc, 6)
+	outDir := t.TempDir()
+	p.media.AllowRoot(outDir)
+
+	// Queue a video batch with storyboard, a single video, an image batch, and a paid video.
+	batchRes := p.SubmitJobs(MuseJobRequest{
+		Kind: MuseJobVideo, Mode: MuseJobBatch, Prompts: []string{"v1"}, OutputDir: outDir,
+		Held: true, Ratio: "16:9", Duration: 10, Storyboard: &MuseStoryboard{Frames: 2},
+	})
+	if !batchRes.Success || len(batchRes.Data) != 2 {
+		t.Fatalf("submit batch: %+v", batchRes)
+	}
+	board, video := batchRes.Data[0], batchRes.Data[1]
+	paid := p.SubmitJobs(MuseJobRequest{
+		Kind: MuseJobVideo, Mode: MuseJobBatch, Prompts: []string{"paid"}, OutputDir: outDir,
+		Held: true, Ratio: "16:9", Duration: 10,
+	}).Data[0]
+	p.updateJob(paid.ID, func(j *MuseJob) { j.SessionID = "already-sent" })
+	single := p.SubmitJobs(MuseJobRequest{
+		Kind: MuseJobVideo, Mode: MuseJobSingle, Prompts: []string{"single"},
+		Held: true, Ratio: "16:9", Duration: 10,
+	}).Data[0]
+	imgBatch := p.SubmitJobs(MuseJobRequest{
+		Kind: MuseJobImage, Mode: MuseJobBatch, Prompts: []string{"img"}, OutputDir: outDir,
+		Held: true, Ratio: "16:9",
+	}).Data[0]
+
+	newRatio := "9:16"
+	if res := p.UpdateJobsFormat(MuseJobsFormatRequest{Kind: MuseJobVideo, Mode: MuseJobBatch, Ratio: &newRatio}); !res.Success || res.Data != 2 {
+		t.Fatalf("ratio update = %+v, want 2 (board + video)", res)
+	}
+	if got := mustJob(t, p, video.ID); got.Ratio != "9:16" || got.Duration != 10 {
+		t.Fatalf("video after ratio update = %+v", got)
+	}
+	if got := mustJob(t, p, board.ID); got.Ratio != "9:16" || got.Duration != 0 {
+		t.Fatalf("board after ratio update = %+v", got)
+	}
+	if got := mustJob(t, p, paid.ID); got.Ratio != "16:9" {
+		t.Fatalf("paid job must stay untouched: %+v", got)
+	}
+	if got := mustJob(t, p, single.ID); got.Ratio != "16:9" {
+		t.Fatalf("single job must stay untouched: %+v", got)
+	}
+	if got := mustJob(t, p, imgBatch.ID); got.Ratio != "16:9" {
+		t.Fatalf("image batch job must stay untouched: %+v", got)
+	}
+
+	newDur := 30
+	if res := p.UpdateJobsFormat(MuseJobsFormatRequest{Kind: MuseJobVideo, Mode: MuseJobBatch, Duration: &newDur}); !res.Success || res.Data != 1 {
+		t.Fatalf("duration update = %+v, want 1 (video only)", res)
+	}
+	if got := mustJob(t, p, video.ID); got.Ratio != "9:16" || got.Duration != 30 {
+		t.Fatalf("video after duration update = %+v", got)
+	}
+	if got := mustJob(t, p, board.ID); got.Duration != 0 {
+		t.Fatalf("board image must keep duration 0: %+v", got)
+	}
+
+	// Clearing back to "Theo prompt" (empty ratio, 0 duration) also applies.
+	emptyRatio, zeroDur := "", 0
+	if res := p.UpdateJobsFormat(MuseJobsFormatRequest{Kind: MuseJobVideo, Mode: MuseJobBatch, Ratio: &emptyRatio, Duration: &zeroDur}); !res.Success || res.Data != 2 {
+		t.Fatalf("clear format = %+v, want 2", res)
+	}
+	if got := mustJob(t, p, video.ID); got.Ratio != "" || got.Duration != 0 {
+		t.Fatalf("video after clear = %+v", got)
 	}
 }

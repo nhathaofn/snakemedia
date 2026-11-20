@@ -131,7 +131,6 @@ export function useMuseSubmit(kind: MuseJobKind, mode: MuseJobMode) {
                   review: draft.boardReview ?? false,
                 })
               : undefined,
-          sourceVideo: draft.sourceVideo?.localUrl || undefined,
         };
         const key = JSON.stringify(values);
         if (pending.current?.key !== key) pending.current = { key, id: crypto.randomUUID() };

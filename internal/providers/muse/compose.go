@@ -171,12 +171,14 @@ func roleRule(role MuseRefRole, roles map[MuseRefRole]bool) string {
 		return "character authority: keep this exact face, body proportions, hair and outfit whenever this character is visible."
 	case MuseRoleProduct:
 		return "sole authority for the product: its shape, colors, materials, printed text and logo exactly as shown, never redrawn or simplified. It overrides any storyboard and any product wording in the prompt."
+	case MuseRoleProp:
+		return "keep this object's exact shape, material and colors whenever it is visible. Do not take people or backgrounds from it."
 	case MuseRoleStoryboard:
 		rule := "authority for composition, camera angle, shot order, setting, lighting and otherwise unlocked wardrobe. Do not reproduce its grid, panel borders or numbers. Use its sketch look only if the requested final style calls for it."
 		if faces {
 			rule += " Faces in it are placeholders: identity comes from the character images."
 		}
-		if roles[MuseRoleProduct] {
+		if roles[MuseRoleProduct] || roles[MuseRoleProp] {
 			rule += " Ignore any product drawn in it: the product comes only from the product image."
 		}
 		return rule
@@ -191,7 +193,7 @@ func roleRule(role MuseRefRole, roles map[MuseRefRole]bool) string {
 // roleNames words a role in the message.
 var roleNames = map[MuseRefRole]string{
 	MuseRoleFace: "character face", MuseRoleCharacter: "character, full look", MuseRoleProduct: "product",
-	MuseRoleStoryboard: "storyboard", MuseRoleSetting: "setting", MuseRoleStyle: "style",
+	MuseRoleProp: "prop", MuseRoleStoryboard: "storyboard", MuseRoleSetting: "setting", MuseRoleStyle: "style",
 }
 
 // roleLines replace the Reference lines when the job's images carry roles:
@@ -280,8 +282,8 @@ func refWarnings(prompt string, info []MuseRefInfo, missingTags []string) []stri
 	if roles[MuseRoleFace] && !roles[MuseRoleCharacter] && !roles[MuseRoleStoryboard] && !describes {
 		out = append(out, "Chỉ có ảnh khuôn mặt: nên thêm ảnh toàn thân / storyboard hoặc tả trang phục, dáng người để nhân vật không bị trôi.")
 	}
-	if roles[MuseRoleStoryboard] && !roles[MuseRoleProduct] {
-		out = append(out, "Có storyboard nhưng chưa có ảnh sản phẩm: sản phẩm sẽ được vẽ theo storyboard, dễ sai màu hoặc chữ.")
+	if roles[MuseRoleStoryboard] && !roles[MuseRoleProduct] && !roles[MuseRoleProp] {
+		out = append(out, "Có storyboard nhưng chưa có ảnh sản phẩm hoặc đạo cụ: sản phẩm / đạo cụ sẽ được vẽ theo storyboard, dễ sai màu hoặc chữ.")
 	}
 	return out
 }

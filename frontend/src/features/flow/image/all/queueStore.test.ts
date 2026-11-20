@@ -46,11 +46,14 @@ describe('image queue store helpers', () => {
     ).toEqual({ running: 1, queued: 1, held: 1, succeeded: 1, failed: 2 });
   });
 
-  it('filters held tasks apart from the ones waiting to run', () => {
-    const held = task('h', FlowImageTaskStatus.Queued, { held: true });
+  it('filters paused tasks apart from newly added or waiting queued tasks', () => {
+    const initialHeld = task('ih', FlowImageTaskStatus.Queued, { held: true, paused: false });
+    const paused = task('p', FlowImageTaskStatus.Queued, { held: true, paused: true });
     const waiting = task('w', FlowImageTaskStatus.Queued);
-    expect(matchesTaskFilter(held, 'held')).toBe(true);
-    expect(matchesTaskFilter(held, FlowImageTaskStatus.Queued)).toBe(false);
+    expect(matchesTaskFilter(initialHeld, FlowImageTaskStatus.Queued)).toBe(true);
+    expect(matchesTaskFilter(initialHeld, 'held')).toBe(false);
+    expect(matchesTaskFilter(paused, 'held')).toBe(true);
+    expect(matchesTaskFilter(paused, FlowImageTaskStatus.Queued)).toBe(false);
     expect(matchesTaskFilter(waiting, FlowImageTaskStatus.Queued)).toBe(true);
     expect(matchesTaskFilter(waiting, 'held')).toBe(false);
     expect(matchesTaskFilter(task('f', FlowImageTaskStatus.Failed), 'all')).toBe(true);

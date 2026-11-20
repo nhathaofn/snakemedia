@@ -149,6 +149,7 @@ func (p *Provider) releaseAfter(board MuseJob) {
 		v.Step = "Đã có storyboard"
 		if v.Review {
 			v.Held = true
+			v.Paused = true
 			v.Step = "Đã có storyboard, xem rồi bấm Chạy để làm video"
 		}
 		return true

@@ -127,7 +127,14 @@ type Account struct {
 	ProxyIP       string `json:"proxyIp,omitempty"`
 	// PausedUntil rests the account after the site said it hit a limit (RFC 3339).
 	PausedUntil string `json:"pausedUntil,omitempty"`
-	Message     string `json:"message,omitempty"`
+	// AutoResume marks an account disabled automatically while resting until
+	// PausedUntil (such as a 24h video limit) so it re-enables automatically once
+	// the pause passes.
+	AutoResume bool `json:"autoResume,omitempty"`
+	// SkipVideoCheck disables deep video-creation probing on Check and excludes
+	// video jobs while keeping the account active for image generation.
+	SkipVideoCheck bool   `json:"skipVideoCheck,omitempty"`
+	Message        string `json:"message,omitempty"`
 	// NoRoute is why the account cannot get a proxy route now. It is worked
 	// out for each listing, never saved; an account with one takes no work.
 	NoRoute       string `json:"noRoute,omitempty"`

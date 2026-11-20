@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Cookie, ListChecks, LogIn } from 'lucide-react';
+import { Cookie, ListChecks, LogIn, Video } from 'lucide-react';
 import './AccountsPage.css';
 import { Button, Icon, SegmentedControl } from '../../../components/ui';
 import { ACCOUNT_CHECK_CONCURRENCY } from '../../../constants';
@@ -15,6 +15,10 @@ import type { AccountAction } from './AccountCard';
 import { AccountPanel } from './AccountPanel';
 import type { PanelMode } from './AccountPanel';
 import { proxyLines } from './AccountPanel';
+import { MuseApiCard } from './MuseApiCard';
+import { ProxyModal } from './ProxyModal';
+import { summarizeAccountCheck, summarizeBatchCheck, videoCheckTargets } from './checkSummary';
+import type { CheckOutcomeItem } from './checkSummary';
 import { runLimited } from './runLimited';
 import { ROUTES } from '../../../routes/registry';
 
@@ -52,6 +56,7 @@ export const AccountsPage: React.FC = () => {
   const setAccount = useAccountsStore((s) => s.setAccount);
   const addToast = useAppStore((s) => s.addToast);
   const [panel, setPanel] = useState<PanelMode | null>(null);
+  const [proxyTargetId, setProxyTargetId] = useState<string | null>(null);
   // What is running, per account id (or 'panel' / 'all' for page work): one
   // slow account never locks the others. The ref answers "already running?"
   // from handlers without waiting for a render.
@@ -81,7 +86,7 @@ export const AccountsPage: React.FC = () => {
     return () => {
       active = false;
     };
-  }, [panelOpen]);
+  }, [panelOpen, proxyTargetId]);
 
   const report = (cause: unknown) =>
     addToast({ type: 'error', message: cause instanceof Error ? cause.message : String(cause) });
@@ -106,41 +111,98 @@ export const AccountsPage: React.FC = () => {
 
   const selectProvider = (next: AccountProvider) => {
     setPanel(null);
+    setProxyTargetId(null);
     setParams({ provider: next }, { replace: true });
   };
 
   // Checks run a few at a time (each may start a browser); accounts already
   // busy with something else are left out.
-  const checkAll = () =>
-    run('all', 'check', async () => {
-      const targets = list.filter((a) => !busyRef.current.has(a.id));
-      const results = await runLimited(targets, ACCOUNT_CHECK_CONCURRENCY, async (account) => {
-        mark(account.id, 'check');
-        try {
-          return keep(await api.checkAccount(account.id)).success;
-        } finally {
-          mark(account.id, null);
-        }
-      });
-      const failed = results.filter((ok) => ok !== true).length;
-      addToast({
-        type: failed ? 'error' : 'success',
-        message: `Đã kiểm tra ${targets.length} tài khoản${failed ? `, ${failed} lỗi` : ''}.`,
-      });
+  const runBatchChecks = (
+    busyKey: 'all' | 'allVideo',
+    actionLabel: 'check' | 'checkVideo',
+    targets: Account[],
+    checkFn: (id: string) => Promise<CheckOutcomeItem['res']>,
+    summaryLabel: string,
+  ) => {
+    if (busyRef.current.has('all') || busyRef.current.has('allVideo')) return;
+    return run(busyKey, actionLabel, async () => {
+      const results = await runLimited<Account, CheckOutcomeItem>(
+        targets,
+        ACCOUNT_CHECK_CONCURRENCY,
+        async (account) => {
+          mark(account.id, actionLabel);
+          try {
+            return { name: account.name, res: keep(await checkFn(account.id)) };
+          } catch (cause) {
+            return {
+              name: account.name,
+              res: {
+                success: false,
+                error: cause instanceof Error ? cause.message : String(cause),
+              },
+            };
+          } finally {
+            mark(account.id, null);
+          }
+        },
+      );
+      const completed = results.filter((item): item is CheckOutcomeItem => item !== undefined);
+      addToast(summarizeBatchCheck(completed, undefined, summaryLabel));
     });
+  };
+
+  const checkAll = () =>
+    runBatchChecks(
+      'all',
+      'check',
+      list.filter((a) => !busyRef.current.has(a.id)),
+      api.checkAccount,
+      'kiểm tra',
+    );
+
+  const checkAllVideo = () => {
+    const targets = videoCheckTargets(list).filter((a) => !busyRef.current.has(a.id));
+    if (targets.length === 0) {
+      addToast({
+        type: 'info',
+        message: 'Không có tài khoản Muse nào đủ điều kiện kiểm tra tạo video.',
+      });
+      return;
+    }
+    return runBatchChecks(
+      'allVideo',
+      'checkVideo',
+      targets,
+      api.checkAccountVideo,
+      'kiểm tra tạo video',
+    );
+  };
 
   const onAction = (action: AccountAction, account: Account) => {
     const key = account.id;
     switch (action) {
       case 'check':
-        return run(key, action, async () => void unwrap(keep(await api.checkAccount(account.id))));
+        return run(key, action, async () => {
+          const res = keep(await api.checkAccount(account.id));
+          addToast(summarizeAccountCheck(account.name, res));
+        });
+      case 'checkVideo':
+        return run(key, action, async () => {
+          const res = keep(await api.checkAccountVideo(account.id));
+          addToast(summarizeAccountCheck(account.name, res));
+        });
       case 'open':
-        return run(key, action, async () =>
-          setAccount(unwrap(await api.openAccountBrowser(account.id))),
-        );
+        return run(key, action, async () => {
+          setAccount(unwrap(await api.openAccountBrowser(account.id)));
+          addToast({ type: 'info', message: `Đã mở Chrome cho "${account.name}".` });
+        });
       case 'toggle':
         return run(key, action, async () =>
           setAccount(unwrap(await api.setAccountEnabled(account.id, !account.enabled))),
+        );
+      case 'videoCheck':
+        return run(key, action, async () =>
+          setAccount(unwrap(await api.setAccountVideoCheck(account.id, !!account.skipVideoCheck))),
         );
       case 'rotate':
         return run(key, action, async () => {
@@ -148,7 +210,7 @@ export const AccountsPage: React.FC = () => {
           addToast({ type: 'success', message: `IP mới của ${account.name}: ${res.ip}` });
         });
       case 'proxy':
-        return setPanel({ kind: 'proxy', account });
+        return setProxyTargetId(account.id);
       case 'cookies':
         return setPanel({ kind: 'replace', account });
       case 'rename':
@@ -174,9 +236,20 @@ export const AccountsPage: React.FC = () => {
       const account = await save();
       setAccount(account);
       if (panel?.kind === 'browser') {
-        addToast({ type: 'info', message: 'Đã mở Chrome. Hãy đăng nhập trong cửa sổ đó.' });
+        addToast({
+          type: 'info',
+          message: `Đã tạo "${account.name}". Chọn proxy (nếu cần) rồi bấm "Mở Chrome" để đăng nhập.`,
+        });
       }
       setPanel(null);
+    });
+
+  const proxyTarget = proxyTargetId ? (list.find((a) => a.id === proxyTargetId) ?? null) : null;
+
+  const applyProxy = (account: Account, line: string) =>
+    run(account.id, 'proxy', async () => {
+      setAccount(unwrap(await api.setAccountProxy(account.id, line)));
+      setProxyTargetId(null);
     });
 
   return (
@@ -201,26 +274,44 @@ export const AccountsPage: React.FC = () => {
             onClick={() => setPanel({ kind: 'browser' })}
           >
             <Icon icon={LogIn} />
-            <span>Đăng nhập bằng Chrome</span>
+            <span>Thêm tài khoản Chrome</span>
           </Button>
           <Button disabled={busy.has('panel')} onClick={() => setPanel({ kind: 'cookies' })}>
             <Icon icon={Cookie} />
             <span>Dán cookie</span>
           </Button>
           {list.length > 0 && (
-            <Button isLoading={busy.has('all')} disabled={busy.has('all')} onClick={checkAll}>
-              <Icon icon={ListChecks} />
-              <span>Kiểm tra tất cả</span>
-            </Button>
+            <>
+              <Button
+                isLoading={busy.has('all')}
+                disabled={busy.has('all') || busy.has('allVideo')}
+                onClick={checkAll}
+              >
+                <Icon icon={ListChecks} />
+                <span>Kiểm tra tất cả</span>
+              </Button>
+              {provider === AccountProvider.Muse && (
+                <Button
+                  isLoading={busy.has('allVideo')}
+                  disabled={busy.has('all') || busy.has('allVideo')}
+                  onClick={checkAllVideo}
+                >
+                  <Icon icon={Video} />
+                  <span>Kiểm tra tạo video</span>
+                </Button>
+              )}
+            </>
           )}
         </div>
       </div>
 
       <p className="accounts-hint">
-        {providerHints[provider]} <ReadyCount list={list} />
+        {providerHints[provider]} <ReadyCount list={list} provider={provider} />
       </p>
 
-      {noProxies && (
+      {provider === AccountProvider.Muse && <MuseApiCard />}
+
+      {noProxies && list.some((a) => !a.proxy) && (
         <div className="accounts-proxy-hint">
           <span>
             Danh sách proxy đang trống. Tài khoản để proxy &quot;Tự động&quot; sẽ không chạy cho tới
@@ -253,20 +344,44 @@ export const AccountsPage: React.FC = () => {
       {!loaded ? (
         <div className="accounts-empty">Đang tải tài khoản…</div>
       ) : list.length === 0 ? (
-        <div className="accounts-empty">
-          Chưa có tài khoản {accountProviderLabels[provider]}. Đăng nhập bằng Chrome hoặc dán cookie
-          để bắt đầu.
-        </div>
+        <EmptyAccountsHint provider={provider} />
       ) : (
         <AccountsGrid list={list} busy={busy} onAction={onAction} />
+      )}
+      {proxyTarget && (
+        <ProxyModal
+          account={proxyTarget}
+          busy={busy.has(proxyTarget.id)}
+          onSelectProxy={(line) => applyProxy(proxyTarget, line)}
+          onOpenProxyList={() => {
+            setProxyTargetId(null);
+            navigate(ROUTES.home.proxy);
+          }}
+          onClose={() => setProxyTargetId(null)}
+        />
       )}
     </div>
   );
 };
 
+function EmptyAccountsHint({ provider }: { provider: AccountProvider }) {
+  const useMuseApi = useAppStore((s) => s.config?.muse?.useApi);
+  return (
+    <div className="accounts-empty">
+      {provider === AccountProvider.Muse && useMuseApi
+        ? 'Chế độ API đang BẬT: Các tác vụ tạo ảnh & video Muse sẽ chạy trực tiếp qua muse2api (không bắt buộc tài khoản Chrome).'
+        : `Chưa có tài khoản ${accountProviderLabels[provider]}. Đăng nhập bằng Chrome hoặc dán cookie để bắt đầu.`}
+    </div>
+  );
+}
+
 /** "Sẵn sàng: n/m." for the hint. It reads the clock itself (rests end over time). */
-function ReadyCount({ list }: { list: readonly Account[] }) {
+function ReadyCount({ list, provider }: { list: readonly Account[]; provider: AccountProvider }) {
   const now = useNow();
+  const useApi = useAppStore((s) => s.config?.muse?.useApi);
+  if (provider === AccountProvider.Muse && useApi) {
+    return <>· API đang bật (sẵn sàng qua muse2api).</>;
+  }
   if (list.length === 0) return null;
   const ready = list.filter((a) => accountReady(a, now)).length;
   return <>{`Sẵn sàng: ${ready}/${list.length}.`}</>;

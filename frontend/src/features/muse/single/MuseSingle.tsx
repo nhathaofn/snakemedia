@@ -25,9 +25,10 @@ import {
   ExtrasGroup,
   FixedAssetsField,
   PromptCheckHint,
-  SourceVideoField,
+  referenceFileSummary,
   StoryboardField,
   TemplateField,
+  useMuseStudio,
 } from '../shared/StudioExtras';
 import { useMuseStore, useVisibleMuseJobs } from '../shared/museStore';
 import { useMuseActions, useMuseSubmit } from '../shared/useMuseActions';
@@ -46,6 +47,7 @@ const placeholders: Record<MuseJobKind, string> = {
 /** Đơn tools: count, references and file name for the next prompt (each result is its own Muse chat). */
 export function MuseSinglePanel({ kind }: { kind: MuseJobKind }) {
   const options = useMuseStore((s) => s.options);
+  const { assets } = useMuseStudio();
   const [draft, update] = useMuseDraft(kind, MuseJobMode.Single);
   const { report } = useMuseActions();
   return (
@@ -69,11 +71,13 @@ export function MuseSinglePanel({ kind }: { kind: MuseJobKind }) {
         duration={draft.duration}
         onChange={update}
       />
-      <ExtrasGroup active={activeExtras(draft)}>
+      <ExtrasGroup
+        active={activeExtras(draft)}
+        summary={referenceFileSummary(assets, draft.assetIds)}
+      >
         <FixedAssetsField draft={draft} update={update} />
         <PromptCheckHint prompt={draft.prompt} assetIds={draft.assetIds} />
         {kind === MuseJobKind.Video && <StoryboardField draft={draft} update={update} />}
-        <SourceVideoField draft={draft} update={update} />
         <TemplateField
           onInsert={(text) =>
             update({ prompt: draft.prompt.trim() ? `${draft.prompt}\n${text}` : text })
@@ -209,7 +213,7 @@ const SingleTile = memo(function SingleTile({
           <div className="muse-tile-state" role={ended ? 'alert' : 'status'}>
             {active ? <Spinner /> : <Icon icon={AlertCircle} size="xl" />}
             <span>
-              {job.held
+              {job.status === MuseJobStatus.Queued && job.paused
                 ? 'Tạm dừng'
                 : active
                   ? job.step || jobStatusLabels[job.status]

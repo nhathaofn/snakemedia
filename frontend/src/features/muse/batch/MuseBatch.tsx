@@ -11,26 +11,26 @@ import {
 import { Button, Icon, IconAction, Modal } from '../../../components/ui';
 import { api, unwrap } from '../../../services';
 import { useAccountsStore, useAppStore } from '../../../stores';
-import { AccountProvider, MuseJobKind, MuseJobMode, MuseJobStatus } from '../../../types';
-import type { MuseJob } from '../../../types';
 import {
-  isEnded,
-  jobStatusLabels,
-  jobsOf,
-  matchesFilter,
-  mayBePaid,
-  selectedShown,
-} from '../shared/format';
+  AccountProvider,
+  MuseJobKind,
+  MuseJobMode,
+  MuseJobStatus,
+  MuseJobsFormatRequest,
+} from '../../../types';
+import type { MuseJob } from '../../../types';
+import { isEnded, jobStatusLabels, jobsOf, matchesFilter, mayBePaid } from '../shared/format';
 import type { QueueFilter } from '../shared/format';
 import { useMuseDraft } from '../shared/museDraft';
-import { FormatFields, ReferencesField } from '../shared/MusePanel';
+import { FormatFields } from '../shared/MusePanel';
 import { MuseNotices } from '../shared/MuseNotices';
 import {
+  activeExtras,
   FixedAssetsField,
-  RefModeField,
-  SourceVideoField,
+  referenceFileSummary,
   StoryboardField,
   TemplateField,
+  useMuseStudio,
 } from '../shared/StudioExtras';
 import { useMuseStore, useVisibleMuseJobs } from '../shared/museStore';
 import { useMuseActions, useMuseSubmit } from '../shared/useMuseActions';
@@ -58,6 +58,7 @@ const filters: readonly { value: QueueFilter; label: string }[] = [
 export function MuseBatchPanel({ kind }: { kind: MuseJobKind }) {
   const formId = `muse-${kind}-batch`;
   const options = useMuseStore((s) => s.options);
+  const { assets } = useMuseStudio();
   const allJobs = useVisibleMuseJobs();
   const jobs = useMemo(() => jobsOf(allJobs, kind, MuseJobMode.Batch), [allJobs, kind]);
   // Held jobs wait for "Chạy"; prompts still waiting or running are not added twice.
@@ -74,7 +75,26 @@ export function MuseBatchPanel({ kind }: { kind: MuseJobKind }) {
   const [outputDir, setOutputDir] = useState('');
   const { submit } = useMuseSubmit(kind, MuseJobMode.Batch);
   const addToast = useAppStore((s) => s.addToast);
-  const { act, report } = useMuseActions();
+  const { act } = useMuseActions();
+
+  const syncFormat = (change: { ratio?: string; duration?: number }) => {
+    if (!jobs.some((j) => j.status === MuseJobStatus.Queued && !mayBePaid(j))) return;
+    void act(async () => {
+      const updated = unwrap(
+        await api.updateMuseJobsFormat(
+          MuseJobsFormatRequest.createFrom({
+            kind,
+            mode: MuseJobMode.Batch,
+            ...change,
+          }),
+        ),
+      );
+      if (updated > 0) {
+        addToast({ type: 'success', message: `Đã cập nhật cho ${updated} tác vụ đang chờ.` });
+      }
+    });
+  };
+
   return (
     <div className="studio-mode-panel is-docked">
       <div className="studio-panel-scroll">
@@ -85,6 +105,7 @@ export function MuseBatchPanel({ kind }: { kind: MuseJobKind }) {
             ratio={draft.ratio}
             duration={draft.duration}
             onChange={update}
+            onUserChange={syncFormat}
           />
           <OutputFolderField
             provider={AccountProvider.Muse}
@@ -92,20 +113,14 @@ export function MuseBatchPanel({ kind }: { kind: MuseJobKind }) {
             onChange={setOutputDir}
           />
         </ConfigGroup>
-        <ConfigGroup title="Ảnh tham chiếu">
-          <ReferencesField
-            label="Đã chọn"
-            references={draft.references}
-            options={options}
-            onChange={(references) => update({ references })}
-            onError={report}
-          />
-          <RefModeField draft={draft} update={update} />
-        </ConfigGroup>
-        <ConfigGroup title="Đồng nhất nhân vật">
+        <ConfigGroup
+          title="Đồng nhất nhân vật"
+          collapsible
+          badge={activeExtras(draft)}
+          summary={referenceFileSummary(assets, draft.assetIds)}
+        >
           <FixedAssetsField draft={draft} update={update} />
           {kind === MuseJobKind.Video && <StoryboardField draft={draft} update={update} />}
-          <SourceVideoField draft={draft} update={update} />
           <TemplateField />
         </ConfigGroup>
         <BatchForm
@@ -154,7 +169,16 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
   const jobs = useMemo(() => jobsOf(allJobs, kind, MuseJobMode.Batch).reverse(), [allJobs, kind]);
   const openPreview = useCallback((job: MuseJob, url: string) => setPreview({ job, url }), []);
   const shown = useMemo(() => jobs.filter((job) => matchesFilter(job, filter)), [jobs, filter]);
-  const selected = useMemo(() => selectedShown(shown, selectedIds), [shown, selectedIds]);
+  const selectedJobs = useMemo(
+    () => shown.filter((job) => selectedIds.has(job.id)),
+    [shown, selectedIds],
+  );
+  const selected = useMemo(() => selectedJobs.map((j) => j.id), [selectedJobs]);
+  const runnableSelected = useMemo(
+    () => selectedJobs.filter((j) => j.status === MuseJobStatus.Queued && j.held).map((j) => j.id),
+    [selectedJobs],
+  );
+  const retryableSelected = useMemo(() => selectedJobs.filter(isEnded), [selectedJobs]);
   const allShownSelected = shown.length > 0 && selected.length === shown.length;
   const counts = useMemo(() => {
     const byFilter = new Map<QueueFilter, number>();
@@ -167,7 +191,7 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
     () => jobs.filter((j) => j.status === MuseJobStatus.Queued && !j.held).length,
     [jobs],
   );
-  const endedCount = useMemo(() => jobs.filter(isEnded).length, [jobs]);
+  const failedJobs = useMemo(() => jobs.filter((j) => j.status === MuseJobStatus.Failed), [jobs]);
   // A job's number is its prompt's place in its batch, else its place in the queue.
   const numbers = useMemo(
     () => new Map(jobs.map((job, index) => [job.id, job.index || index + 1])),
@@ -212,6 +236,23 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
       setSelectedIds(new Set());
     });
 
+  const retryBatch = (targets: readonly MuseJob[]) => {
+    if (targets.length === 0) return;
+    const paidCount = targets.filter(mayBePaid).length;
+    if (
+      paidCount > 0 &&
+      !window.confirm(
+        `Có ${paidCount}/${targets.length} tác vụ mà Muse có thể đã nhận. Chạy lại sẽ gửi chat mới và có thể tốn thêm lượt. Tiếp tục?`,
+      )
+    ) {
+      return;
+    }
+    void bulk(
+      async () => unwrap(await api.retryMuseJobs(targets.map((j) => j.id))),
+      (n) => `Đã chuyển ${n} tác vụ sang Chờ chạy.`,
+    );
+  };
+
   return (
     <div className="muse-workspace">
       <MuseNotices />
@@ -223,19 +264,27 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
           <>
             {selected.length > 0 ? (
               <>
-                <Button
-                  size="sm"
-                  variant="primary"
-                  onClick={() =>
-                    void bulk(
-                      async () => unwrap(await api.runMuseJobs(selected)),
-                      (n) => `Đã chạy ${n} tác vụ.`,
-                    )
-                  }
-                >
-                  <Icon icon={Play} size="sm" />
-                  <span>Chạy ({selected.length})</span>
-                </Button>
+                {runnableSelected.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    onClick={() =>
+                      void bulk(
+                        async () => unwrap(await api.runMuseJobs(runnableSelected)),
+                        (n) => `Đã chạy ${n} tác vụ.`,
+                      )
+                    }
+                  >
+                    <Icon icon={Play} size="sm" />
+                    <span>Chạy ({runnableSelected.length})</span>
+                  </Button>
+                )}
+                {retryableSelected.length > 0 && (
+                  <Button size="sm" variant="primary" onClick={() => retryBatch(retryableSelected)}>
+                    <Icon icon={RotateCcw} size="sm" />
+                    <span>Chạy lại ({retryableSelected.length})</span>
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="danger"
@@ -272,23 +321,8 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
                 <IconAction
                   icon={RotateCcw}
                   label="Chạy lại các tác vụ lỗi"
-                  disabled={endedCount === 0}
-                  onClick={() =>
-                    void bulk(
-                      async () => {
-                        // Older runs are always hidden: retry only the failed jobs shown, never
-                        // ones Muse may already have taken (the backend's bulk rule).
-                        // A refused retry does not stop the others; the count says how many went.
-                        const shownFailed = jobs.filter((j) => isEnded(j) && !mayBePaid(j));
-                        let retried = 0;
-                        for (const j of shownFailed) {
-                          if ((await api.retryMuseJob(j.id)).success) retried++;
-                        }
-                        return retried;
-                      },
-                      (n) => `Đã chạy lại ${n} tác vụ lỗi.`,
-                    )
-                  }
+                  disabled={failedJobs.length === 0}
+                  onClick={() => retryBatch(failedJobs)}
                 />
                 <IconAction
                   icon={Trash2}

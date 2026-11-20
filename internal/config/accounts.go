@@ -40,7 +40,7 @@ func DefaultAccountConfig() AccountConfig {
 		BrowserStartupTimeoutSeconds: 30,
 		MaxResponseBytes:             4 << 20,
 		MaxDownloadBytes:             512 << 20,
-		IdleBrowserMinutes:           10,
+		IdleBrowserMinutes:           5,
 	}
 }
 

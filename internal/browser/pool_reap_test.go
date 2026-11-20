@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -59,8 +60,8 @@ func TestPoolReapsIdleHeadlessBrowsers(t *testing.T) {
 func TestPoolCloseAllRefusesNewBrowsers(t *testing.T) {
 	pool, profile := testPool(t)
 	pool.start = startFake
-	closed := 0
-	pool.shutdown = func(*Browser, config.AccountConfig) error { closed++; return nil }
+	var closed atomic.Int32
+	pool.shutdown = func(*Browser, config.AccountConfig) error { closed.Add(1); return nil }
 	other := filepath.Join(filepath.Dir(profile), "other")
 	for _, dir := range []string{profile, other} {
 		if _, err := pool.Get(context.Background(), dir, Want{Route: "direct"}); err != nil {
@@ -68,8 +69,8 @@ func TestPoolCloseAllRefusesNewBrowsers(t *testing.T) {
 		}
 	}
 	pool.CloseAll()
-	if closed != 2 {
-		t.Fatalf("closed %d browsers, want 2", closed)
+	if got := closed.Load(); got != 2 {
+		t.Fatalf("closed %d browsers, want 2", got)
 	}
 	if _, err := pool.Get(context.Background(), profile, Want{Route: "direct"}); !errors.Is(err, errPoolClosed) {
 		t.Fatalf("browser started after CloseAll: %v", err)

@@ -26,6 +26,7 @@ func TestBuildArgs_IncludesRealisticFlags(t *testing.T) {
 		"--disable-sync",
 		"--disable-default-apps",
 		"--disable-component-update",
+		"--disable-blink-features=AutomationControlled",
 		"--disable-features=Translate,OptimizationHints,MediaRouter",
 		"--proxy-server=http://127.0.0.1:8888",
 		"https://flow.google.com",
@@ -43,5 +44,10 @@ func TestBuildArgs_IncludesRealisticFlags(t *testing.T) {
 	if strings.Contains(argStr, "--remote-allow-origins") || strings.Contains(argStr, "--disable-background") ||
 		strings.Contains(argStr, "--max-old-space-size") || strings.Count(argStr, "--disable-features") > 1 {
 		t.Fatal("unsafe or resource-heavy browser flags")
+	}
+
+	headlessArgs := strings.Join(BuildArgs(LaunchOptions{ChromePath: opts.ChromePath, ProfileDir: opts.ProfileDir, Port: opts.Port, Headless: true}), " ")
+	if !strings.Contains(headlessArgs, "--headless=new") || !strings.Contains(headlessArgs, "--window-size=1366,768") {
+		t.Fatalf("headless args missing expected viewport/headless flags: %s", headlessArgs)
 	}
 }

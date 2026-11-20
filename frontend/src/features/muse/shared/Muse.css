@@ -308,6 +308,13 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-3);
+  max-height: var(--muse-asset-chips-max-height);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.muse-asset-chips::-webkit-scrollbar {
+  display: none;
 }
 
 .muse-asset-chip {
@@ -335,6 +342,13 @@
   box-shadow: inset 0 0 0 var(--border-width) var(--accent);
 }
 
+.muse-asset-filter-input {
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-small);
+}
+
 .muse-check {
   display: flex;
   align-items: center;
@@ -344,12 +358,6 @@
 
 .studio-field-hint.is-warning {
   color: var(--warning);
-}
-
-.muse-thumb video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
 }
 
 /* The earlier run's toggle, at the top right of a Muse workspace. */
@@ -393,8 +401,31 @@
 
 .muse-extras-chevron {
   margin-left: auto;
+  flex-shrink: 0;
   color: var(--text-muted);
   transition: transform var(--transition-fast);
+}
+
+.muse-extras-summary-meta {
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-regular);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.muse-extras-summary-meta + .muse-extras-chevron {
+  margin-left: 0;
+}
+
+.muse-extras[open] .muse-extras-summary-meta {
+  display: none;
+}
+
+.muse-extras[open] .muse-extras-summary-meta + .muse-extras-chevron {
+  margin-left: auto;
 }
 
 .muse-extras[open] .muse-extras-chevron {
@@ -406,18 +437,6 @@
   flex-direction: column;
   gap: var(--space-8);
   padding-top: var(--space-6);
-}
-
-.muse-video-pick {
-  display: flex;
-  align-items: center;
-  gap: var(--space-6);
-}
-
-.muse-video-pick .studio-field-hint {
-  flex: 1;
-  min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 /* Footer actions sit together on the right, the main one last. */

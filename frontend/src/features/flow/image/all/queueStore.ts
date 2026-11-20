@@ -57,12 +57,12 @@ export const TASK_FILTERS: readonly { value: TaskFilter; label: string }[] = [
   { value: FlowImageTaskStatus.Failed, label: 'Lỗi' },
 ];
 
-/** Whether task shows under filter; a held task counts as Tạm dừng, not Chờ chạy. */
+/** Whether task shows under filter; only user-paused queued tasks count as Tạm dừng. */
 export function matchesTaskFilter(task: FlowImageTask, filter: TaskFilter): boolean {
   if (filter === 'all') return true;
-  if (filter === 'held') return task.status === FlowImageTaskStatus.Queued && !!task.held;
+  if (filter === 'held') return task.status === FlowImageTaskStatus.Queued && !!task.paused;
   if (filter === FlowImageTaskStatus.Queued) {
-    return task.status === FlowImageTaskStatus.Queued && !task.held;
+    return task.status === FlowImageTaskStatus.Queued && !task.paused;
   }
   return task.status === filter;
 }

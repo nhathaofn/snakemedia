@@ -43,6 +43,7 @@ export const JobRow = memo(function JobRow({
 }: JobRowProps) {
   const ended = isEnded(job);
   const busy = job.status === MuseJobStatus.Processing;
+  const paused = job.status === MuseJobStatus.Queued && !!job.paused;
   const shownRefs = job.references.slice(0, SHOWN_REFERENCES);
   const moreRefs = job.references.length - shownRefs.length;
   // What the job asked Muse for besides the prompt: "9:16 · 8s".
@@ -127,16 +128,20 @@ export const JobRow = memo(function JobRow({
       </div>
 
       <QueueProgress
-        tone={job.held ? 'held' : tones[job.status]}
+        tone={paused ? 'held' : tones[job.status]}
         label={
-          job.held
+          paused
             ? 'Tạm dừng'
             : job.saveError
               ? 'Đã tạo, lưu file thất bại'
               : jobStatusLabels[job.status]
         }
         title={[accountName, format].filter(Boolean).join(' · ') || undefined}
-        detail={busy ? job.step : format || undefined}
+        detail={
+          busy || (job.status === MuseJobStatus.Queued && !job.held && job.step)
+            ? job.step
+            : format || undefined
+        }
         error={ended ? job.error : undefined}
         warning={[job.saveError, jobNote(job)].filter(Boolean).join(' ') || undefined}
         savedPath={job.status === MuseJobStatus.Succeeded ? saved : undefined}

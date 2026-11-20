@@ -5,7 +5,12 @@ import { BatchForm, ConfigGroup, OutputFolderField, RunDock } from '../../../../
 import { Button } from '../../../../components/ui';
 import { ROUTES } from '../../../../routes/registry';
 import { useAppStore } from '../../../../stores';
-import { AccountProvider, FlowImageTaskRequest, FlowImageTaskStatus } from '../../../../types';
+import {
+  AccountProvider,
+  FlowImageTaskRequest,
+  FlowImageTaskSettingsRequest,
+  FlowImageTaskStatus,
+} from '../../../../types';
 import type { FlowImageQuality as FlowImageQualityType } from '../../../../types';
 import {
   FlowModePanel,
@@ -114,6 +119,52 @@ export const AllModePanel: React.FC = () => {
     }
   };
 
+  const syncQueuedSettings = async (change: {
+    modelId?: string;
+    aspectRatio?: string;
+    quality?: FlowImageQualityType;
+  }) => {
+    if (!tasks.some((t) => t.status === FlowImageTaskStatus.Queued && !t.requestId)) return;
+    const response = await api.updateFlowImageTasksSettings(
+      FlowImageTaskSettingsRequest.createFrom(change),
+    );
+    if (!response.success) {
+      addToast({
+        type: 'error',
+        title: 'Không cập nhật được tác vụ đang chờ',
+        message: response.error ?? 'Không rõ lỗi.',
+      });
+      return;
+    }
+    if ((response.data ?? 0) > 0) {
+      addToast({
+        type: 'success',
+        message: `Đã cập nhật cho ${response.data} tác vụ đang chờ.`,
+      });
+    }
+  };
+
+  const handleModelChange = (modelId: string) => {
+    setSelectedModel(modelId);
+    const nextModel = models.find((m) => m.id === modelId);
+    const nextQuality =
+      nextModel?.availableQualities?.length &&
+      !nextModel.availableQualities.includes(allImageQuality)
+        ? (nextModel.availableQualities[0] as FlowImageQualityType)
+        : undefined;
+    void syncQueuedSettings({ modelId, ...(nextQuality ? { quality: nextQuality } : {}) });
+  };
+
+  const handleRatioChange = (aspectRatio: string) => {
+    setAllAspectRatio(aspectRatio);
+    void syncQueuedSettings({ aspectRatio });
+  };
+
+  const handleQualityChange = (quality: FlowImageQualityType) => {
+    setAllImageQuality(quality);
+    void syncQueuedSettings({ quality });
+  };
+
   return (
     <FlowModePanel showRotationStatus={false} className="is-docked flow-image-all-mode-panel">
       <div className="studio-panel-scroll">
@@ -124,7 +175,7 @@ export const AllModePanel: React.FC = () => {
               label="Model"
               value={selectedModel}
               options={models.map((m) => ({ value: m.id, label: m.name }))}
-              onChange={setSelectedModel}
+              onChange={handleModelChange}
               loading={loading}
               error={error ? { title: 'Không tải được danh sách model', message: error } : null}
               emptyLabel="Chưa có"
@@ -137,7 +188,7 @@ export const AllModePanel: React.FC = () => {
                 value: ratio,
                 label: ratioLabel(ratio),
               }))}
-              onChange={setAllAspectRatio}
+              onChange={handleRatioChange}
               loading={!config && !configError}
               error={
                 configError ? { title: 'Không tải được cấu hình', message: configError } : null
@@ -152,7 +203,7 @@ export const AllModePanel: React.FC = () => {
                 value: quality,
                 label: quality,
               }))}
-              onChange={(quality) => setAllImageQuality(quality as FlowImageQualityType)}
+              onChange={(quality) => handleQualityChange(quality as FlowImageQualityType)}
               emptyLabel="Chưa có"
             />
             <OutputFolderField

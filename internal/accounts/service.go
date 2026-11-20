@@ -55,13 +55,15 @@ type Service struct {
 	ensureTab func(context.Context, int, config.AccountConfig, browser.Site) error
 	inject    func(context.Context, int, config.AccountConfig, []browser.Cookie) error
 
-	mu        sync.Mutex
-	ctx       context.Context
-	emit      func(events.Event, any)
-	routes    map[string]proxy.Route // account ID -> route its running browser uses
-	watching  map[string]bool        // accounts with an open sign-in watcher
-	listeners []func()
-	removed   []func(Record)
+	mu                     sync.Mutex
+	ctx                    context.Context
+	emit                   func(events.Event, any)
+	routes                 map[string]proxy.Route // account ID -> route its running browser uses
+	watching               map[string]bool        // accounts with an open sign-in watcher
+	listeners              []func()
+	removed                []func(Record)
+	browserClosedListeners []func(Record)
+	autoResumedListeners   []func(Record)
 	// notifyDelay coalesces account changes into one event (0: notify at once).
 	notifyDelay time.Duration
 	notifyTimer *time.Timer
@@ -103,32 +105,91 @@ func New(dir string, cfg *config.Manager, sites ...Site) *Service {
 	return s
 }
 
+const autoResumeInterval = 30 * time.Second
+
 // Start sets the lifetime of background work (sign-in watchers, cookie
 // checks) and how changes reach the frontend.
 func (s *Service) Start(ctx context.Context, emit func(events.Event, any)) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.ctx = ctx
 	if emit != nil {
 		s.emit = emit
 	}
 	s.pool.OnClosed(s.browserClosed)
 	s.pool.Reap(ctx)
+	s.mu.Unlock()
+	s.ResumeExpired()
+	s.goBackground(func() {
+		ticker := time.NewTicker(autoResumeInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.ResumeExpired()
+			}
+		}
+	})
+}
+
+// ResumeExpired re-enables any account whose timed auto-pause (such as a 24h
+// daily video limit) has elapsed.
+func (s *Service) ResumeExpired() {
+	records, err := s.store.list()
+	if err != nil {
+		return
+	}
+	now := s.now()
+	var resumed []Record
+	for _, rec := range records {
+		if !rec.AutoResume || rec.Enabled {
+			continue
+		}
+		if rec.PausedUntil != "" {
+			if until, err := time.Parse(time.RFC3339, rec.PausedUntil); err == nil && until.After(now) {
+				continue
+			}
+		}
+		changed := false
+		updated, err := s.Update(rec.ID, func(r *Record) {
+			if !r.AutoResume || r.Enabled {
+				return
+			}
+			if r.PausedUntil != "" {
+				if until, err := time.Parse(time.RFC3339, r.PausedUntil); err == nil && until.After(now) {
+					return
+				}
+			}
+			r.Enabled = true
+			r.AutoResume = false
+			r.PausedUntil = ""
+			r.Message = ""
+			changed = true
+		})
+		if err == nil && changed {
+			resumed = append(resumed, updated)
+		}
+	}
+	s.notifyAutoResumed(resumed)
 }
 
 // browserClosed forgets the route of a browser the pool closed while idle and
 // frees the proxy bridges nothing runs on any more.
 func (s *Service) browserClosed(profileDir string) {
+	var closed []Record
 	if records, err := s.store.list(); err == nil {
 		s.mu.Lock()
 		for _, rec := range records {
 			if filepath.Clean(rec.ProfileDir) == filepath.Clean(profileDir) {
 				delete(s.routes, rec.ID)
+				closed = append(closed, rec)
 			}
 		}
 		s.mu.Unlock()
 	}
 	s.pruneBridges()
+	s.notifyBrowserClosed(closed)
 }
 
 // pruneBridges closes the local proxy bridges no recorded route uses.
@@ -194,6 +255,100 @@ func (s *Service) OnRemove(fn func(Record)) {
 	s.mu.Lock()
 	s.removed = append(s.removed, fn)
 	s.mu.Unlock()
+}
+
+// OnBrowserClosed registers fn to run after an account's browser closes.
+func (s *Service) OnBrowserClosed(fn func(Record)) {
+	if fn == nil {
+		return
+	}
+	s.mu.Lock()
+	s.browserClosedListeners = append(s.browserClosedListeners, fn)
+	s.mu.Unlock()
+}
+
+// OnAutoResumed registers fn to run after an account's timed auto-pause expires
+// and ResumeExpired re-enables it.
+func (s *Service) OnAutoResumed(fn func(Record)) {
+	if fn == nil {
+		return
+	}
+	s.mu.Lock()
+	s.autoResumedListeners = append(s.autoResumedListeners, fn)
+	s.mu.Unlock()
+}
+
+func (s *Service) notifyBrowserClosed(closed []Record) {
+	if len(closed) == 0 {
+		return
+	}
+	s.mu.Lock()
+	listeners := append([]func(Record){}, s.browserClosedListeners...)
+	s.mu.Unlock()
+	for _, rec := range closed {
+		for _, fn := range listeners {
+			fn(rec)
+		}
+	}
+}
+
+func (s *Service) notifyAutoResumed(resumed []Record) {
+	if len(resumed) == 0 {
+		return
+	}
+	s.mu.Lock()
+	listeners := append([]func(Record){}, s.autoResumedListeners...)
+	s.mu.Unlock()
+	for _, rec := range resumed {
+		for _, fn := range listeners {
+			fn(rec)
+		}
+	}
+}
+
+// SyncCookies updates stored cookies for a cookie-sourced account from its
+// currently running browser when cookies rotated, so future profile restarts
+// inject refreshed cookies rather than stale ones.
+func (s *Service) SyncCookies(ctx context.Context, id string, port int) {
+	if port <= 0 {
+		return
+	}
+	rec, site, err := s.lookup(id)
+	if err != nil || rec.Source != SourceCookies {
+		return
+	}
+	cookies, err := browser.ReadCookies(ctx, port, s.cfg.Get().Accounts, site.AcceptsCookie)
+	if err != nil || len(cookies) == 0 || cookiesEqual(rec.Cookies, cookies) {
+		return
+	}
+	version := uuid.NewString()
+	_, err = s.Update(id, func(r *Record) {
+		if r.Source != SourceCookies {
+			return
+		}
+		r.Cookies = cookies
+		r.CookieVersion = version
+	})
+	if err == nil {
+		_ = os.WriteFile(filepath.Join(rec.ProfileDir, cookieMarker), []byte(version), 0o600)
+	}
+}
+
+func cookiesEqual(a, b []browser.Cookie) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	byKey := make(map[string]browser.Cookie, len(a))
+	for _, c := range a {
+		byKey[c.Domain+"\x00"+c.Path+"\x00"+c.Name] = c
+	}
+	for _, c := range b {
+		prev, ok := byKey[c.Domain+"\x00"+c.Path+"\x00"+c.Name]
+		if !ok || prev.Value != c.Value {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) lifetime() context.Context {
@@ -537,19 +692,34 @@ func (s *Service) closeBrowser(rec Record) error {
 	delete(s.routes, rec.ID)
 	s.mu.Unlock()
 	s.pruneBridges()
+	s.notifyBrowserClosed([]Record{rec})
 	return nil
+}
+
+// CloseHeadlessIfIdle closes the account's running headless browser when no
+// work holds it; visible windows opened by the user stay open.
+func (s *Service) CloseHeadlessIfIdle(id string) error {
+	rec, err := s.store.get(id)
+	if err != nil {
+		return err
+	}
+	b := s.pool.Running(rec.ProfileDir)
+	if b == nil || !b.Headless {
+		return nil
+	}
+	return s.closeBrowser(rec)
 }
 
 // ---------- Checking and signing in ----------
 
-// waitSignedIn polls the site until it reports a signed-in session or
-// timeout passes. The last inspection error is returned when it never did.
+// waitSignedIn polls the site until it reports a signed-in session, a fatal
+// account restriction, or timeout passes.
 func (s *Service) waitSignedIn(ctx context.Context, site Site, b *browser.Browser, rec Record, timeout time.Duration) (Inspection, error) {
 	poll := time.Duration(s.cfg.Get().Accounts.PollIntervalMS) * time.Millisecond
 	deadline := s.now().Add(timeout)
 	for {
 		insp, err := site.Inspect(ctx, b, rec)
-		if err == nil && insp.SignedIn {
+		if err == nil && (insp.SignedIn || insp.Fatal != "") {
 			return insp, nil
 		}
 		if ctx.Err() != nil {
@@ -575,22 +745,48 @@ func sleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// check opens the account's page, confirms the session and reads its usage.
-// Imported cookies are seeded once more when the page is signed out.
+// check performs a fast session + quota verification without media generation.
 func (s *Service) check(ctx context.Context, id string) (Record, error) {
+	return s.runCheck(ctx, id, false)
+}
+
+// checkVideo performs session verification followed by an active video test
+// when the provider implements VideoChecker.
+func (s *Service) checkVideo(ctx context.Context, id string) (Record, error) {
+	return s.runCheck(ctx, id, true)
+}
+
+func (s *Service) runCheck(ctx context.Context, id string, probeVideo bool) (Record, error) {
 	rec, site, err := s.lookup(id)
 	if err != nil {
 		return Record{}, err
 	}
+	var checker VideoChecker
+	if probeVideo {
+		c, ok := site.(VideoChecker)
+		if !ok {
+			return rec, fmt.Errorf("Tài khoản %s không hỗ trợ kiểm tra tạo video.", LabelOf(site))
+		}
+		checker = c
+	}
+	if s.InUse(id) {
+		return rec, errors.New("Tài khoản đang chạy tác vụ, hãy kiểm tra sau khi tác vụ xong.")
+	}
+	defer func() { _ = s.CloseHeadlessIfIdle(id) }()
+	release := s.Acquire(id)
+	defer release()
+
 	b, err := s.open(ctx, rec, site, false)
 	if err != nil {
-		updated, _ := s.Update(id, func(r *Record) { r.Status, r.Message = StatusError, err.Error() })
+		updated, _ := s.Update(id, func(r *Record) {
+			r.Status, r.Message, r.LastCheckedAt = StatusError, err.Error(), s.now().UTC().Format(time.RFC3339)
+		})
 		return updated, err
 	}
 	policy := s.cfg.Get().Accounts
 	timeout := time.Duration(policy.PageReadySeconds) * time.Second
 	insp, err := s.waitSignedIn(ctx, site, b, rec, timeout)
-	if err == nil && !insp.SignedIn && len(rec.Cookies) > 0 {
+	if err == nil && !insp.SignedIn && insp.Fatal == "" && len(rec.Cookies) > 0 {
 		if s.inject(ctx, b.Port, policy, rec.Cookies) == nil {
 			if tab, found, _ := browser.FindTab(ctx, b.Port, policy, site.Page().Owns); found {
 				_ = browser.Navigate(ctx, tab, b.Port, site.Page())
@@ -607,13 +803,51 @@ func (s *Service) check(ctx context.Context, id string) (Record, error) {
 		})
 		return updated, err
 	}
+	if probeVideo && insp.SignedIn && insp.Fatal == "" && insp.PausedUntil.IsZero() && !insp.VideoCheckDisabled {
+		if conflict := s.identityConflict(id, insp.Identity); conflict != nil {
+			updated, _ := s.Update(id, func(r *Record) {
+				r.Status, r.Message, r.LastCheckedAt = StatusError, conflict.Error(), s.now().UTC().Format(time.RFC3339)
+			})
+			return updated, conflict
+		}
+		if cur, _ := s.Record(id); cur.ID != "" {
+			rec = cur
+		}
+		if !rec.SkipVideoCheck {
+			_, _ = s.Update(id, func(r *Record) {
+				r.Status, r.Message = StatusSignedIn, "Đã đăng nhập, đang kiểm tra tạo video thử…"
+				if insp.Identity != "" {
+					r.Identity = insp.Identity
+				}
+				if insp.Usage != nil {
+					r.Usage = insp.Usage
+				}
+				if insp.Data != nil {
+					_ = r.SetData(insp.Data)
+				}
+			})
+		}
+		insp, err = checker.CheckVideo(ctx, b, rec, insp)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return rec, ctxErr
+		}
+		if err != nil {
+			updated, _ := s.Update(id, func(r *Record) {
+				r.Status, r.Message, r.LastCheckedAt = StatusError, err.Error(), s.now().UTC().Format(time.RFC3339)
+			})
+			return updated, err
+		}
+	}
+	if insp.SignedIn && insp.Fatal == "" && b != nil && b.Port > 0 {
+		s.SyncCookies(ctx, id, b.Port)
+	}
 	return s.apply(id, insp)
 }
 
 // apply records what an inspection found. A session for another identity
 // than the account's, or one already saved as another account, is refused.
 func (s *Service) apply(id string, insp Inspection) (Record, error) {
-	if insp.SignedIn {
+	if insp.SignedIn && insp.Fatal == "" {
 		if conflict := s.identityConflict(id, insp.Identity); conflict != nil {
 			updated, _ := s.Update(id, func(r *Record) {
 				r.Status, r.Message, r.LastCheckedAt = StatusError, conflict.Error(), s.now().UTC().Format(time.RFC3339)
@@ -621,17 +855,9 @@ func (s *Service) apply(id string, insp Inspection) (Record, error) {
 			return updated, conflict
 		}
 	}
-	return s.Update(id, func(r *Record) {
+	var fatalErr error
+	updated, err := s.Update(id, func(r *Record) {
 		r.LastCheckedAt = s.now().UTC().Format(time.RFC3339)
-		if !insp.SignedIn {
-			r.Status, r.Message = StatusSignedOut, "Chưa đăng nhập. Bấm Mở Chrome để đăng nhập lại"
-			if r.Source == SourceCookies {
-				r.Message += ", hoặc dán cookie mới"
-			}
-			r.Message += "."
-			return
-		}
-		r.Status, r.Message = StatusSignedIn, insp.Note
 		if insp.Identity != "" {
 			r.Identity = insp.Identity
 		}
@@ -643,10 +869,50 @@ func (s *Service) apply(id string, insp Inspection) (Record, error) {
 				r.Message = err.Error()
 			}
 		}
+		if insp.Fatal != "" {
+			r.Status, r.Message = StatusError, insp.Fatal
+			if insp.DisableAccount {
+				r.Enabled = false
+				r.AutoResume = false
+				r.PausedUntil = ""
+			}
+			fatalErr = errors.New(insp.Fatal)
+			return
+		}
+		if !insp.SignedIn {
+			r.Status, r.Message = StatusSignedOut, "Chưa đăng nhập. Bấm Mở Chrome để đăng nhập lại"
+			if r.Source == SourceCookies {
+				r.Message += ", hoặc dán cookie mới"
+			}
+			r.Message += "."
+			return
+		}
+		r.Status, r.Message = StatusSignedIn, insp.Note
+		if insp.VideoCheckDisabled {
+			r.SkipVideoCheck = true
+		} else if insp.VideoVerified {
+			r.SkipVideoCheck = false
+		}
+		if !insp.PausedUntil.IsZero() {
+			r.PausedUntil = insp.PausedUntil.UTC().Format(time.RFC3339)
+			r.AutoResume = insp.AutoResume
+			if insp.DisableAccount {
+				r.Enabled = false
+			}
+			return
+		}
 		if insp.Resume {
 			r.PausedUntil = ""
+			if r.AutoResume {
+				r.Enabled = true
+			}
+			r.AutoResume = false
 		}
 	})
+	if err != nil {
+		return updated, err
+	}
+	return updated, fatalErr
 }
 
 func (s *Service) identityConflict(id, identity string) error {
@@ -716,8 +982,9 @@ func (s *Service) watch(b *browser.Browser, id string, site Site) {
 		})
 	}
 	closed := 0
+	watchPoll := max(time.Duration(policy.PollIntervalMS)*time.Millisecond, 3*time.Second)
 	for {
-		if err := s.sleep(ctx, time.Duration(policy.PollIntervalMS)*time.Millisecond); err != nil {
+		if err := s.sleep(ctx, watchPoll); err != nil {
 			signedOut("Hết thời gian chờ đăng nhập.")
 			return
 		}
@@ -769,7 +1036,7 @@ func (s *Service) newRecord(provider Provider, name string, source Source) Recor
 	return Record{
 		Account: Account{
 			ID: uuid.NewString(), Provider: provider, Name: name, Source: source,
-			Status: StatusUnverified, Enabled: true, Usage: []UsageItem{}, CreatedAt: now, UpdatedAt: now,
+			Status: StatusUnverified, Enabled: true, Proxy: proxy.None, Usage: []UsageItem{}, CreatedAt: now, UpdatedAt: now,
 		},
 		ProfileDir: s.pool.NewProfile(),
 	}

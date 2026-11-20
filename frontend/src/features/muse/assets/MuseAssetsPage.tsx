@@ -1,6 +1,18 @@
 import { thumbUrl } from '../../../services';
-import { useState } from 'react';
-import { FileText, ImagePlus, Pencil, Plus, Trash2, Users, X } from 'lucide-react';
+import { useMemo, useRef, useState } from 'react';
+import {
+  CheckSquare,
+  FileText,
+  FolderPlus,
+  ImagePlus,
+  Pencil,
+  Plus,
+  Search,
+  Square,
+  Trash2,
+  Users,
+  X,
+} from 'lucide-react';
 import '../shared/Muse.css';
 import './MuseAssetsPage.css';
 import { Button, Icon, IconAction, Modal } from '../../../components/ui';
@@ -9,37 +21,8 @@ import { useAppStore } from '../../../stores';
 import { MuseAsset, MusePromptTemplate, MuseRefRole } from '../../../types';
 import { useMuseStore } from '../shared/museStore';
 import { useMuseStudio } from '../shared/StudioExtras';
-
-/** A role's short name (badge) and what it makes Muse do (form). */
-export const roles: Record<MuseRefRole, { label: string; detail: string }> = {
-  [MuseRefRole.None]: { label: 'Tham chiếu', detail: 'Tham chiếu chung, không vai trò riêng' },
-  [MuseRefRole.Face]: { label: 'Khuôn mặt', detail: 'Chỉ giữ danh tính: mặt, tóc, màu da, tuổi' },
-  [MuseRefRole.Character]: {
-    label: 'Nhân vật',
-    detail: 'Giữ cả mặt, dáng người và trang phục',
-  },
-  [MuseRefRole.Product]: {
-    label: 'Sản phẩm',
-    detail: 'Ưu tiên cao nhất: hình dáng, màu, chữ, logo',
-  },
-  [MuseRefRole.Storyboard]: {
-    label: 'Storyboard',
-    detail: 'Bố cục, góc máy, bối cảnh, trang phục',
-  },
-  [MuseRefRole.Setting]: { label: 'Bối cảnh', detail: 'Địa điểm, ánh sáng, màu sắc' },
-  [MuseRefRole.Style]: { label: 'Phong cách', detail: 'Chỉ lấy màu, ánh sáng, chất ảnh' },
-};
-
-/** Roles in the order the form offers them: who, what, where, then the rest. */
-const roleOrder: readonly MuseRefRole[] = [
-  MuseRefRole.Character,
-  MuseRefRole.Face,
-  MuseRefRole.Product,
-  MuseRefRole.Storyboard,
-  MuseRefRole.Setting,
-  MuseRefRole.Style,
-  MuseRefRole.None,
-];
+import { roleOrder, roles } from './assetRoles';
+import { BatchImportAssetsDialog } from './BatchImportAssetsDialog';
 
 const emptyAsset = (): MuseAsset =>
   MuseAsset.createFrom({
@@ -64,7 +47,14 @@ export function MuseAssetsPage() {
   const { assets, templates, load, loadError } = useMuseStudio();
   const addToast = useAppStore((s) => s.addToast);
   const [editing, setEditing] = useState<MuseAsset | null>(null);
+  const [batchOpen, setBatchOpen] = useState(false);
   const [template, setTemplate] = useState<MusePromptTemplate | null>(null);
+  const [search, setSearch] = useState('');
+  const [roleFilter, setRoleFilter] = useState<'all' | MuseRefRole>('all');
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [bulkRole, setBulkRole] = useState<MuseRefRole>(MuseRefRole.Character);
+  const lastClickedId = useRef<string | null>(null);
+  const shiftHeld = useRef(false);
 
   /** Runs a change, reloads the library, and reports whether it worked. */
   const act = async (action: () => Promise<void>) => {
@@ -78,6 +68,98 @@ export function MuseAssetsPage() {
     }
   };
 
+  const roleCounts = useMemo(() => {
+    const counts = new Map<MuseRefRole, number>();
+    for (const a of assets) {
+      counts.set(a.role, (counts.get(a.role) ?? 0) + 1);
+    }
+    return counts;
+  }, [assets]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase().replace(/^@/, '');
+    return assets.filter((a) => {
+      if (roleFilter !== 'all' && a.role !== roleFilter) return false;
+      if (!q) return true;
+      return (
+        a.tag.toLowerCase().includes(q) ||
+        a.name.toLowerCase().includes(q) ||
+        (a.lock ?? '').toLowerCase().includes(q)
+      );
+    });
+  }, [assets, roleFilter, search]);
+
+  const liveSelectedIds = useMemo(() => {
+    const existing = new Set(assets.map((a) => a.id));
+    return Array.from(selectedIds).filter((id) => existing.has(id));
+  }, [assets, selectedIds]);
+
+  const allShownSelected = filtered.length > 0 && filtered.every((a) => selectedIds.has(a.id));
+
+  const toggleSelect = (id: string, shiftKey: boolean) => {
+    const currentlyOn = selectedIds.has(id);
+    const nextOn = !currentlyOn;
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (shiftKey && lastClickedId.current) {
+        const idxA = filtered.findIndex((a) => a.id === lastClickedId.current);
+        const idxB = filtered.findIndex((a) => a.id === id);
+        if (idxA >= 0 && idxB >= 0) {
+          const from = Math.min(idxA, idxB);
+          const to = Math.max(idxA, idxB);
+          for (let i = from; i <= to; i++) {
+            if (nextOn) next.add(filtered[i].id);
+            else next.delete(filtered[i].id);
+          }
+          return next;
+        }
+      }
+      if (nextOn) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+    lastClickedId.current = id;
+  };
+
+  const toggleSelectShown = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allShownSelected) {
+        for (const a of filtered) next.delete(a.id);
+      } else {
+        for (const a of filtered) next.add(a.id);
+      }
+      return next;
+    });
+  };
+
+  const removeSelected = () => {
+    if (liveSelectedIds.length === 0) return;
+    if (
+      !window.confirm(
+        `Xoá ${liveSelectedIds.length} tư liệu đã chọn? Ảnh không còn tác vụ nào dùng sẽ được xoá khỏi máy ngay.`,
+      )
+    ) {
+      return;
+    }
+    void act(async () => {
+      const n = unwrap(await api.removeMuseAssets(liveSelectedIds));
+      setSelectedIds(new Set());
+      addToast({ type: 'success', message: `Đã xoá ${n} tư liệu.` });
+    });
+  };
+
+  const applyBulkRole = () => {
+    if (liveSelectedIds.length === 0) return;
+    void act(async () => {
+      const n = unwrap(await api.updateMuseAssetsRole(liveSelectedIds, bulkRole));
+      addToast({
+        type: 'success',
+        message: `Đã đổi vai trò sang "${roles[bulkRole].label}" cho ${n} tư liệu.`,
+      });
+    });
+  };
+
   return (
     <div className="page-shell muse-page">
       <header className="muse-header">
@@ -88,10 +170,16 @@ export function MuseAssetsPage() {
             tiết khoá để nhân vật, sản phẩm giữ đồng nhất.
           </p>
         </div>
-        <Button variant="primary" onClick={() => setEditing(emptyAsset())}>
-          <Icon icon={Plus} />
-          <span>Thêm tư liệu</span>
-        </Button>
+        <div className="muse-assets-header-actions">
+          <Button variant="secondary" onClick={() => setBatchOpen(true)}>
+            <Icon icon={FolderPlus} />
+            <span>Thêm nhanh từ thư mục</span>
+          </Button>
+          <Button variant="primary" onClick={() => setEditing(emptyAsset())}>
+            <Icon icon={Plus} />
+            <span>Thêm tư liệu</span>
+          </Button>
+        </div>
       </header>
 
       {loadError && (
@@ -101,60 +189,247 @@ export function MuseAssetsPage() {
       )}
 
       <section className="muse-assets-section">
-        <h2 className="muse-assets-section-title">
-          Nhân vật, sản phẩm, bối cảnh <span className="muse-assets-count">{assets.length}</span>
-        </h2>
+        <div className="muse-header">
+          <h2 className="muse-assets-section-title">
+            Nhân vật, sản phẩm, đạo cụ, bối cảnh{' '}
+            <span className="muse-assets-count">
+              {filtered.length !== assets.length
+                ? `${filtered.length}/${assets.length}`
+                : assets.length}
+            </span>
+          </h2>
+          {assets.length > 0 && (
+            <div className="muse-assets-section-actions">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={filtered.length === 0}
+                onClick={toggleSelectShown}
+              >
+                <Icon icon={allShownSelected ? Square : CheckSquare} size="sm" />
+                <span>
+                  {allShownSelected ? 'Bỏ chọn đang lọc' : `Chọn tất cả (${filtered.length})`}
+                </span>
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  if (
+                    !window.confirm(
+                      `Xoá tất cả ${assets.length} tư liệu? Ảnh không còn tác vụ nào dùng sẽ được xoá khỏi máy ngay.`,
+                    )
+                  )
+                    return;
+                  void act(async () => {
+                    const n = unwrap(await api.removeMuseAssets(assets.map((a) => a.id)));
+                    setSelectedIds(new Set());
+                    addToast({ type: 'success', message: `Đã xoá ${n} tư liệu.` });
+                  });
+                }}
+              >
+                <Icon icon={Trash2} size="sm" />
+                <span>Xoá tất cả</span>
+              </Button>
+            </div>
+          )}
+        </div>
+
+        {assets.length > 0 && (
+          <div className="muse-assets-toolbar">
+            <div className="muse-assets-search">
+              <Icon icon={Search} size="sm" />
+              <input
+                type="text"
+                value={search}
+                placeholder="Tìm theo @tag, tên hoặc prompt khoá…"
+                aria-label="Tìm kiếm tư liệu"
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              {search && (
+                <button
+                  type="button"
+                  className="muse-assets-search-clear"
+                  aria-label="Xoá tìm kiếm"
+                  onClick={() => setSearch('')}
+                >
+                  <Icon icon={X} size="sm" />
+                </button>
+              )}
+            </div>
+            <select
+              className="batch-input batch-select muse-assets-role-filter"
+              aria-label="Lọc theo vai trò"
+              value={roleFilter}
+              onChange={(e) => setRoleFilter(e.target.value as 'all' | MuseRefRole)}
+            >
+              <option value="all">Tất cả vai trò ({assets.length})</option>
+              {roleOrder.map((r) => (
+                <option key={r} value={r}>
+                  {roles[r].label} ({roleCounts.get(r) ?? 0})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {liveSelectedIds.length > 0 && (
+          <div className="muse-assets-bulk-bar" role="region" aria-label="Thao tác hàng loạt">
+            <div className="muse-assets-bulk-info">
+              <strong>Đang chọn {liveSelectedIds.length} tư liệu</strong>
+              <span>Giữ Shift khi tick để chọn nhanh một dải</span>
+            </div>
+            <div className="muse-assets-bulk-actions">
+              <select
+                className="batch-input batch-select"
+                aria-label="Vai trò mới cho mục đã chọn"
+                value={bulkRole}
+                onChange={(e) => setBulkRole(e.target.value as MuseRefRole)}
+              >
+                {roleOrder.map((r) => (
+                  <option key={r} value={r}>
+                    {roles[r].label}
+                  </option>
+                ))}
+              </select>
+              <Button size="sm" variant="secondary" onClick={applyBulkRole}>
+                Đổi vai trò
+              </Button>
+              <Button size="sm" variant="danger" onClick={removeSelected}>
+                <Icon icon={Trash2} size="sm" />
+                <span>Xoá ({liveSelectedIds.length})</span>
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>
+                Bỏ chọn
+              </Button>
+            </div>
+          </div>
+        )}
+
         {assets.length === 0 ? (
           <EmptyState
             icon={Users}
             title="Chưa có tư liệu"
-            text="Thêm 1–3 ảnh của một nhân vật hoặc sản phẩm, đặt tag rồi gọi @tag trong prompt."
+            text="Thêm từng tư liệu hoặc dùng Thêm nhanh từ thư mục để nhập hàng loạt ảnh và 3 file .txt."
             action={
-              <Button onClick={() => setEditing(emptyAsset())}>
-                <Icon icon={Plus} />
-                <span>Thêm tư liệu đầu tiên</span>
+              <div className="muse-assets-header-actions">
+                <Button variant="secondary" onClick={() => setBatchOpen(true)}>
+                  <Icon icon={FolderPlus} />
+                  <span>Thêm nhanh từ thư mục</span>
+                </Button>
+                <Button variant="primary" onClick={() => setEditing(emptyAsset())}>
+                  <Icon icon={Plus} />
+                  <span>Thêm tư liệu đầu tiên</span>
+                </Button>
+              </div>
+            }
+          />
+        ) : filtered.length === 0 ? (
+          <EmptyState
+            icon={Search}
+            title="Không thấy tư liệu phù hợp"
+            text="Thử xoá từ khoá tìm kiếm hoặc đổi bộ lọc vai trò."
+            action={
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setSearch('');
+                  setRoleFilter('all');
+                }}
+              >
+                Hiện tất cả tư liệu
               </Button>
             }
           />
         ) : (
           <div className="muse-assets-grid">
-            {assets.map((a) => (
-              <article key={a.id} className="muse-asset-card">
-                <div className={`muse-asset-cover is-${Math.min(a.images.length, 3)}`}>
-                  {a.images.map((img) => (
-                    <img
-                      key={img}
-                      src={thumbUrl(img)}
-                      alt={a.tag}
-                      loading="lazy"
-                      decoding="async"
-                    />
-                  ))}
-                  <span className={`muse-role-badge is-${a.role || 'none'}`}>
-                    {roles[a.role].label}
-                  </span>
-                </div>
-                <div className="muse-asset-body">
-                  <div className="muse-asset-name">
-                    <strong>@{a.tag}</strong>
-                    {a.name && <span>{a.name}</span>}
-                  </div>
-                  {a.lock && <p className="muse-asset-lock">Khoá: {a.lock}</p>}
-                </div>
-                <footer className="muse-asset-footer">
-                  <IconAction icon={Pencil} label="Sửa" onClick={() => setEditing(a)} />
-                  <IconAction
-                    icon={Trash2}
-                    label="Xoá"
-                    onClick={() => {
-                      if (!window.confirm(`Xoá @${a.tag}? Tác vụ đã xếp hàng vẫn giữ ảnh của nó.`))
-                        return;
-                      void act(async () => void unwrap(await api.removeMuseAssets([a.id])));
+            {filtered.map((a) => {
+              const isSelected = selectedIds.has(a.id);
+              return (
+                <article
+                  key={a.id}
+                  className={`muse-asset-card${isSelected ? ' is-selected' : ''}`}
+                >
+                  <div
+                    className={`muse-asset-cover is-${Math.min(a.images.length, 3)}`}
+                    onClick={(e) => {
+                      if (liveSelectedIds.length > 0 || e.shiftKey || e.ctrlKey || e.metaKey) {
+                        toggleSelect(a.id, e.shiftKey);
+                      }
                     }}
-                  />
-                </footer>
-              </article>
-            ))}
+                  >
+                    {a.images.map((img) => (
+                      <img
+                        key={img}
+                        src={thumbUrl(img)}
+                        alt={a.tag}
+                        loading="lazy"
+                        decoding="async"
+                      />
+                    ))}
+                    <span className={`muse-role-badge is-${a.role || 'none'}`}>
+                      {roles[a.role].label}
+                    </span>
+                    <label
+                      className={`muse-asset-check${isSelected ? ' is-on' : ''}`}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        aria-label={`Chọn @${a.tag}`}
+                        onMouseDown={(e) => {
+                          shiftHeld.current = e.shiftKey;
+                        }}
+                        onKeyDown={(e) => {
+                          shiftHeld.current = e.shiftKey;
+                        }}
+                        onChange={() => {
+                          const shift = shiftHeld.current;
+                          shiftHeld.current = false;
+                          toggleSelect(a.id, shift);
+                        }}
+                      />
+                    </label>
+                  </div>
+                  <div className="muse-asset-body">
+                    <div className="muse-asset-name">
+                      <strong>@{a.tag}</strong>
+                      {a.name && <span>{a.name}</span>}
+                    </div>
+                    {a.lock && (
+                      <p className="muse-asset-lock" title={a.lock}>
+                        Khoá: {a.lock}
+                      </p>
+                    )}
+                  </div>
+                  <footer className="muse-asset-footer">
+                    <IconAction icon={Pencil} label="Sửa" onClick={() => setEditing(a)} />
+                    <IconAction
+                      icon={Trash2}
+                      label="Xoá"
+                      onClick={() => {
+                        if (
+                          !window.confirm(
+                            `Xoá @${a.tag}? Ảnh không còn tác vụ nào dùng sẽ được xoá khỏi máy ngay.`,
+                          )
+                        )
+                          return;
+                        void act(async () => {
+                          unwrap(await api.removeMuseAssets([a.id]));
+                          setSelectedIds((prev) => {
+                            if (!prev.has(a.id)) return prev;
+                            const next = new Set(prev);
+                            next.delete(a.id);
+                            return next;
+                          });
+                        });
+                      }}
+                    />
+                  </footer>
+                </article>
+              );
+            })}
           </div>
         )}
       </section>
@@ -200,6 +475,13 @@ export function MuseAssetsPage() {
         )}
       </section>
 
+      {batchOpen && (
+        <BatchImportAssetsDialog
+          existingAssets={assets}
+          onImported={load}
+          onClose={() => setBatchOpen(false)}
+        />
+      )}
       {editing && (
         <AssetDialog
           asset={editing}

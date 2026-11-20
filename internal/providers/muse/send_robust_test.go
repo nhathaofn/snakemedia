@@ -23,7 +23,9 @@ func TestLimitRepliesAreCapped(t *testing.T) {
 
 	// Each run stands for another account that still looked usable.
 	fresh := func() {
-		p.updateAccount(acc.ID, func(r *accounts.Record, d *museData) { r.PausedUntil, d.Quota = "", nil })
+		p.updateAccount(acc.ID, func(r *accounts.Record, d *museData) {
+			r.Enabled, r.AutoResume, r.PausedUntil, d.Quota, d.RestReason = true, false, "", nil, ""
+		})
 	}
 	for i := 1; i < maxLimitReplies; i++ {
 		fresh()

@@ -313,6 +313,12 @@ func (a *App) CheckAccount(id string) models.Response[accounts.Account] {
 	return logged("CheckAccount", a.accounts.Check(a.ctx, id))
 }
 
+// CheckAccountVideo runs a short video generation probe on supported providers
+// (e.g. Muse) to verify the account can generate video.
+func (a *App) CheckAccountVideo(id string) models.Response[accounts.Account] {
+	return logged("CheckAccountVideo", a.accounts.CheckVideo(a.ctx, id))
+}
+
 // OpenAccountBrowser shows the account's Chrome on its provider's page.
 func (a *App) OpenAccountBrowser(id string) models.Response[accounts.Account] {
 	return logged("OpenAccountBrowser", a.accounts.OpenBrowser(a.ctx, id))
@@ -326,6 +332,12 @@ func (a *App) RenameAccount(id, name string) models.Response[accounts.Account] {
 // SetAccountEnabled includes or excludes an account from work.
 func (a *App) SetAccountEnabled(id string, enabled bool) models.Response[accounts.Account] {
 	return logged("SetAccountEnabled", a.accounts.SetEnabled(id, enabled))
+}
+
+// SetAccountVideoCheck enables or disables deep video creation verification
+// and video job scheduling for an account.
+func (a *App) SetAccountVideoCheck(id string, enabled bool) models.Response[accounts.Account] {
+	return logged("SetAccountVideoCheck", a.accounts.SetVideoCheck(id, enabled))
 }
 
 // SetAccountProxy assigns a proxy to an account ("" picks from the list, "none" goes direct).
@@ -569,6 +581,11 @@ func (a *App) GetMuseOptions() models.Response[muse.MuseOptions] {
 	return a.muse.GetOptions()
 }
 
+// CheckMuseAPI tests connectivity to the configured muse2api endpoint.
+func (a *App) CheckMuseAPI(endpoint, apiKey string) models.Response[muse.MuseAPIStatus] {
+	return logged("CheckMuseAPI", a.muse.CheckAPI(a.ctx, endpoint, apiKey))
+}
+
 // GetFlowImageTasks lists the image queue (Ảnh → All).
 func (a *App) GetFlowImageTasks() models.Response[flow.ImageQueueState] {
 	return logged("GetFlowImageTasks", a.flow.ListImageTasks())
@@ -577,6 +594,11 @@ func (a *App) GetFlowImageTasks() models.Response[flow.ImageQueueState] {
 // SubmitFlowImageTasks queues one image task per prompt.
 func (a *App) SubmitFlowImageTasks(req flow.ImageTaskRequest) models.Response[[]flow.ImageTask] {
 	return logged("SubmitFlowImageTasks", a.flow.SubmitImageTasks(req))
+}
+
+// UpdateFlowImageTasksSettings updates model, ratio or quality on unstarted queued tasks.
+func (a *App) UpdateFlowImageTasksSettings(req flow.ImageTaskSettingsRequest) models.Response[int] {
+	return logged("UpdateFlowImageTasksSettings", a.flow.UpdateImageTasksSettings(req))
 }
 
 // RunFlowImageTasks starts held tasks (all when ids is empty).
@@ -673,6 +695,11 @@ func (a *App) RetryMuseJob(id string) models.Response[muse.MuseJob] {
 	return logged("RetryMuseJob", a.muse.RetryJob(id))
 }
 
+// RetryMuseJobs sends multiple failed or cancelled Muse jobs again in one write.
+func (a *App) RetryMuseJobs(ids []string) models.Response[int] {
+	return logged("RetryMuseJobs", a.muse.RetryJobs(ids))
+}
+
 // RetrySaveMuseJob copies existing results without generating again.
 func (a *App) RetrySaveMuseJob(id string) models.Response[muse.MuseJob] {
 	return logged("RetrySaveMuseJob", a.muse.RetrySave(id))
@@ -686,6 +713,11 @@ func (a *App) RemoveMuseJob(id string) models.Response[bool] {
 // RunMuseJobs starts queued jobs that were placed on hold.
 func (a *App) RunMuseJobs(ids []string) models.Response[int] {
 	return logged("RunMuseJobs", a.muse.RunJobs(ids))
+}
+
+// UpdateMuseJobsFormat updates ratio and/or duration on unstarted Muse jobs.
+func (a *App) UpdateMuseJobsFormat(req muse.MuseJobsFormatRequest) models.Response[int] {
+	return logged("UpdateMuseJobsFormat", a.muse.UpdateJobsFormat(req))
 }
 
 // HoldMuseQueued puts the queued jobs of kind and mode (all when empty) on hold.
@@ -742,6 +774,34 @@ func (a *App) SaveMuseAsset(asset muse.MuseAsset) models.Response[muse.MuseAsset
 // RemoveMuseAssets deletes assets from the Muse library.
 func (a *App) RemoveMuseAssets(ids []string) models.Response[int] {
 	return logged("RemoveMuseAssets", a.muse.RemoveAssets(ids))
+}
+
+// UpdateMuseAssetsRole updates the role of selected Muse assets at once.
+func (a *App) UpdateMuseAssetsRole(ids []string, role muse.MuseRefRole) models.Response[int] {
+	return logged("UpdateMuseAssetsRole", a.muse.UpdateAssetsRole(ids, role))
+}
+
+// PickMuseAssetFolder asks the user for a folder of asset images and scans it
+// in natural filename order for batch import.
+func (a *App) PickMuseAssetFolder() models.Response[muse.MuseAssetFolderScan] {
+	if err := a.muse.AssetImportReady(); err != nil {
+		return models.ErrorResponse[muse.MuseAssetFolderScan](err.Error(), models.CodeUnavailable)
+	}
+	dir, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Chọn thư mục chứa ảnh tư liệu",
+	})
+	if err != nil {
+		return models.ErrorResponse[muse.MuseAssetFolderScan]("Không mở được hộp thoại chọn thư mục: "+err.Error(), models.CodeInternal)
+	}
+	if dir == "" {
+		return models.SuccessResponse(muse.MuseAssetFolderScan{Canceled: true, Images: []muse.MuseFolderImage{}})
+	}
+	return logged("PickMuseAssetFolder", a.muse.ScanAssetFolder(dir))
+}
+
+// ImportMuseAssetBatch imports multiple single-image assets in one write.
+func (a *App) ImportMuseAssetBatch(req muse.MuseAssetBatchRequest) models.Response[muse.MuseAssetBatchResult] {
+	return logged("ImportMuseAssetBatch", a.muse.ImportAssetBatch(req))
 }
 
 // PickMuseAssetImages asks the user for an asset's images and imports them.

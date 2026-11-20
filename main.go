@@ -98,6 +98,7 @@ func run() error {
 			muse.AllMuseJobStatuses,
 			muse.AllMuseRefRoles,
 			muse.AllMuseRefModes,
+			muse.AllMuseAssetBatchConflicts,
 		},
 	})
 }

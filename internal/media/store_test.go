@@ -200,3 +200,34 @@ func TestSaveToNumbersNamesAndKeepsRoots(t *testing.T) {
 		t.Fatal("a name with a path was accepted")
 	}
 }
+
+func TestRemoveDeletesStoredFileAndCachedThumbs(t *testing.T) {
+	store := NewStore(t.TempDir())
+	local, err := store.Put("muse-asset-1", "image/png", ".png", []byte("PNG"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	thumb := filepath.Join(store.Dir(), thumbDir, "muse-asset-1-3-123.jpg")
+	if err := os.MkdirAll(filepath.Dir(thumb), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(thumb, []byte("JPG"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Remove(local); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	path, _ := store.Path(local)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("stored file still exists: %v", err)
+	}
+	if _, err := os.Stat(thumb); !os.IsNotExist(err) {
+		t.Fatalf("cached thumb still exists: %v", err)
+	}
+	if err := store.Remove(local); err != nil {
+		t.Fatalf("Remove missing must succeed: %v", err)
+	}
+	if err := store.Remove(Route + "../evil.png"); err == nil {
+		t.Fatal("Remove accepted path traversal")
+	}
+}

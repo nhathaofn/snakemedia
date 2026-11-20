@@ -26,8 +26,16 @@ export function CheckAccount(arg1) {
   return window['go']['main']['App']['CheckAccount'](arg1);
 }
 
+export function CheckAccountVideo(arg1) {
+  return window['go']['main']['App']['CheckAccountVideo'](arg1);
+}
+
 export function CheckForUpdate() {
   return window['go']['main']['App']['CheckForUpdate']();
+}
+
+export function CheckMuseAPI(arg1, arg2) {
+  return window['go']['main']['App']['CheckMuseAPI'](arg1, arg2);
 }
 
 export function CheckMusePrompt(arg1, arg2) {
@@ -154,6 +162,10 @@ export function ImportFlowProjectImageReference(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ImportFlowProjectImageReference'](arg1, arg2, arg3, arg4);
 }
 
+export function ImportMuseAssetBatch(arg1) {
+  return window['go']['main']['App']['ImportMuseAssetBatch'](arg1);
+}
+
 export function InstallTool(arg1) {
   return window['go']['main']['App']['InstallTool'](arg1);
 }
@@ -220,6 +232,10 @@ export function OpenMuseOutputFolder() {
 
 export function PickFlowImageReferences() {
   return window['go']['main']['App']['PickFlowImageReferences']();
+}
+
+export function PickMuseAssetFolder() {
+  return window['go']['main']['App']['PickMuseAssetFolder']();
 }
 
 export function PickMuseAssetImages() {
@@ -306,6 +322,10 @@ export function RetryMuseJob(arg1) {
   return window['go']['main']['App']['RetryMuseJob'](arg1);
 }
 
+export function RetryMuseJobs(arg1) {
+  return window['go']['main']['App']['RetryMuseJobs'](arg1);
+}
+
 export function RetrySaveMuseJob(arg1) {
   return window['go']['main']['App']['RetrySaveMuseJob'](arg1);
 }
@@ -354,6 +374,10 @@ export function SetAccountProxy(arg1, arg2) {
   return window['go']['main']['App']['SetAccountProxy'](arg1, arg2);
 }
 
+export function SetAccountVideoCheck(arg1, arg2) {
+  return window['go']['main']['App']['SetAccountVideoCheck'](arg1, arg2);
+}
+
 export function SubmitFlowImageTasks(arg1) {
   return window['go']['main']['App']['SubmitFlowImageTasks'](arg1);
 }
@@ -364,6 +388,18 @@ export function SubmitMuseJobs(arg1) {
 
 export function UpdateConfig(arg1) {
   return window['go']['main']['App']['UpdateConfig'](arg1);
+}
+
+export function UpdateFlowImageTasksSettings(arg1) {
+  return window['go']['main']['App']['UpdateFlowImageTasksSettings'](arg1);
+}
+
+export function UpdateMuseAssetsRole(arg1, arg2) {
+  return window['go']['main']['App']['UpdateMuseAssetsRole'](arg1, arg2);
+}
+
+export function UpdateMuseJobsFormat(arg1) {
+  return window['go']['main']['App']['UpdateMuseJobsFormat'](arg1);
 }
 
 export function UploadSourceVideo(arg1) {

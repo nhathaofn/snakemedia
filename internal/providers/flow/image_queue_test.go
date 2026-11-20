@@ -556,3 +556,87 @@ func TestQueuePassesARefusedPromptToTheOtherAccounts(t *testing.T) {
 		t.Errorf("a finished task was retried")
 	}
 }
+
+func TestUpdateImageTasksSettingsAppliesOnlyToUnsentTasks(t *testing.T) {
+	h := newQueueHarness(t)
+	h.onGen = func(_ context.Context, req GenerateImageRequest) models.Response[[]GeneratedImageItem] {
+		return models.SuccessResponse(made(req.RequestID))
+	}
+	res := h.s.SubmitImageTasks(ImageTaskRequest{
+		Prompts:     []string{"held-1", "held-2", "sent-failed"},
+		ModelID:     "m1",
+		AspectRatio: "16:9",
+		Quality:     ImageQuality1K,
+		OutputDir:   h.dir,
+		Hold:        true,
+	})
+	if !res.Success {
+		t.Fatal(res.Error)
+	}
+	tasks := res.Data
+	// Mark task 2 as having already sent a request: it must stay untouched.
+	if _, err := h.q.journal.Update(tasks[2].ID, func(task *ImageTask) {
+		task.RequestID = "req-already-sent"
+		task.Status = ImageTaskFailed
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	upd := h.s.UpdateImageTasksSettings(ImageTaskSettingsRequest{
+		AspectRatio: "9:16",
+		Quality:     ImageQuality2K,
+	})
+	if !upd.Success || upd.Data != 2 {
+		t.Fatalf("UpdateImageTasksSettings = %+v, want 2", upd)
+	}
+	for _, id := range []string{tasks[0].ID, tasks[1].ID} {
+		got, _ := h.q.journal.Get(id)
+		if got.AspectRatio != "9:16" || got.Quality != ImageQuality2K || got.ModelID != "m1" {
+			t.Fatalf("updated task %s = %+v", id, got)
+		}
+	}
+	untouched, _ := h.q.journal.Get(tasks[2].ID)
+	if untouched.AspectRatio != "16:9" || untouched.Quality != ImageQuality1K {
+		t.Fatalf("sent task must not be modified: %+v", untouched)
+	}
+
+	// Now start one and make sure it runs with the updated ratio/quality.
+	h.start()
+	h.s.RunImageTasks([]string{tasks[0].ID})
+	h.waitFor(tasks[0].ID, func(task ImageTask) bool { return task.Status == ImageTaskSucceeded })
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.generated) != 1 || h.generated[0].AspectRatio != "9:16" || h.generated[0].Quality != ImageQuality2K {
+		t.Fatalf("generated with = %+v", h.generated)
+	}
+}
+
+func TestPausedFlagSeparatesInitialQueuedFromUserPaused(t *testing.T) {
+	h := newQueueHarness(t)
+	held := h.s.SubmitImageTasks(ImageTaskRequest{Prompts: []string{"held"}, ModelID: "m", OutputDir: h.dir, Hold: true}).Data[0]
+	if !held.Held || held.Paused {
+		t.Fatalf("new held task must not be marked paused: %+v", held)
+	}
+	// Holding while still unstarted leaves Paused false.
+	if n := h.s.HoldImageTasks(nil); n.Data != 0 {
+		t.Fatalf("HoldImageTasks on unstarted held tasks = %d, want 0", n.Data)
+	}
+	// Running clears Held/Paused; pausing waiting tasks sets both Held and Paused.
+	waiting := h.s.SubmitImageTasks(ImageTaskRequest{Prompts: []string{"wait"}, ModelID: "m", OutputDir: h.dir, Hold: false}).Data[0]
+	if n := h.s.HoldImageTasks([]string{waiting.ID}); n.Data != 1 {
+		t.Fatalf("HoldImageTasks on waiting task = %d, want 1", n.Data)
+	}
+	paused, _ := h.q.journal.Get(waiting.ID)
+	if !paused.Held || !paused.Paused {
+		t.Fatalf("paused task = %+v", paused)
+	}
+	if n := h.s.RunImageTasks([]string{held.ID, waiting.ID}); n.Data != 2 {
+		t.Fatalf("RunImageTasks = %d, want 2", n.Data)
+	}
+	for _, id := range []string{held.ID, waiting.ID} {
+		got, _ := h.q.journal.Get(id)
+		if got.Held || got.Paused {
+			t.Fatalf("resumed task %s still held/paused: %+v", id, got)
+		}
+	}
+}

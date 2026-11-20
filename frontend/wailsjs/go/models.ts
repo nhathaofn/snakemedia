@@ -44,6 +44,8 @@ export namespace accounts {
 	    proxyStatus?: string;
 	    proxyIp?: string;
 	    pausedUntil?: string;
+	    autoResume?: boolean;
+	    skipVideoCheck?: boolean;
 	    message?: string;
 	    noRoute?: string;
 	    lastCheckedAt?: string;
@@ -70,6 +72,8 @@ export namespace accounts {
 	        this.proxyStatus = source["proxyStatus"];
 	        this.proxyIp = source["proxyIp"];
 	        this.pausedUntil = source["pausedUntil"];
+	        this.autoResume = source["autoResume"];
+	        this.skipVideoCheck = source["skipVideoCheck"];
 	        this.message = source["message"];
 	        this.noRoute = source["noRoute"];
 	        this.lastCheckedAt = source["lastCheckedAt"];
@@ -236,6 +240,9 @@ export namespace config {
 	    setupMessage: string;
 	    cleanupMessage: string;
 	    imageFormat: ImageFormat;
+	    useApi: boolean;
+	    apiEndpoint: string;
+	    apiKey: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new MuseConfig(source);
@@ -261,6 +268,9 @@ export namespace config {
 	        this.setupMessage = source["setupMessage"];
 	        this.cleanupMessage = source["cleanupMessage"];
 	        this.imageFormat = source["imageFormat"];
+	        this.useApi = source["useApi"];
+	        this.apiEndpoint = source["apiEndpoint"];
+	        this.apiKey = source["apiKey"];
 	    }
 	}
 	export class FlowConfig {
@@ -1042,6 +1052,7 @@ export namespace flow {
 	    outputDir: string;
 	    index?: number;
 	    held?: boolean;
+	    paused?: boolean;
 	    status: ImageTaskStatus;
 	    step?: string;
 	    requestId?: string;
@@ -1073,6 +1084,7 @@ export namespace flow {
 	        this.outputDir = source["outputDir"];
 	        this.index = source["index"];
 	        this.held = source["held"];
+	        this.paused = source["paused"];
 	        this.status = source["status"];
 	        this.step = source["step"];
 	        this.requestId = source["requestId"];
@@ -1181,6 +1193,24 @@ export namespace flow {
 		    }
 		    return a;
 		}
+	}
+	export class ImageTaskSettingsRequest {
+	    ids?: string[];
+	    modelId?: string;
+	    aspectRatio?: string;
+	    quality?: ImageQuality;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageTaskSettingsRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ids = source["ids"];
+	        this.modelId = source["modelId"];
+	        this.aspectRatio = source["aspectRatio"];
+	        this.quality = source["quality"];
+	    }
 	}
 	
 	export class StudioConfig {
@@ -1729,6 +1759,114 @@ export namespace models {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
 	        this.data = this.convertValues(source["data"], flow.UploadedSourceVideo);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_muse_MuseAPIStatus_ {
+	    success: boolean;
+	    data: muse.MuseAPIStatus;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_muse_MuseAPIStatus_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.MuseAPIStatus);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_muse_MuseAssetBatchResult_ {
+	    success: boolean;
+	    data: muse.MuseAssetBatchResult;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_muse_MuseAssetBatchResult_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.MuseAssetBatchResult);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_SnakeMedia_internal_providers_muse_MuseAssetFolderScan_ {
+	    success: boolean;
+	    data: muse.MuseAssetFolderScan;
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_SnakeMedia_internal_providers_muse_MuseAssetFolderScan_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.MuseAssetFolderScan);
 	        this.error = source["error"];
 	        this.code = source["code"];
 	    }
@@ -2962,6 +3100,11 @@ export namespace models {
 
 export namespace muse {
 	
+	export enum MuseAssetBatchConflict {
+	    Overwrite = "overwrite",
+	    Rename = "rename",
+	    Skip = "skip",
+	}
 	export enum MuseJobKind {
 	    Image = "image",
 	    Video = "video",
@@ -2987,9 +3130,32 @@ export namespace muse {
 	    Face = "face",
 	    None = "",
 	    Product = "product",
+	    Prop = "prop",
 	    Setting = "setting",
 	    Storyboard = "storyboard",
 	    Style = "style",
+	}
+	export class MuseAPIStatus {
+	    ok: boolean;
+	    driver?: string;
+	    accounts?: number;
+	    tabs?: number;
+	    latencyMs: number;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseAPIStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ok = source["ok"];
+	        this.driver = source["driver"];
+	        this.accounts = source["accounts"];
+	        this.tabs = source["tabs"];
+	        this.latencyMs = source["latencyMs"];
+	        this.message = source["message"];
+	    }
 	}
 	export class MuseAsset {
 	    id: string;
@@ -3015,6 +3181,130 @@ export namespace muse {
 	        this.createdAt = source["createdAt"];
 	    }
 	}
+	export class MuseAssetBatchItem {
+	    sourcePath: string;
+	    tag: string;
+	    name: string;
+	    role: MuseRefRole;
+	    lock: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseAssetBatchItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sourcePath = source["sourcePath"];
+	        this.tag = source["tag"];
+	        this.name = source["name"];
+	        this.role = source["role"];
+	        this.lock = source["lock"];
+	    }
+	}
+	export class MuseAssetBatchRequest {
+	    items: MuseAssetBatchItem[];
+	    conflict: MuseAssetBatchConflict;
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseAssetBatchRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], MuseAssetBatchItem);
+	        this.conflict = source["conflict"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class MuseAssetBatchResult {
+	    added: number;
+	    updated: number;
+	    skipped: number;
+	    savedIds: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseAssetBatchResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.added = source["added"];
+	        this.updated = source["updated"];
+	        this.skipped = source["skipped"];
+	        this.savedIds = source["savedIds"];
+	    }
+	}
+	export class MuseFolderImage {
+	    path: string;
+	    fileName: string;
+	    size: number;
+	    previewUrl?: string;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseFolderImage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.fileName = source["fileName"];
+	        this.size = source["size"];
+	        this.previewUrl = source["previewUrl"];
+	        this.error = source["error"];
+	    }
+	}
+	export class MuseAssetFolderScan {
+	    canceled: boolean;
+	    dir: string;
+	    images: MuseFolderImage[];
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseAssetFolderScan(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.canceled = source["canceled"];
+	        this.dir = source["dir"];
+	        this.images = this.convertValues(source["images"], MuseFolderImage);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class MuseCleanResult {
 	    accountId: string;
 	    account: string;
@@ -3033,6 +3323,7 @@ export namespace muse {
 	        this.error = source["error"];
 	    }
 	}
+	
 	export class MuseRefInfo {
 	    tag?: string;
 	    role?: MuseRefRole;
@@ -3074,11 +3365,14 @@ export namespace muse {
 	    repliesSeen?: number;
 	    rechecks?: number;
 	    held?: boolean;
+	    paused?: boolean;
 	    status: MuseJobStatus;
 	    step?: string;
 	    accountId?: string;
 	    sessionId?: string;
 	    sending?: boolean;
+	    preSendTracked?: boolean;
+	    preSendSessions?: string[];
 	    sendUnknown?: boolean;
 	    attempts: number;
 	    error?: string;
@@ -3123,11 +3417,14 @@ export namespace muse {
 	        this.repliesSeen = source["repliesSeen"];
 	        this.rechecks = source["rechecks"];
 	        this.held = source["held"];
+	        this.paused = source["paused"];
 	        this.status = source["status"];
 	        this.step = source["step"];
 	        this.accountId = source["accountId"];
 	        this.sessionId = source["sessionId"];
 	        this.sending = source["sending"];
+	        this.preSendTracked = source["preSendTracked"];
+	        this.preSendSessions = source["preSendSessions"];
 	        this.sendUnknown = source["sendUnknown"];
 	        this.attempts = source["attempts"];
 	        this.error = source["error"];
@@ -3232,6 +3529,26 @@ export namespace muse {
 		    }
 		    return a;
 		}
+	}
+	export class MuseJobsFormatRequest {
+	    kind: MuseJobKind;
+	    mode: MuseJobMode;
+	    ids?: string[];
+	    ratio?: string;
+	    duration?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseJobsFormatRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.mode = source["mode"];
+	        this.ids = source["ids"];
+	        this.ratio = source["ratio"];
+	        this.duration = source["duration"];
+	    }
 	}
 	export class MuseLibraryItem {
 	    id: string;

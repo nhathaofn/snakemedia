@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -31,8 +32,9 @@ var pageKey = func() string {
 }()
 
 // visibleShim keeps Muse (a Next.js app) rendering in a hidden or background
-// tab: it always reports "visible", and falls back to a 16 ms timer when
-// requestAnimationFrame is throttled.
+// tab: it always reports "visible", and falls back to a timer when
+// requestAnimationFrame is throttled so headless hydration stays responsive
+// while idle tabs run zero timers.
 const visibleShim = `(() => {
   Object.defineProperty(Document.prototype, 'visibilityState', { get: () => 'visible', configurable: true });
   Object.defineProperty(Document.prototype, 'hidden', { get: () => false, configurable: true });
@@ -41,7 +43,7 @@ const visibleShim = `(() => {
   window.requestAnimationFrame = cb => {
     const id = ++seq; let done = false;
     const run = ts => { if (done) return; done = true; t.delete(id); cb(ts); };
-    t.set(id, [raf(run), setTimeout(() => run(performance.now()), 16)]);
+    t.set(id, [raf(run), setTimeout(() => run(performance.now()), 32)]);
     return id;
   };
   window.cancelAnimationFrame = id => { const v = t.get(id); if (v) { caf(v[0]); clearTimeout(v[1]); t.delete(id); } };
@@ -58,11 +60,13 @@ type chromePage struct {
 	policy      config.AccountConfig
 	callTimeout time.Duration
 	sendTimeout time.Duration
-	// nav is shared by every job on the account's tab: calls hold it for
-	// reading, and loading another page waits for them and holds it alone, so
-	// a navigation never cuts another job's send or status read short. Nil
-	// for a one-off page (an account check).
-	nav *sync.RWMutex
+	// nav is shared by callers using the same tab: calls hold it for reading,
+	// and loading another page waits for them and holds it alone, so a
+	// navigation never cuts another call short. Nil for a one-off page (an
+	// account check).
+	nav      *sync.RWMutex
+	targetID string
+	onClose  func(dirty bool)
 
 	// mu guards the kept connection. One call uses it at a time (busy); a
 	// call that finds it busy (two reads side by side) dials its own, and so
@@ -71,17 +75,44 @@ type chromePage struct {
 	conn   *browser.Conn
 	busy   bool
 	closed bool
+	dirty  bool
+}
+
+// markDirty flags the assigned tab to be closed on Close instead of reused.
+func (p *chromePage) markDirty() {
+	p.mu.Lock()
+	p.dirty = true
+	p.mu.Unlock()
+}
+
+// bindTab assigns this page to a dedicated tab target and release hook.
+func (p *chromePage) bindTab(targetID string, nav *sync.RWMutex, onClose func(dirty bool)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.targetID != targetID && !p.busy && p.conn != nil {
+		_ = p.conn.Close()
+		p.conn = nil
+	}
+	p.targetID = targetID
+	p.nav = nav
+	p.onClose = onClose
 }
 
 // Close ends the kept connection; a call still using it ends it when done.
 // The page stays usable, each later call on a connection of its own.
 func (p *chromePage) Close() {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.closed = true
 	if !p.busy && p.conn != nil {
 		_ = p.conn.Close()
 		p.conn = nil
+	}
+	dirty := p.dirty
+	onClose := p.onClose
+	p.onClose = nil
+	p.mu.Unlock()
+	if onClose != nil {
+		onClose(dirty)
 	}
 }
 
@@ -141,6 +172,24 @@ func (p *chromePage) connect(ctx context.Context, keep bool) (conn *browser.Conn
 }
 
 func (p *chromePage) tab(ctx context.Context) (browser.Target, error) {
+	p.mu.Lock()
+	targetID := p.targetID
+	p.mu.Unlock()
+	if targetID != "" {
+		targets, err := browser.Targets(ctx, p.port, p.policy)
+		if err != nil {
+			return browser.Target{}, err
+		}
+		for _, t := range targets {
+			if t.ID == targetID {
+				if u, ok := t.Page(); ok && museURL(u) {
+					return t, nil
+				}
+				return browser.Target{}, errTabMissing
+			}
+		}
+		return browser.Target{}, errTabMissing
+	}
 	t, found, err := browser.FindTab(ctx, p.port, p.policy, museURL)
 	if err != nil {
 		return browser.Target{}, err
@@ -149,6 +198,78 @@ func (p *chromePage) tab(ctx context.Context) (browser.Target, error) {
 		return browser.Target{}, errTabMissing
 	}
 	return t, nil
+}
+
+const awayTabExpr = `({url:String(location.href||""),ready:String(document.readyState||""),title:String(document.title||""),text:String(document.body?.innerText||"").replace(/\s+/g," ").trim().slice(0,400)})`
+
+// inspectAwayTab checks a Chrome browser that has no muse.ai tab to read
+// where the tab landed, optionally navigating back to MuseURL once first.
+func inspectAwayTab(ctx context.Context, port int, policy config.AccountConfig, navigate bool) (awayTabInfo, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(policy.RequestTimeoutSeconds)*time.Second)
+	defer cancel()
+	findPage := func(targets []browser.Target) (away *browser.Target, onMuse *url.URL) {
+		var blank *browser.Target
+		for i := range targets {
+			u, ok := targets[i].Page()
+			if !ok {
+				continue
+			}
+			if museURL(u) {
+				return nil, u
+			}
+			if targets[i].URL != "" && targets[i].URL != "about:blank" && !strings.HasPrefix(targets[i].URL, "chrome://") {
+				if away == nil {
+					away = &targets[i]
+				}
+			} else if blank == nil {
+				blank = &targets[i]
+			}
+		}
+		if away != nil {
+			return away, nil
+		}
+		return blank, nil
+	}
+	targets, err := browser.Targets(ctx, port, policy)
+	if err != nil {
+		return awayTabInfo{}, err
+	}
+	target, onMuse := findPage(targets)
+	if onMuse != nil {
+		return awayTabInfo{URL: onMuse.String(), Ready: "complete"}, nil
+	}
+	if target == nil {
+		return awayTabInfo{}, errTabMissing
+	}
+	if navigate {
+		if err := browser.Navigate(ctx, *target, port, musePage); err != nil {
+			return awayTabInfo{}, err
+		}
+		targets, err = browser.Targets(ctx, port, policy)
+		if err != nil {
+			return awayTabInfo{}, err
+		}
+		target, onMuse = findPage(targets)
+		if onMuse != nil {
+			return awayTabInfo{URL: onMuse.String(), Ready: "complete"}, nil
+		}
+		if target == nil {
+			return awayTabInfo{}, errTabMissing
+		}
+	}
+	conn, err := browser.Dial(ctx, *target, port, 1<<20)
+	if err != nil {
+		return awayTabInfo{URL: target.URL}, nil
+	}
+	defer conn.Close()
+	var info awayTabInfo
+	if err := conn.Evaluate(ctx, awayTabExpr, &info); err != nil {
+		return awayTabInfo{URL: target.URL}, nil
+	}
+	if info.URL == "" {
+		info.URL = target.URL
+	}
+	return info, nil
 }
 
 // pageReply is what a call expression resolves to: the method's answer (v),
@@ -204,13 +325,20 @@ func (p *chromePage) invoke(ctx context.Context, timeout time.Duration, name str
 	return p.call(ctx, timeout, name, out, args...)
 }
 
+func (p *chromePage) navLock() *sync.RWMutex {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.nav
+}
+
 // readNav holds the tab against Home until the returned func is called.
 func (p *chromePage) readNav() func() {
-	if p.nav == nil {
+	nav := p.navLock()
+	if nav == nil {
 		return func() {}
 	}
-	p.nav.RLock()
-	return p.nav.RUnlock
+	nav.RLock()
+	return nav.RUnlock
 }
 
 // call is invoke for a caller already holding readNav. The lock is not
@@ -220,23 +348,33 @@ func (p *chromePage) call(ctx context.Context, timeout time.Duration, name strin
 	defer cancel()
 	short, full, err := callExpressions(name, args)
 	if err != nil {
-		return err
+		return wrapPreSend(name, err)
 	}
 	keep := name != "send"
 	conn, reused, done, err := p.connect(ctx, keep)
 	if err != nil {
-		return err
+		return wrapPreSend(name, err)
 	}
 	err = evaluateCall(ctx, conn, short, full, out)
 	var page *browser.EvalError
 	if err != nil && reused && ctx.Err() == nil && !errors.As(err, &page) {
 		done(true)
 		if conn, _, done, err = p.connect(ctx, keep); err != nil {
-			return err
+			return wrapPreSend(name, err)
 		}
 		err = evaluateCall(ctx, conn, short, full, out)
 	}
 	done(err != nil)
+	if errors.Is(err, errTabMissing) {
+		return wrapPreSend(name, err)
+	}
+	return err
+}
+
+func wrapPreSend(name string, err error) error {
+	if name == "send" && err != nil {
+		return &preSendError{err: err}
+	}
 	return err
 }
 
@@ -262,9 +400,25 @@ func evaluateCall(ctx context.Context, conn *browser.Conn, short string, full fu
 	return json.Unmarshal(reply.Value, out)
 }
 
+// requestTimeout bounds fast checks (login, pre-send probes) based on
+// RequestTimeoutSeconds while keeping longer test callTimeouts intact and
+// allowing slow-proxy cold loads enough room.
+func (p *chromePage) requestTimeout() time.Duration {
+	t := p.callTimeout
+	if req := time.Duration(p.policy.RequestTimeoutSeconds*2) * time.Second; req > 0 && (t <= 0 || req < t) {
+		t = req
+	}
+	if t <= 0 {
+		return 15 * time.Second
+	}
+	return t
+}
+
 func (p *chromePage) Login(ctx context.Context) (LoginState, error) {
 	var state LoginState
-	err := p.invoke(ctx, p.callTimeout, "login", &state)
+	timeout := p.requestTimeout()
+	fetchMS := max(timeout.Milliseconds()*4/5, 1000)
+	err := p.invoke(ctx, timeout, "login", &state, fetchMS)
 	return state, err
 }
 
@@ -295,23 +449,28 @@ func (p *chromePage) send(ctx context.Context, text string, atts []Attachment, s
 		logger.Get().Warn("muse client send refused", "reason", r.Reason, "attachments", len(atts), "base64Bytes", encodedBytes, "existingChat", sessionID != "", "diagnostics", r.Diagnostics)
 	}()
 	if err := p.invoke(ctx, p.sendTimeout, "send", &r, text, atts, sessionID); err != nil {
+		p.markDirty()
 		return r, err
 	}
 	if !strings.HasPrefix(r.Reason, "not_ready") {
 		return r, nil
 	}
 	if err := p.Home(ctx); err != nil {
+		p.markDirty()
 		return r, nil
 	}
 	err := p.invoke(ctx, p.sendTimeout, "send", &r, text, atts, sessionID)
+	if err != nil || (!r.OK && strings.HasPrefix(r.Reason, "not_ready")) {
+		p.markDirty()
+	}
 	return r, err
 }
 
 // Home loads Muse's home page once no other call is using the tab.
 func (p *chromePage) Home(ctx context.Context) error {
-	if p.nav != nil {
-		p.nav.Lock()
-		defer p.nav.Unlock()
+	if nav := p.navLock(); nav != nil {
+		nav.Lock()
+		defer nav.Unlock()
 	}
 	ctx, cancel := context.WithTimeout(ctx, p.callTimeout)
 	defer cancel()
@@ -326,6 +485,18 @@ func (p *chromePage) Status(ctx context.Context, sessionID string) (string, erro
 	var status string
 	err := p.invoke(ctx, p.callTimeout, "status", &status, sessionID)
 	return status, err
+}
+
+func (p *chromePage) Sessions(ctx context.Context, fresh bool) ([]SessionInfo, error) {
+	var out []SessionInfo
+	err := p.invoke(ctx, p.callTimeout, "sessions", &out, fresh)
+	return out, err
+}
+
+func (p *chromePage) UserMessages(ctx context.Context, sessionID string) ([]UserEvent, error) {
+	var out []UserEvent
+	err := p.invoke(ctx, p.callTimeout, "userMessages", &out, sessionID)
+	return out, err
 }
 
 func (p *chromePage) Result(ctx context.Context, sessionID string) ([]AssistantEvent, error) {
@@ -359,8 +530,9 @@ func (p *chromePage) Capabilities(ctx context.Context) (*MuseCapabilities, error
 
 func (p *chromePage) Download(ctx context.Context, path string, sink io.Writer) (written int64, err error) {
 	var file struct {
-		ID   int   `json:"id"`
-		Size int64 `json:"size"`
+		ID   int    `json:"id"`
+		Size int64  `json:"size"`
+		Data string `json:"data"`
 	}
 	// The tab is held for the whole file: Home between two slices would
 	// reload the page and drop the open file.
@@ -369,27 +541,71 @@ func (p *chromePage) Download(ctx context.Context, path string, sink io.Writer) 
 	if err := p.call(ctx, p.callTimeout, "open", &file, path, p.policy.MaxDownloadBytes); err != nil {
 		return 0, err
 	}
-	defer func() {
-		var ignored any
-		_ = p.call(context.WithoutCancel(ctx), p.callTimeout, "closeFile", &ignored, file.ID)
-	}()
+	if file.ID != 0 {
+		defer func() {
+			var ignored any
+			_ = p.call(context.WithoutCancel(ctx), p.callTimeout, "closeFile", &ignored, file.ID)
+		}()
+	}
 	if file.Size <= 0 || file.Size > p.policy.MaxDownloadBytes {
 		return 0, errors.New("Tệp Muse rỗng hoặc vượt giới hạn tải media.")
 	}
-	for i := 0; int64(i)*chunkSize < file.Size; i++ {
-		var chunk string
-		if err := p.call(ctx, p.callTimeout, "slice", &chunk, file.ID, i); err != nil {
-			return written, err
-		}
-		data, err := base64.StdEncoding.DecodeString(chunk)
+	if file.Data != "" {
+		data, err := base64.StdEncoding.DecodeString(file.Data)
 		if err != nil {
-			return written, err
+			return 0, err
+		}
+		if int64(len(data)) != file.Size {
+			return 0, fmt.Errorf("Tải file lỗi: %d/%d byte", len(data), file.Size)
 		}
 		n, err := sink.Write(data)
-		written += int64(n)
-		if err != nil {
-			return written, err
+		return int64(n), err
+	}
+	type chunkWriteResult struct {
+		written int64
+		err     error
+	}
+	dlCtx, cancelDL := context.WithCancel(ctx)
+	defer cancelDL()
+	chunks := make(chan string, 1)
+	done := make(chan chunkWriteResult, 1)
+	go func() {
+		var total int64
+		defer logger.Recover("ghi chunk Muse", func(err error) { done <- chunkWriteResult{total, err} })
+		for chunk := range chunks {
+			data, err := base64.StdEncoding.DecodeString(chunk)
+			if err != nil {
+				done <- chunkWriteResult{total, err}
+				return
+			}
+			n, err := sink.Write(data)
+			total += int64(n)
+			if err != nil {
+				done <- chunkWriteResult{total, err}
+				return
+			}
+		}
+		done <- chunkWriteResult{total, nil}
+	}()
+	for i := 0; int64(i)*chunkSize < file.Size; i++ {
+		var chunk string
+		if err := p.call(dlCtx, p.callTimeout, "slice", &chunk, file.ID, i); err != nil {
+			cancelDL()
+			close(chunks)
+			r := <-done
+			if r.err != nil {
+				return r.written, r.err
+			}
+			return r.written, err
+		}
+		select {
+		case chunks <- chunk:
+		case r := <-done:
+			cancelDL()
+			return r.written, r.err
 		}
 	}
-	return written, nil
+	close(chunks)
+	r := <-done
+	return r.written, r.err
 }

@@ -96,12 +96,17 @@ describe('jobsOf', () => {
 });
 
 describe('matchesFilter', () => {
-  it('matches held jobs whatever their status', () => {
-    const held = job('h', undefined, { held: true });
-    expect(matchesFilter(held, 'held')).toBe(true);
-    expect(matchesFilter(job('q'), 'held')).toBe(false);
-    expect(matchesFilter(job('q'), MuseJobStatus.Queued)).toBe(true);
-    expect(matchesFilter(job('q'), 'all')).toBe(true);
+  it('separates paused jobs from initial or waiting queued jobs', () => {
+    const initialHeld = job('ih', undefined, { held: true, paused: false });
+    const paused = job('p', undefined, { held: true, paused: true });
+    const waiting = job('w');
+    expect(matchesFilter(initialHeld, MuseJobStatus.Queued)).toBe(true);
+    expect(matchesFilter(initialHeld, 'held')).toBe(false);
+    expect(matchesFilter(paused, 'held')).toBe(true);
+    expect(matchesFilter(paused, MuseJobStatus.Queued)).toBe(false);
+    expect(matchesFilter(waiting, MuseJobStatus.Queued)).toBe(true);
+    expect(matchesFilter(waiting, 'held')).toBe(false);
+    expect(matchesFilter(waiting, 'all')).toBe(true);
   });
 });
 
