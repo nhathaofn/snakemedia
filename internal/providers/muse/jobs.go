@@ -153,6 +153,10 @@ type MuseJob struct {
 	// of making the job; each answer cost a chat turn, so it is capped. It
 	// survives requeues and restarts and is reset only by an explicit retry.
 	LimitReplies int `json:"limitReplies,omitempty"`
+	// NotSentRetries counts consecutive failures before Muse accepted a send
+	// (page not ready or unrecoverable pre-send failures) so jobs stop cleanly
+	// instead of looping across accounts forever.
+	NotSentRetries int `json:"notSentRetries,omitempty"`
 	// NextCheckAt holds the job back until then (RFC3339): a re-check after an
 	// error, or a job whose account was not ready, waits instead of retrying
 	// at once, also across a restart.
@@ -163,7 +167,7 @@ type MuseJob struct {
 // reply count and any hold start over.
 func resetForRetry(j *MuseJob) {
 	resetForQueue(j)
-	j.LimitReplies, j.NextCheckAt = 0, ""
+	j.LimitReplies, j.NotSentRetries, j.NextCheckAt = 0, 0, ""
 }
 
 // resetForQueue clears everything a previous run left behind, so a job sent

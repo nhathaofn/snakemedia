@@ -213,3 +213,25 @@ func TestCapabilitiesAreReadAgain(t *testing.T) {
 		t.Fatalf("stale limits kept: %+v %v %v", caps, read, err)
 	}
 }
+
+func TestRepeatedNotSentErrorsFailAfterCapAcrossAccounts(t *testing.T) {
+	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: false, Reason: "not_ready (/)"}}
+	p := testProvider(t, page)
+	accA := addSignedIn(t, p, "A")
+	accB := addSignedIn(t, p, "B")
+	job := submit(t, p, MuseJobVideo, "một con mèo")[0]
+
+	accs := []string{accA.ID, accB.ID}
+	for i := 1; i < maxNotSentRetries; i++ {
+		p.runOne(context.Background(), job.ID, accs[i%2])
+		got := mustJob(t, p, job.ID)
+		if got.Status != MuseJobQueued || got.Attempts != 0 || got.NotSentRetries != i {
+			t.Fatalf("after %d notSent errors: got=%+v", i, got)
+		}
+	}
+	p.runOne(context.Background(), job.ID, accA.ID)
+	got := mustJob(t, p, job.ID)
+	if got.Status != MuseJobFailed || got.NotSentRetries != maxNotSentRetries || !strings.Contains(got.Error, "not_ready") {
+		t.Fatalf("expected job to fail after %d notSent retries, got=%+v", maxNotSentRetries, got)
+	}
+}

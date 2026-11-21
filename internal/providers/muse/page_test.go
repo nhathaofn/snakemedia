@@ -729,3 +729,81 @@ const page = (` + pageSource + `)(1024);
 		t.Fatalf("gateway wake/fast-fail test failed: %v\n%s", err, out)
 	}
 }
+
+func TestPageScriptSkipsTRPCProxyAndCachesBodyFiber(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is needed to execute the page script")
+	}
+	script := `const assert = require('node:assert/strict');
+const trpcSym = Symbol.for('trpc_untypedClient');
+const makeTrpcProxy = () => {
+  const fn = () => {};
+  return new Proxy(fn, {
+    get(_t, prop) {
+      if (prop === 'then') return undefined;
+      if (prop === trpcSym) return { query() {}, mutation() {} };
+      return new Proxy(fn, {
+        get() { return makeTrpcProxy(); },
+        apply() { throw new TypeError('e[i] is not a function'); }
+      });
+    }
+  });
+};
+const objectProxy = new Proxy({}, {
+  get(_t, prop) {
+    if (prop === 'then') return undefined;
+    return () => { throw new TypeError('catch-all object proxy'); };
+  }
+});
+let sendCalls = 0;
+let scans = 0;
+const realClient = {
+  ensureActiveChatSendReady() {},
+  sendMessage: async (text) => { sendCalls++; return { ok: true, sessionId: 'real-' + text }; }
+};
+const chatFiber = { memoizedProps: { value: realClient } };
+const objProxyFiber = { memoizedProps: { value: objectProxy }, child: chatFiber };
+const trpcFiber = { memoizedProps: { value: makeTrpcProxy() }, child: objProxyFiber };
+const bodyFiber = new Proxy({ memoizedProps: {}, child: trpcFiber }, {
+  get(t, prop) {
+    if (prop === 'child') scans++;
+    return t[prop];
+  }
+});
+trpcFiber.return = bodyFiber;
+objProxyFiber.return = trpcFiber;
+chatFiber.return = objProxyFiber;
+const rootFiber = { tag: 3, child: bodyFiber };
+bodyFiber.return = rootFiber;
+
+const bodyEl = {
+  __reactFiber$app: bodyFiber,
+  children: [],
+  contains(el) { return el === bodyEl; }
+};
+global.document = { body: bodyEl };
+global.location = { pathname: '/' };
+global.fetch = async () => ({ status: 200, async json() { return {}; } });
+global.window = { __hatchEarlyGatewayRuntimeState: { activeRuntime: { getSnapshot: () => ({ isConnected: true }) } } };
+
+const page = (` + pageSource + `)(1024);
+(async () => {
+  const l1 = await page.login();
+  assert.equal(l1.loggedIn, true);
+  assert.equal(l1.chat, true);
+  const res = await page.send('hello', [], '');
+  assert.equal(res.ok, true);
+  assert.equal(res.sessionId, 'real-hello');
+  assert.equal(sendCalls, 1);
+  // fiberMounted must recognize bodyFiber as an ancestor even though bodyFiber.return !== null.
+  assert.equal(scans, 1, 'should reuse cached realClient fiber on body __reactFiber');
+})().catch(e => { console.error(e); process.exitCode = 1; });`
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, node)
+	cmd.Stdin = strings.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("trpc proxy / body fiber cache test failed: %v\n%s", err, out)
+	}
+}

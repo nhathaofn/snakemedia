@@ -493,7 +493,15 @@ func (p *Provider) onAccountAutoResumed(rec accounts.Record) {
 }
 
 func stateRefreshFingerprint(rec accounts.Record) string {
-	return fmt.Sprintf("%s|%t|%s|%s|%s", rec.Status, rec.Enabled, rec.UpdatedAt, rec.Proxy, rec.CookieVersion)
+	return fmt.Sprintf("%s|%t|%s|%s", rec.Status, rec.Enabled, rec.Proxy, rec.CookieVersion)
+}
+
+func isFreshManualAccount(rec accounts.Record) bool {
+	return rec.Source == accounts.SourceBrowser &&
+		rec.Status == accounts.StatusUnverified &&
+		rec.LastCheckedAt == "" &&
+		rec.Identity == "" &&
+		len(rec.Cookies) == 0
 }
 
 func (p *Provider) clearStateRefreshSeen(accountID string) {
@@ -538,6 +546,9 @@ func (p *Provider) triggerNeededAccountRefreshes(jobs []MuseJob, records []accou
 			continue
 		}
 		if rec.Status != accounts.StatusSignedOut && rec.Status != accounts.StatusUnverified && rec.Status != accounts.StatusError {
+			continue
+		}
+		if isFreshManualAccount(rec) {
 			continue
 		}
 		if !pauseElapsed(rec, now) {
@@ -599,6 +610,16 @@ func (p *Provider) scheduleStateAccountRefresh(rec accounts.Record, reason strin
 		var page Page
 		defer func() { closePage(page) }()
 		_, recovered, refErr := p.refreshAccountForRun(refCtx, rec.ID, "", &page, lease, reason)
+		if !recovered {
+			if latest, rErr := p.accounts.Record(rec.ID); rErr == nil && latest.Proxy == rec.Proxy && latest.CookieVersion == rec.CookieVersion {
+				afterFP := reason + ":" + stateRefreshFingerprint(latest)
+				p.mu.Lock()
+				if p.stateRefreshSeen != nil && p.stateRefreshSeen[rec.ID] == fp {
+					p.stateRefreshSeen[rec.ID] = afterFP
+				}
+				p.mu.Unlock()
+			}
+		}
 		logger.Get().Info("muse background account refresh", "account", rec.ID, "reason", reason, "recovered", recovered, "error", refErr)
 	}()
 }

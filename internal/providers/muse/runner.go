@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"SnakeMedia/internal/accounts"
+	"SnakeMedia/internal/browser"
 	"SnakeMedia/internal/config"
 	"SnakeMedia/internal/events"
 	"SnakeMedia/internal/logger"
@@ -561,6 +562,11 @@ func (p *Provider) send(ctx context.Context, job MuseJob, acc accounts.Record, l
 			case reconcileNotSent:
 				logger.Get().Info("muse send confirmed not created; requeueing", "job", job.ID, "sendError", err)
 				p.clearSendingState(job.ID)
+				var evalErr *browser.EvalError
+				if errors.As(err, &evalErr) {
+					p.markRecycleBrowser(acc.ID)
+					return job, page, &museError{msg: fmt.Sprintf("Lỗi trong trang Muse khi gửi lệnh (chưa tạo phiên mới): %v", evalErr)}
+				}
 				return job, page, &notSentError{err: &reconcileNotSentError{err: fmt.Errorf("Không nhận được phản hồi lúc gửi và Muse chưa tạo phiên mới: %w", err)}}
 			default:
 				p.markRecycleBrowser(acc.ID)
@@ -584,6 +590,9 @@ func (p *Provider) send(ctx context.Context, job MuseJob, acc accounts.Record, l
 		// nothing left the app, so no attempt and no send gap are spent.
 		p.clearSendingState(job.ID)
 		p.clearSessionVerified(acc.ID)
+		if res.Reason != "" {
+			return job, page, &notSentError{err: fmt.Errorf("%w (%s)", errPageNotReady, res.Reason)}
+		}
 		return job, page, &notSentError{err: errPageNotReady}
 	}
 	p.clearRecycleBrowser(acc.ID)
@@ -662,7 +671,7 @@ func (p *Provider) send(ctx context.Context, job MuseJob, acc accounts.Record, l
 		if j.Status == MuseJobQueued {
 			return
 		}
-		j.SessionID, j.Sending, j.PreSendTracked, j.PreSendSessions = res.SessionID, false, false, nil
+		j.SessionID, j.Sending, j.PreSendTracked, j.PreSendSessions, j.NotSentRetries = res.SessionID, false, false, nil, 0
 		j.SentAt = p.now().UTC().Format(time.RFC3339)
 		if j.Status == MuseJobProcessing {
 			kept = true
@@ -729,7 +738,7 @@ func (p *Provider) reconcileInterruptedSend(ctx context.Context, job MuseJob, ac
 			if j.Status == MuseJobQueued {
 				return
 			}
-			j.SessionID, j.Sending, j.PreSendTracked, j.PreSendSessions = sid, false, false, nil
+			j.SessionID, j.Sending, j.PreSendTracked, j.PreSendSessions, j.NotSentRetries = sid, false, false, nil, 0
 			if j.SentAt == "" {
 				j.SentAt = p.now().UTC().Format(time.RFC3339)
 			}
@@ -2011,6 +2020,10 @@ const (
 	// maxLimitReplies caps how often one job may be handed on after a chat
 	// ended without a file on a used-up account: each cost a chat turn.
 	maxLimitReplies = 3
+	// maxNotSentRetries caps consecutive pre-send / page-not-ready failures
+	// before failing the job, preventing an infinite requeue loop across
+	// accounts when Muse's page or chat client cannot accept sends.
+	maxNotSentRetries = 6
 	// notSentWait holds a job back after its account's page was not ready.
 	notSentWait = time.Minute
 	// recheckWait is the first pause before a sent job is read again after an
@@ -2189,6 +2202,20 @@ func (p *Provider) recordFailure(jobID, accountID string, err error) {
 				}
 			})
 			return
+		}
+		if !resting {
+			n := 0
+			p.updateJob(jobID, func(j *MuseJob) {
+				if j.Status == MuseJobProcessing {
+					j.NotSentRetries++
+				}
+				n = j.NotSentRetries
+			})
+			if n >= maxNotSentRetries {
+				log("page not ready", "failed: too many pre-send retries", err)
+				failed(fmt.Sprintf("Không gửi được lệnh tới Muse sau %d lần thử (%v). Hãy kiểm tra tài khoản rồi bấm Chạy lại.", n, notSent.err))
+				return
+			}
 		}
 		hasOther := !resting && p.hasOtherUsableAccount(accountID, job.Kind, cfg, p.now())
 		if hasOther {

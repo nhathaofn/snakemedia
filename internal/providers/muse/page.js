@@ -198,22 +198,57 @@ function pageMain(CHUNK) {
   const fiberMounted = (f, liveRoot) => {
     if (!f || !f.return) return false;
     let p = f;
-    for (let i = 0; i < 512 && p.return; i++) p = p.return;
-    return p === liveRoot || Boolean(liveRoot?.alternate && p === liveRoot.alternate);
+    for (let i = 0; i < 1024 && p; i++) {
+      if (
+        p === liveRoot ||
+        Boolean(liveRoot?.alternate && p === liveRoot.alternate)
+      ) {
+        return true;
+      }
+      p = p.return;
+    }
+    return false;
   };
-  const validChatValue = (v) =>
-    v &&
-    typeof v.sendMessage === "function" &&
-    typeof v.ensureActiveChatSendReady === "function"
-      ? v
-      : null;
+  const TRPC_CLIENT_SYM =
+    typeof Symbol === "function" ? Symbol.for("trpc_untypedClient") : null;
+  const isCatchAllProxy = (v) => {
+    try {
+      if (TRPC_CLIENT_SYM && v[TRPC_CLIENT_SYM]) return true;
+      return typeof v.__mss_invalid_prop__ !== "undefined";
+    } catch (e) {
+      return true;
+    }
+  };
+  const validChatValue = (v) => {
+    try {
+      if (!v || typeof v !== "object") return null;
+      if (isCatchAllProxy(v)) return null;
+      if (
+        typeof v.sendMessage !== "function" ||
+        typeof v.ensureActiveChatSendReady !== "function"
+      ) {
+        return null;
+      }
+      if (!("sendMessage" in v) || !("ensureActiveChatSendReady" in v)) {
+        return null;
+      }
+      return v;
+    } catch (e) {
+      return null;
+    }
+  };
   const cachedChatValue = (body, curPath) => {
     const entry = cachedChat;
     if (!entry) return null;
     if (
       entry.path !== curPath ||
       Date.now() - entry.at >= CHAT_CACHE_MS ||
-      !(body === entry.el || (typeof body.contains === "function" && body.contains(entry.el)))
+      !(
+        entry.el === document ||
+        entry.el === document?.documentElement ||
+        body === entry.el ||
+        (typeof body.contains === "function" && body.contains(entry.el))
+      )
     ) {
       cachedChat = null;
       return null;
@@ -240,13 +275,7 @@ function pageMain(CHUNK) {
     entry.fiber = live;
     return v;
   };
-  const chat = () => {
-    if (!document.body) return null; // navigating: the next page is not built yet
-    const curPath =
-      typeof location !== "undefined" ? String(location.pathname || "") : "";
-    const cached = cachedChatValue(document.body, curPath);
-    if (cached) return cached;
-    const found = findReactContainer(document.body);
+  const scanContainer = (found, curPath) => {
     if (!found) return null;
     let root = found.el[found.prop];
     if (root.stateNode?.current) root = root.stateNode.current;
@@ -271,6 +300,65 @@ function pageMain(CHUNK) {
       if (sb) stack.push(sb);
     }
     return null;
+  };
+  const containerOn = (el) => {
+    if (!el || typeof el !== "object") return null;
+    const prop = reactRootProp(el);
+    return prop ? { el, prop } : null;
+  };
+  const chat = () => {
+    if (!document.body) return null; // navigating: the next page is not built yet
+    const curPath =
+      typeof location !== "undefined" ? String(location.pathname || "") : "";
+    const cached = cachedChatValue(document.body, curPath);
+    if (cached) return cached;
+    const bodyFound = findReactContainer(document.body);
+    const v = scanContainer(bodyFound, curPath);
+    if (v) return v;
+    for (const host of [document.documentElement, document]) {
+      const hostFound = containerOn(host);
+      if (hostFound && hostFound.el !== bodyFound?.el) {
+        const hv = scanContainer(hostFound, curPath);
+        if (hv) return hv;
+      }
+    }
+    return null;
+  };
+  const chatDiag = () => {
+    try {
+      const seenRoots = new Set();
+      const hints = [];
+      for (const found of [
+        document.body ? findReactContainer(document.body) : null,
+        containerOn(document.documentElement),
+        containerOn(document),
+      ]) {
+        if (!found) continue;
+        let root = found.el[found.prop];
+        if (root?.stateNode?.current) root = root.stateNode.current;
+        if (!root || seenRoots.has(root)) continue;
+        seenRoots.add(root);
+        const stack = [root];
+        for (let n = 0; stack.length && n < 50000; n++) {
+          const f = stack.pop();
+          const v = f?.memoizedProps?.value;
+          if (v && typeof v === "object" && !isCatchAllProxy(v)) {
+            if (
+              typeof v.sendMessage === "function" ||
+              typeof v.ensureActiveChatSendReady === "function"
+            ) {
+              hints.push(Object.keys(v).slice(0, 8).join(","));
+              if (hints.length >= 3) break;
+            }
+          }
+          if (f?.child) stack.push(f.child);
+          if (f?.sibling) stack.push(f.sibling);
+        }
+      }
+      return hints.length ? `ctx:[${hints.join("|")}]` : "";
+    } catch (e) {
+      return "";
+    }
   };
   // sessions.list lists every chat of the account, and every job opens one:
   // jobs polling the same tab side by side share one listing for a moment.
@@ -540,12 +628,16 @@ function pageMain(CHUNK) {
         await new Promise((r) => setTimeout(r, 1000));
         c = chat();
       }
-      if (!c)
+      if (!c) {
+        const diag = chatDiag();
+        const path =
+          typeof location !== "undefined" ? String(location.pathname || "") : "";
         return {
           ok: false,
           sessionId: "",
-          reason: `not_ready (${location.pathname})`,
+          reason: diag ? `not_ready (${path}; ${diag})` : `not_ready (${path})`,
         };
+      }
       const gwErr = await ensureGatewayReady();
       if (gwErr) {
         cachedChat = null;

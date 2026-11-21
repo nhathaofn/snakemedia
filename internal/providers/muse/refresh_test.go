@@ -482,3 +482,70 @@ func TestSiblingVideoThreadsAbortBeforeSendingOnceVideoDisabled(t *testing.T) {
 		}
 	})
 }
+
+func TestStateDrivenRefreshRunsOnceOnSignedOutAndSkipsFreshAccount(t *testing.T) {
+	var loginCalls atomic.Int32
+	var openCalls atomic.Int32
+	page := &countingLoginFailPage{fakePage: &fakePage{loggedIn: false}, calls: &loginCalls}
+	p := testProvider(t, page)
+	origPageFor := p.pageFor
+	p.pageFor = func(ctx context.Context, rec accounts.Record) (Page, error) {
+		openCalls.Add(1)
+		return origPageFor(ctx, rec)
+	}
+
+	fresh := accounts.Record{Account: accounts.Account{
+		ID: "acc-fresh", Provider: accounts.ProviderMuse, Name: "Muse 5",
+		Source: accounts.SourceBrowser, Status: accounts.StatusUnverified, Enabled: true, Proxy: proxy.None,
+	}}
+	signedOut := accounts.Record{Account: accounts.Account{
+		ID: "acc-signedout", Provider: accounts.ProviderMuse, Name: "SignedOut",
+		Source: accounts.SourceBrowser, Status: accounts.StatusSignedOut, Enabled: true, Proxy: proxy.None,
+		LastCheckedAt: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
+	}}
+	if err := p.accounts.Seed(fresh); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.accounts.Seed(signedOut); err != nil {
+		t.Fatal(err)
+	}
+	_ = submit(t, p, MuseJobVideo, "một con mèo")[0]
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p.Start(ctx, nil)
+	defer p.Close()
+
+	// Wait for the one-shot refresh of signedOut to complete and settle.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		p.mu.Lock()
+		busy := p.stateRefreshBusy[signedOut.ID]
+		_, seen := p.stateRefreshSeen[signedOut.ID]
+		p.mu.Unlock()
+		if seen && !busy && openCalls.Load() > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// Let several pump/trigger cycles run; signedOut must NOT refresh again.
+	time.Sleep(250 * time.Millisecond)
+
+	if got := openCalls.Load(); got != 1 {
+		t.Fatalf("expected signed-out background refresh to open page once, got %d (loginCalls=%d)", got, loginCalls.Load())
+	}
+	gotFresh, _ := p.accounts.Record(fresh.ID)
+	if gotFresh.Status != accounts.StatusUnverified || gotFresh.LastCheckedAt != "" {
+		t.Fatalf("fresh browser account should stay unverified untouched, got %+v", gotFresh.Account)
+	}
+}
+
+type countingLoginFailPage struct {
+	*fakePage
+	calls *atomic.Int32
+}
+
+func (c *countingLoginFailPage) Login(context.Context) (LoginState, error) {
+	c.calls.Add(1)
+	return LoginState{LoggedIn: false, Chat: false, HTTP: 401}, nil
+}

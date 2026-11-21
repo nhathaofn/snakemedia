@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"SnakeMedia/internal/accounts"
+	"SnakeMedia/internal/browser"
 )
 
 type trackedFakePage struct {
@@ -524,5 +526,33 @@ func TestReconcileUsesFakeSleepWithoutRealDelay(t *testing.T) {
 	p.runOne(context.Background(), job.ID, acc.ID)
 	if time.Since(start) > 2*time.Second {
 		t.Fatalf("reconcile slept in real time: %v", time.Since(start))
+	}
+}
+
+func TestSendEvalErrorConfirmedNotSentFailsAfterMaxAttempts(t *testing.T) {
+	base := &fakePage{
+		loggedIn: true,
+		sendErr:  &browser.EvalError{Detail: "TypeError: e[i] is not a function"},
+	}
+	page := &trackedFakePage{
+		fakePage: base,
+		sessions: []SessionInfo{{ID: "s0", Status: "completed"}},
+		userMsgs: map[string][]UserEvent{},
+	}
+	p := testProvider(t, page)
+	accA := addSignedIn(t, p, "A")
+	accB := addSignedIn(t, p, "B")
+	job := submit(t, p, MuseJobVideo, "một con mèo")[0]
+
+	p.runOne(context.Background(), job.ID, accA.ID)
+	got := mustJob(t, p, job.ID)
+	if got.Status != MuseJobQueued || got.Attempts != 1 || got.SendUnknown {
+		t.Fatalf("after 1st eval error: job = %+v", got)
+	}
+
+	p.runOne(context.Background(), job.ID, accB.ID)
+	got = mustJob(t, p, job.ID)
+	if got.Status != MuseJobFailed || got.Attempts != 2 || !strings.Contains(got.Error, "TypeError: e[i] is not a function") {
+		t.Fatalf("after 2nd eval error: job = %+v", got)
 	}
 }

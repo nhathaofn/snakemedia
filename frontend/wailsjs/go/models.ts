@@ -3385,6 +3385,7 @@ export namespace muse {
 	    sentAt?: string;
 	    finishedAt?: string;
 	    limitReplies?: number;
+	    notSentRetries?: number;
 	    nextCheckAt?: string;
 	
 	    static createFrom(source: any = {}) {
@@ -3437,6 +3438,7 @@ export namespace muse {
 	        this.sentAt = source["sentAt"];
 	        this.finishedAt = source["finishedAt"];
 	        this.limitReplies = source["limitReplies"];
+	        this.notSentRetries = source["notSentRetries"];
 	        this.nextCheckAt = source["nextCheckAt"];
 	    }
 	
