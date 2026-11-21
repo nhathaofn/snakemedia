@@ -515,7 +515,7 @@ func TestCheckVideoCheckerFatalLimitAndAutoResume(t *testing.T) {
 		s.sites[ProviderMuse] = site
 		seed(t, s, Record{Account: Account{ID: "a"}})
 		res := s.Check(context.Background(), "a")
-		if !res.Success || site.videoCalls != 0 || len(pool.closed) != 1 {
+		if !res.Success || site.videoCalls != 0 || len(pool.closed) != 0 {
 			t.Fatalf("quick check failed: res=%+v videoCalls=%d closed=%v", res, site.videoCalls, pool.closed)
 		}
 	})
@@ -651,4 +651,60 @@ func TestVideoCheckDisabledStaysSignedInAndToggleable(t *testing.T) {
 	if toggle := s.SetVideoCheck("a", true); !toggle.Success || toggle.Data.SkipVideoCheck {
 		t.Fatalf("re-enabling video check failed: %+v", toggle)
 	}
+}
+
+type scopeSite struct {
+	*fakeSite
+	markResults []bool
+}
+
+func (s *scopeSite) Inspect(ctx context.Context, _ *browser.Browser, _ Record) (Inspection, error) {
+	s.markResults = append(s.markResults, InspectScopeFrom(ctx).MarkHome())
+	return Inspection{}, nil
+}
+
+func TestWaitSignedInSharesInspectScopeAcrossPolls(t *testing.T) {
+	t.Run("browser account shares one InspectScope across every poll", func(t *testing.T) {
+		s, _, base := testService(t, Inspection{})
+		site := &scopeSite{fakeSite: base}
+		s.sites[ProviderMuse] = site
+		seed(t, s, Record{Account: Account{ID: "a", Source: SourceBrowser}})
+
+		res := s.Check(context.Background(), "a")
+		if !res.Success || res.Data.Status != StatusSignedOut {
+			t.Fatalf("check = %+v", res)
+		}
+		if len(site.markResults) < 2 {
+			t.Fatalf("expected multiple inspect polls, got %d", len(site.markResults))
+		}
+		if !site.markResults[0] {
+			t.Fatalf("expected first poll in waitSignedIn to allow Home, got %v", site.markResults)
+		}
+		for i, got := range site.markResults[1:] {
+			if got {
+				t.Fatalf("poll %d unexpectedly saw fresh MarkHome=true: %v", i+2, site.markResults)
+			}
+		}
+	})
+
+	t.Run("cookie account gets a fresh InspectScope after re-injecting cookies", func(t *testing.T) {
+		s, _, base := testService(t, Inspection{})
+		site := &scopeSite{fakeSite: base}
+		s.sites[ProviderMuse] = site
+		seed(t, s, Record{Account: Account{ID: "c", Source: SourceCookies}, Cookies: []browser.Cookie{{Name: "sid"}}})
+
+		res := s.Check(context.Background(), "c")
+		if !res.Success || res.Data.Status != StatusSignedOut {
+			t.Fatalf("check = %+v", res)
+		}
+		trues := 0
+		for _, got := range site.markResults {
+			if got {
+				trues++
+			}
+		}
+		if trues != 2 {
+			t.Fatalf("expected exactly 2 MarkHome=true (once per waitSignedIn pass), got %d in %d polls", trues, len(site.markResults))
+		}
+	})
 }

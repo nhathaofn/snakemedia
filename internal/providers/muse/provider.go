@@ -139,6 +139,7 @@ func New(dataDir, outputDir string, cfg *config.Manager, store *media.Store, acc
 		attCache:           newAttachmentCache(),
 		wake:               make(chan struct{}, 1),
 	}
+	p.tabs.navLock = p.tabNavLock
 	// The folders Muse saves results to are the app's own: the default, the
 	// one the batch form remembers, and those queued batches still save into.
 	store.AllowRoot(outputDir)
@@ -401,8 +402,7 @@ func (p *Provider) pump() {
 		}
 		return false
 	})
-	var chromeStagger time.Duration
-	firstChrome := true
+	staggerFor := newChromeStaggerPlanner(p.accounts)
 	for _, a := range planWithCapacity(due(jobs, now), free, cfg, p.running, now, apiCap, p.lastMode) {
 		if job, ok := p.jobs.get(a.jobID); ok && job.Status == MuseJobQueued {
 			p.lastMode = job.Mode
@@ -412,15 +412,7 @@ func (p *Provider) pump() {
 		}
 		var stagger time.Duration
 		if a.accountID != "api" {
-			if firstChrome {
-				firstChrome = false
-			} else {
-				chromeStagger += time.Duration(300+rand.IntN(300)) * time.Millisecond
-				if chromeStagger > 5*time.Second {
-					chromeStagger = 5 * time.Second
-				}
-				stagger = chromeStagger
-			}
+			stagger = staggerFor(a.accountID)
 		}
 		ctx, cancel := context.WithCancel(p.ctx)
 		p.running[a.jobID] = a.accountID
@@ -805,6 +797,49 @@ func idleCode(err error) models.Code {
 		return models.CodeInvalidArgument
 	}
 	return models.CodeInternal
+}
+
+const (
+	coldChromeStaggerMin  = 700 * time.Millisecond
+	coldChromeStaggerSpan = 400 // milliseconds random jitter per distinct cold account
+	maxColdChromeStagger  = 20 * time.Second
+	warmThreadStaggerMin  = 150 * time.Millisecond
+	warmThreadStaggerSpan = 200 // milliseconds random jitter for warm/sibling threads
+)
+
+type browserStateChecker interface {
+	HasRunningBrowser(id string) bool
+}
+
+// newChromeStaggerPlanner spreads cold Chrome startups across ~20s when many
+// accounts start a batch at once, while letting already-warm Chromes and sibling
+// threads on the same Chrome dispatch immediately without unnecessary waiting.
+func newChromeStaggerPlanner(checker browserStateChecker) func(accountID string) time.Duration {
+	delayByAcc := make(map[string]time.Duration)
+	var coldCursor time.Duration
+	hasColdFirst := false
+	return func(accountID string) time.Duration {
+		if base, seen := delayByAcc[accountID]; seen {
+			return base + warmThreadStaggerMin + time.Duration(rand.IntN(warmThreadStaggerSpan))*time.Millisecond
+		}
+		if checker != nil && checker.HasRunningBrowser(accountID) {
+			d := warmThreadStaggerMin + time.Duration(rand.IntN(warmThreadStaggerSpan))*time.Millisecond
+			delayByAcc[accountID] = d
+			return d
+		}
+		var base time.Duration
+		if !hasColdFirst {
+			hasColdFirst = true
+		} else {
+			coldCursor += coldChromeStaggerMin + time.Duration(rand.IntN(coldChromeStaggerSpan))*time.Millisecond
+			if coldCursor > maxColdChromeStagger {
+				coldCursor = maxColdChromeStagger
+			}
+			base = coldCursor
+		}
+		delayByAcc[accountID] = base
+		return base
+	}
 }
 
 func (p *Provider) runStaggered(ctx context.Context, jobID, accountID string, stagger time.Duration) {

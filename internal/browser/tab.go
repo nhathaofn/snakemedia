@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"SnakeMedia/internal/config"
@@ -62,6 +63,50 @@ func EnsureTab(ctx context.Context, port int, policy config.AccountConfig, site 
 	return Navigate(ctx, *blank, port, site)
 }
 
+var lastCleanUA atomic.Value
+
+// RecordUserAgent stores the browser's clean desktop User-Agent (with any
+// HeadlessChrome/ marker normalized to Chrome/) so provider HTTP requests can
+// reuse the installed Chrome's exact identity.
+func RecordUserAgent(raw string) {
+	if raw == "" {
+		return
+	}
+	clean := strings.ReplaceAll(raw, "HeadlessChrome/", "Chrome/")
+	lastCleanUA.Store(clean)
+}
+
+// LastUserAgent returns the most recently observed clean Chrome User-Agent, or
+// "" if no Chrome instance has been inspected yet.
+func LastUserAgent() string {
+	if v, ok := lastCleanUA.Load().(string); ok {
+		return v
+	}
+	return ""
+}
+
+// normalizeHeadlessUserAgent strips Chrome's "HeadlessChrome/" marker from
+// CDP Emulation when running headless=new, using the live browser version from
+// /json/version so sites see the same browser identity as visible Chrome.
+func normalizeHeadlessUserAgent(ctx context.Context, conn *Conn, port int) {
+	if port <= 0 {
+		return
+	}
+	var v browserVersion
+	if err := LocalJSON(ctx, port, "/json/version", config.DefaultAccountConfig(), &v); err != nil {
+		return
+	}
+	if v.UserAgent == "" {
+		return
+	}
+	RecordUserAgent(v.UserAgent)
+	if !strings.Contains(v.UserAgent, "HeadlessChrome/") {
+		return
+	}
+	ua := strings.ReplaceAll(v.UserAgent, "HeadlessChrome/", "Chrome/")
+	_ = conn.Call(ctx, "Emulation.setUserAgentOverride", map[string]any{"userAgent": ua}, nil)
+}
+
 // Navigate loads the site's home page in tab t, installing its boot script first.
 func Navigate(ctx context.Context, t Target, port int, site Site) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -71,6 +116,7 @@ func Navigate(ctx context.Context, t Target, port int, site Site) error {
 		return err
 	}
 	defer conn.Close()
+	normalizeHeadlessUserAgent(ctx, conn, port)
 	if site.Boot != "" {
 		_ = conn.Call(ctx, "Page.enable", nil, nil)
 		if err := conn.Call(ctx, "Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": site.Boot}, nil); err != nil {

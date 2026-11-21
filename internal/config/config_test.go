@@ -268,9 +268,9 @@ func TestMigrate_MovesFlowFFmpegPathsToTools(t *testing.T) {
 	}
 }
 
-func TestDefaultIdleBrowserMinutesIsFiveAndOnChangeFires(t *testing.T) {
-	if got := DefaultAccountConfig().IdleBrowserMinutes; got != 5 {
-		t.Fatalf("IdleBrowserMinutes default = %d, want 5", got)
+func TestDefaultIdleBrowserMinutesIsTenAndOnChangeFires(t *testing.T) {
+	if got := DefaultAccountConfig().IdleBrowserMinutes; got != 10 {
+		t.Fatalf("IdleBrowserMinutes default = %d, want 10", got)
 	}
 	path := filepath.Join(t.TempDir(), "config.json")
 	m, err := NewManager(path)

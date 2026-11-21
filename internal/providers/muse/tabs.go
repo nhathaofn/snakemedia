@@ -12,30 +12,48 @@ import (
 	"SnakeMedia/internal/config"
 )
 
-// errTabCapReached signals that ThreadsPerAccount dropped below active slots
-// before this job claimed a tab, so it should be re-queued without blaming Chrome.
+// errTabCapReached signals that ThreadsPerAccount dropped below active concurrent
+// jobs before this job acquired the shared tab, so it should re-queue cleanly.
 var errTabCapReached = errors.New("Số luồng trên tài khoản vừa giảm; xếp hàng lại.")
+
+// sharedTabReloadEvery reloads an account's shared muse.ai tab cleanly back to
+// Home after this many completed prompt runs so long 200-300 prompt batches do
+// not accumulate unbounded Next.js DOM/React heap memory.
+const sharedTabReloadEvery = 15
 
 type tabSlot struct {
 	targetID    string
-	busy        bool
-	jobID       string
+	jobs        []string
 	needsReload bool
+	uses        int
 }
+
+func (s tabSlot) busy() bool { return len(s.jobs) > 0 }
 
 type accountTabState struct {
 	port  int
 	slots []tabSlot
 }
 
-// tabPool manages a fixed-capacity pool of muse.ai tabs per account Chrome,
-// opening tabs lazily as jobs arrive, reusing idle tabs across prompts, and
-// shrinking excess tabs when ThreadsPerAccount decreases.
-type tabPool struct {
-	mu       sync.Mutex
-	locks    map[string]chan struct{}
-	accounts map[string]*accountTabState
+func (st *accountTabState) totalBusy() int {
+	n := 0
+	for _, s := range st.slots {
+		n += len(s.jobs)
+	}
+	return n
+}
 
+// tabPool manages one shared muse.ai tab per account Chrome (Shared-Tab Mode):
+// multiple concurrent threads (ThreadsPerAccount 1..5) share that single tab's
+// WebSocket runtime instead of spawning one heavy Next.js renderer tab per
+// thread, cutting Chrome RAM sharply while preserving full concurrency.
+type tabPool struct {
+	mu          sync.Mutex
+	locks       map[string]chan struct{}
+	accounts    map[string]*accountTabState
+	reloadAfter int
+
+	navLock     func(accountID, targetID string) *sync.RWMutex
 	listTargets func(context.Context, int, config.AccountConfig) ([]browser.Target, error)
 	openTab     func(context.Context, int, config.AccountConfig) (browser.Target, error)
 	navigate    func(context.Context, browser.Target, int, browser.Site) error
@@ -48,6 +66,7 @@ func newTabPool() *tabPool {
 	return &tabPool{
 		locks:       make(map[string]chan struct{}),
 		accounts:    make(map[string]*accountTabState),
+		reloadAfter: sharedTabReloadEvery,
 		listTargets: browser.Targets,
 		openTab:     browser.NewTab,
 		navigate:    browser.Navigate,
@@ -55,6 +74,13 @@ func newTabPool() *tabPool {
 		sleep:       sleepContext,
 		now:         time.Now,
 	}
+}
+
+func (tp *tabPool) reloadThreshold() int {
+	if tp.reloadAfter > 0 {
+		return tp.reloadAfter
+	}
+	return sharedTabReloadEvery
 }
 
 func (tp *tabPool) lockAccount(ctx context.Context, accountID string) (func(), error) {
@@ -74,10 +100,12 @@ func (tp *tabPool) lockAccount(ctx context.Context, accountID string) (func(), e
 }
 
 func (tp *tabPool) hasBusy(accountID string, port int) bool {
-	return tp.hasOtherBusy(accountID, port, "")
+	return tp.hasOtherBusy(accountID, port, "", "")
 }
 
-func (tp *tabPool) hasOtherBusy(accountID string, port int, excludeTargetID string) bool {
+// hasOtherBusy reports whether another job (not excludeJobID, or another holder
+// sharing the same tab) is currently active on accountID's Chrome.
+func (tp *tabPool) hasOtherBusy(accountID string, port int, excludeTargetID, excludeJobID string) bool {
 	tp.mu.Lock()
 	defer tp.mu.Unlock()
 	st := tp.accounts[accountID]
@@ -85,21 +113,37 @@ func (tp *tabPool) hasOtherBusy(accountID string, port int, excludeTargetID stri
 		return false
 	}
 	for _, s := range st.slots {
-		if s.busy && s.targetID != excludeTargetID {
-			return true
+		if len(s.jobs) == 0 {
+			continue
 		}
+		if excludeJobID != "" {
+			for _, id := range s.jobs {
+				if id != excludeJobID {
+					return true
+				}
+			}
+			continue
+		}
+		if s.targetID == excludeTargetID {
+			if len(s.jobs) > 1 {
+				return true
+			}
+			continue
+		}
+		return true
 	}
 	return false
 }
 
-func (tp *tabPool) hasExcess(wantThreads int) bool {
-	want := max(wantThreads, 1)
+// hasExcess reports whether any Chrome holds more than 1 tracked muse.ai tab
+// that has gone idle.
+func (tp *tabPool) hasExcess(_ int) bool {
 	tp.mu.Lock()
 	defer tp.mu.Unlock()
 	for _, st := range tp.accounts {
-		if len(st.slots) > want {
-			for _, s := range st.slots {
-				if !s.busy {
+		if len(st.slots) > 1 {
+			for i := 1; i < len(st.slots); i++ {
+				if !st.slots[i].busy() {
 					return true
 				}
 			}
@@ -159,7 +203,8 @@ func (tp *tabPool) syncLocked(ctx context.Context, accountID string, port int, p
 	return st, blanks, nil
 }
 
-// popExcessIdle removes excess idle slots from tail down to want (at least 1).
+// popExcessIdle removes excess idle secondary slots from tail down to keep (at
+// least 1), so Shared-Tab Mode prunes any leftover secondary tabs cleanly.
 func (tp *tabPool) popExcessIdle(st *accountTabState, port, want int) []string {
 	keep := max(want, 1)
 	tp.mu.Lock()
@@ -169,7 +214,7 @@ func (tp *tabPool) popExcessIdle(st *accountTabState, port, want int) []string {
 	}
 	var drop []string
 	for i := len(st.slots) - 1; i >= 0 && len(st.slots) > keep; i-- {
-		if st.slots[i].busy {
+		if st.slots[i].busy() {
 			continue
 		}
 		drop = append(drop, st.slots[i].targetID)
@@ -184,8 +229,23 @@ func (tp *tabPool) closeTargets(ctx context.Context, port int, policy config.Acc
 	}
 }
 
-// acquire assigns an idle muse.ai tab on port to jobID, opening one new tab
-// when every existing tab is busy and fewer than wantThreads tabs exist.
+func removeJobFromSlot(jobs []string, jobID string) []string {
+	if len(jobs) == 0 {
+		return jobs
+	}
+	if jobID != "" {
+		for i := len(jobs) - 1; i >= 0; i-- {
+			if jobs[i] == jobID {
+				return slices.Delete(jobs, i, i+1)
+			}
+		}
+	}
+	return jobs[:len(jobs)-1]
+}
+
+// acquire binds jobID to accountID's single shared muse.ai tab on port (opening
+// one tab only when none exists yet) as long as total concurrent holders stay
+// within wantThreads.
 func (tp *tabPool) acquire(ctx context.Context, accountID, jobID string, port, wantThreads int, policy config.AccountConfig) (string, error) {
 	if port <= 0 {
 		return "", errTabMissing
@@ -203,30 +263,40 @@ func (tp *tabPool) acquire(ctx context.Context, accountID, jobID string, port, w
 	}
 
 	tp.mu.Lock()
-	for i := range st.slots {
-		if !st.slots[i].busy {
-			st.slots[i].busy = true
-			st.slots[i].jobID = jobID
-			chosen := st.slots[i].targetID
-			reload := st.slots[i].needsReload
-			st.slots[i].needsReload = false
-			tp.mu.Unlock()
-			if excess := tp.popExcessIdle(st, port, want); len(excess) > 0 {
-				tp.closeTargets(ctx, port, policy, excess)
-			}
-			if reload {
-				if navTarget, ok := findTarget(ctx, tp, port, policy, chosen); ok {
-					if err := tp.navigate(ctx, navTarget, port, musePage); err == nil {
-						_ = tp.waitOnMuse(ctx, port, chosen, policy)
-					}
-				}
-			}
-			return chosen, nil
-		}
-	}
-	if len(st.slots) >= want {
+	if st.totalBusy() >= want {
 		tp.mu.Unlock()
 		return "", errTabCapReached
+	}
+	if len(st.slots) > 0 {
+		// Pick the primary shared tab and close any excess secondary idle tabs.
+		idx := 0
+		chosen := st.slots[idx].targetID
+		st.slots[idx].jobs = append(st.slots[idx].jobs, jobID)
+		reload := st.slots[idx].needsReload
+		if reload {
+			st.slots[idx].needsReload = false
+			st.slots[idx].uses = 0
+		}
+		tp.mu.Unlock()
+
+		if excess := tp.popExcessIdle(st, port, 1); len(excess) > 0 {
+			tp.closeTargets(ctx, port, policy, excess)
+		}
+		if reload {
+			if err := tp.reloadSharedTab(ctx, accountID, port, chosen, policy); err != nil {
+				tp.mu.Lock()
+				for i := range st.slots {
+					if st.slots[i].targetID == chosen {
+						st.slots[i].jobs = removeJobFromSlot(st.slots[i].jobs, jobID)
+						st.slots[i].needsReload = true
+						break
+					}
+				}
+				tp.mu.Unlock()
+				return "", err
+			}
+		}
+		return chosen, nil
 	}
 	tp.mu.Unlock()
 
@@ -264,9 +334,26 @@ func (tp *tabPool) acquire(ctx context.Context, accountID, jobID string, port, w
 		}
 		return "", errTabMissing
 	}
-	cur.slots = append(cur.slots, tabSlot{targetID: target.ID, busy: true, jobID: jobID})
+	cur.slots = append(cur.slots, tabSlot{targetID: target.ID, jobs: []string{jobID}})
 	tp.mu.Unlock()
 	return target.ID, nil
+}
+
+func (tp *tabPool) reloadSharedTab(ctx context.Context, accountID string, port int, targetID string, policy config.AccountConfig) error {
+	navTarget, ok := findTarget(ctx, tp, port, policy, targetID)
+	if !ok {
+		return errTabMissing
+	}
+	if tp.navLock != nil {
+		if nav := tp.navLock(accountID, targetID); nav != nil {
+			nav.Lock()
+			defer nav.Unlock()
+		}
+	}
+	if err := tp.navigate(ctx, navTarget, port, musePage); err != nil {
+		return err
+	}
+	return tp.waitOnMuse(ctx, port, targetID, policy)
 }
 
 func (tp *tabPool) waitOnMuse(ctx context.Context, port int, targetID string, policy config.AccountConfig) error {
@@ -300,28 +387,32 @@ func (tp *tabPool) waitOnMuse(ctx context.Context, port int, targetID string, po
 	}
 }
 
-// release returns targetID to the pool for reuse, or closes it when dirty (for
-// non-sole tabs) or when total tabs on that Chrome exceed the current thread limit.
-func (tp *tabPool) release(ctx context.Context, accountID string, port int, targetID string, dirty bool, wantThreads func() int, policy config.AccountConfig) {
+// release detaches jobID from targetID, closes excess idle secondary tabs,
+// and marks the shared tab to reload cleanly to Home on errors or after
+// periodic prompt batches so Chrome's JS heap stays bounded.
+func (tp *tabPool) release(ctx context.Context, accountID string, port int, targetID, jobID string, dirty bool, wantThreads func() int, policy config.AccountConfig) {
 	if targetID == "" || port <= 0 {
 		return
 	}
-	want := max(wantThreads(), 1)
+	if wantThreads != nil {
+		_ = wantThreads()
+	}
 	needsClose := false
+	reloadAfter := tp.reloadThreshold()
 	tp.mu.Lock()
 	st := tp.accounts[accountID]
 	if st != nil && st.port == port {
 		for i := range st.slots {
 			if st.slots[i].targetID == targetID {
-				st.slots[i].busy = false
-				st.slots[i].jobID = ""
-				if dirty {
+				st.slots[i].jobs = removeJobFromSlot(st.slots[i].jobs, jobID)
+				st.slots[i].uses++
+				if dirty || (reloadAfter > 0 && st.slots[i].uses >= reloadAfter) {
 					st.slots[i].needsReload = true
 				}
+				needsClose = len(st.slots) > 1 && !st.slots[i].busy() && (dirty || i > 0)
 				break
 			}
 		}
-		needsClose = len(st.slots) > 1 && (dirty || len(st.slots) > want)
 	}
 	tp.mu.Unlock()
 	if !needsClose || ctx.Err() != nil {
@@ -335,14 +426,12 @@ func (tp *tabPool) release(ctx context.Context, accountID string, port int, targ
 	}
 	defer unlock()
 
-	want = max(wantThreads(), 1)
-	keep := max(want, 1)
 	remove := false
 	tp.mu.Lock()
 	st = tp.accounts[accountID]
-	if st != nil && st.port == port && len(st.slots) > 1 && (dirty || len(st.slots) > keep) {
+	if st != nil && st.port == port && len(st.slots) > 1 {
 		for i := range st.slots {
-			if st.slots[i].targetID == targetID && !st.slots[i].busy {
+			if st.slots[i].targetID == targetID && !st.slots[i].busy() && (dirty || i > 0) {
 				st.slots = slices.Delete(st.slots, i, i+1)
 				remove = true
 				break
@@ -355,15 +444,14 @@ func (tp *tabPool) release(ctx context.Context, accountID string, port int, targ
 	}
 }
 
-// reconcileIdle closes excess idle tabs when ThreadsPerAccount decreases.
-func (tp *tabPool) reconcileIdle(ctx context.Context, wantThreads int, policy config.AccountConfig) {
-	want := max(wantThreads, 1)
+// reconcileIdle closes excess idle secondary tabs so each Chrome keeps 1 shared tab.
+func (tp *tabPool) reconcileIdle(ctx context.Context, _ int, policy config.AccountConfig) {
 	tp.mu.Lock()
 	var targets []string
 	for accID, st := range tp.accounts {
-		if len(st.slots) > want {
+		if len(st.slots) > 1 {
 			for _, s := range st.slots {
-				if !s.busy {
+				if !s.busy() {
 					targets = append(targets, accID)
 					break
 				}
@@ -383,17 +471,15 @@ func (tp *tabPool) reconcileIdle(ctx context.Context, wantThreads int, policy co
 		}
 		tp.mu.Lock()
 		st := tp.accounts[accID]
-		var port int
-		var drop []string
+		port := 0
 		if st != nil {
 			port = st.port
 		}
 		tp.mu.Unlock()
 		if st != nil && port > 0 {
-			drop = tp.popExcessIdle(st, port, want)
-		}
-		if len(drop) > 0 {
-			tp.closeTargets(reconcileCtx, port, policy, drop)
+			if drop := tp.popExcessIdle(st, port, 1); len(drop) > 0 {
+				tp.closeTargets(reconcileCtx, port, policy, drop)
+			}
 		}
 		unlock()
 	}
@@ -427,11 +513,12 @@ func (tp *tabPool) invalidateAccount(ctx context.Context, accountID string, port
 		total := len(st.slots)
 		for i, s := range st.slots {
 			remainingAfter := total - i - 1
-			if !s.busy && s.targetID != keepTargetID && len(kept)+remainingAfter >= 1 {
+			if !s.busy() && s.targetID != keepTargetID && len(kept)+remainingAfter >= 1 {
 				drop = append(drop, s.targetID)
 				continue
 			}
 			s.needsReload = true
+			s.uses = 0
 			kept = append(kept, s)
 		}
 		st.slots = kept

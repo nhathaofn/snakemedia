@@ -1822,14 +1822,14 @@ func (p *Provider) assignTab(ctx context.Context, jobID, accountID string, page 
 	}
 	port := cp.port
 	policy := cp.policy
-	cp.bindTab(targetID, p.tabNavLock(accountID, targetID), func(dirty bool) {
+	cp.bindTab(targetID, jobID, p.tabNavLock(accountID, targetID), func(dirty bool) {
 		releaseCtx := context.Background()
 		p.mu.Lock()
 		if p.ctx != nil {
 			releaseCtx = p.ctx
 		}
 		p.mu.Unlock()
-		p.tabs.release(releaseCtx, accountID, port, targetID, dirty, func() int {
+		p.tabs.release(releaseCtx, accountID, port, targetID, jobID, dirty, func() int {
 			return p.cfg.Get().Muse.ThreadsPerAccount
 		}, policy)
 	})

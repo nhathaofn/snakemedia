@@ -196,11 +196,10 @@ func (p *Provider) refreshAccountForRun(ctx context.Context, accountID string, j
 	}
 	oldPort := 0
 	keepID := ""
+	keepJobID := ""
 	if cp, isChrome := page.(*chromePage); isChrome && cp.port > 0 {
 		oldPort = cp.port
-		cp.mu.Lock()
-		keepID = cp.targetID
-		cp.mu.Unlock()
+		keepID, keepJobID = cp.boundTab()
 		if p.tabs != nil {
 			p.tabs.invalidateAccount(ctx, accountID, cp.port, keepID, cp.policy)
 		}
@@ -214,7 +213,7 @@ func (p *Provider) refreshAccountForRun(ctx context.Context, accountID string, j
 	}
 
 	var loginErr error
-	otherBusy := p.tabs != nil && oldPort > 0 && p.tabs.hasOtherBusy(accountID, oldPort, keepID)
+	otherBusy := p.tabs != nil && oldPort > 0 && p.tabs.hasOtherBusy(accountID, oldPort, keepID, keepJobID)
 	if page == nil {
 		page, loginErr = p.openRefreshedPage(ctx, acc)
 		if currentPage != nil {
@@ -233,12 +232,21 @@ func (p *Provider) refreshAccountForRun(ctx context.Context, accountID string, j
 		loginErr = p.waitSignedInForRefresh(ctx, page, timeout, true)
 	}
 
+	if errors.Is(loginErr, errNotSignedIn) && ctx.Err() == nil && p.accounts != nil {
+		if cp, isChrome := page.(*chromePage); isChrome && cp.port > 0 {
+			if p.accounts.RestoreCookies(ctx, accountID, cp.port) {
+				logger.Get().Info("restored backed-up cookies during muse refresh", "account", accountID, "reason", reason)
+				loginErr = p.waitSignedInForRefresh(ctx, page, timeout, true)
+			}
+		}
+	}
+
 	// If reloading the current tab still looks broken (dead tab, stale 401,
 	// gateway down, or CDP hang) and no other thread is mid-work on Chrome,
 	// recycle headless Chrome once cleanly and test on a fresh browser.
 	var restricted *accountRestrictedError
 	if loginErr != nil && !errors.As(loginErr, &restricted) && ctx.Err() == nil && lease != nil {
-		if cp, isChrome := page.(*chromePage); isChrome && cp.port > 0 && (p.tabs == nil || !p.tabs.hasOtherBusy(accountID, cp.port, keepID)) {
+		if cp, isChrome := page.(*chromePage); isChrome && cp.port > 0 && (p.tabs == nil || !p.tabs.hasOtherBusy(accountID, cp.port, keepID, keepJobID)) {
 			prevPort := cp.port
 			logger.Get().Info("recycling muse browser during account refresh", "account", accountID, "reason", reason, "error", loginErr)
 			closePage(page)
@@ -310,6 +318,9 @@ func (p *Provider) refreshAccountForRun(ctx context.Context, accountID string, j
 	// Signed in! Refresh quota & capabilities so limits/bans/usage stay current.
 	cfg := p.cfg.Get().Muse
 	p.refreshQuota(ctx, accountID, page)
+	if cp, ok := page.(*chromePage); ok && cp.port > 0 && p.accounts != nil {
+		p.accounts.SyncCookies(ctx, accountID, cp.port)
+	}
 	var data museData
 	if freshAcc, rErr := p.accounts.Record(accountID); rErr == nil {
 		acc = freshAcc

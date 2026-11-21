@@ -166,6 +166,45 @@ func parseHeaderCookies(text, defaultDomain string) []Cookie {
 	return cookies
 }
 
+// DefaultSessionCookieTTL is given to session-only cookies (Expires <= 0) when
+// backing up or restoring them so Chrome writes them to disk instead of dropping
+// them as soon as the browser exits.
+const DefaultSessionCookieTTL = 7 * 24 * time.Hour
+
+// PersistSessionCookies returns a copy of cookies where any session-only cookie
+// (Expires <= 0) gets an explicit expiry at now + ttl.
+func PersistSessionCookies(cookies []Cookie, now time.Time, ttl time.Duration) []Cookie {
+	if len(cookies) == 0 || ttl <= 0 {
+		return cookies
+	}
+	expiry := float64(now.Add(ttl).Unix())
+	out := make([]Cookie, len(cookies))
+	copy(out, cookies)
+	changed := false
+	for i := range out {
+		if out[i].Expires <= 0 {
+			out[i].Expires = expiry
+			changed = true
+		}
+	}
+	if !changed {
+		return cookies
+	}
+	return out
+}
+
+// SessionOnlyCookies returns the subset of cookies with no persistent expiry
+// (Expires <= 0).
+func SessionOnlyCookies(cookies []Cookie) []Cookie {
+	var out []Cookie
+	for _, c := range cookies {
+		if c.Expires <= 0 {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // InjectCookies writes cookies into the browser's profile through any open
 // tab, before the site is loaded.
 func InjectCookies(ctx context.Context, port int, policy config.AccountConfig, cookies []Cookie) error {
@@ -186,7 +225,29 @@ func InjectCookies(ctx context.Context, port int, policy config.AccountConfig, c
 		defer conn.Close()
 		params := make([]map[string]any, 0, len(cookies))
 		for _, c := range cookies {
-			cookie := map[string]any{"name": c.Name, "value": c.Value, "domain": c.Domain, "path": c.Path, "secure": c.Secure, "httpOnly": c.HTTPOnly}
+			path := c.Path
+			if path == "" {
+				path = "/"
+			}
+			cookie := map[string]any{
+				"name":     c.Name,
+				"value":    c.Value,
+				"path":     path,
+				"secure":   c.Secure,
+				"httpOnly": c.HTTPOnly,
+			}
+			// Chromium rejects Network.setCookies when a __Host- cookie sets "domain".
+			if strings.HasPrefix(c.Name, "__Host-") {
+				host := strings.TrimPrefix(c.Domain, ".")
+				cookie["url"] = "https://" + host + "/"
+				cookie["path"] = "/"
+				cookie["secure"] = true
+			} else {
+				cookie["domain"] = c.Domain
+				if strings.HasPrefix(c.Name, "__Secure-") {
+					cookie["secure"] = true
+				}
+			}
 			if c.Expires > 0 {
 				cookie["expires"] = c.Expires
 			}

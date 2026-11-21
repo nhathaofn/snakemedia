@@ -61,11 +61,13 @@ func museView(rec accounts.Record) MuseAccount {
 
 // Site is muse.ai for the accounts service.
 type Site struct {
-	cfg       *config.Manager
-	now       func() time.Time
-	sleep     func(context.Context, time.Duration) error
-	newPage   func(*browser.Browser) Page
-	awayCheck func(ctx context.Context, port int, policy config.AccountConfig, navigate bool) (awayTabInfo, error)
+	cfg        *config.Manager
+	now        func() time.Time
+	sleep      func(context.Context, time.Duration) error
+	newPage    func(*browser.Browser) Page
+	awayCheck  func(ctx context.Context, port int, policy config.AccountConfig, navigate bool) (awayTabInfo, error)
+	sessionURL string
+	userAgent  func() string
 }
 
 // NewSite reads Muse sessions with the shared account policy.
@@ -134,57 +136,33 @@ func (*Site) AcceptsCookie(domain string) bool {
 func (s *Site) Inspect(ctx context.Context, b *browser.Browser, rec accounts.Record) (accounts.Inspection, error) {
 	page := s.openSitePage(b)
 	defer closePage(page)
+	scope := accounts.InspectScopeFrom(ctx)
+	interactiveSignIn := b != nil && !b.Headless && rec.Status == accounts.StatusSigningIn
+	policy := s.cfg.Get().Accounts
+
 	state, err := page.Login(ctx)
 	if errors.Is(err, errTabMissing) && b != nil && b.Port > 0 {
-		policy := s.cfg.Get().Accounts
-		if info, aErr := s.checkAway(ctx, b.Port, policy, false); aErr == nil && info.URL != "" {
-			if info.Ready == "complete" || info.Ready == "interactive" {
-				if navInfo, nErr := s.checkAway(ctx, b.Port, policy, true); nErr == nil {
-					info = navInfo
-				}
-				state, err = page.Login(ctx)
-				if errors.Is(err, errTabMissing) {
-					if kind, detail := classifyAwayTab(info); kind == restrictDeadAccount {
-						return accounts.Inspection{
-							Fatal:          "Tài khoản không vào được Muse: " + detail,
-							DisableAccount: true,
-						}, nil
-					}
-					return accounts.Inspection{}, nil
-				}
-			}
+		var resolved accounts.Inspection
+		var done bool
+		state, err, resolved, done = s.inspectMissingTab(ctx, scope, rec, b, policy, page, interactiveSignIn)
+		if done {
+			return resolved, nil
 		}
 	}
-	if err == nil && state.blockedReason() == "" {
-		// Signed in without chat (settings/shared route), expired/stale session
-		// cookie (e.g. HTTP 401 before silent SSO refresh), or disconnected gateway:
-		// navigate Home once to give the profile a chance to refresh before failing.
-		needHome := (state.HTTP == 200 && !state.Chat) ||
-			(!state.LoggedIn && !isLoginPath(state.Path)) ||
-			(state.LoggedIn && state.Gateway != "")
-		if needHome {
+	if err == nil && state.blockedReason() == "" && !interactiveSignIn {
+		// Navigate Home at most once per Check when on a non-home route without
+		// chat, recovering a stale HTTP error before silent SSO, or reconnecting
+		// a dropped gateway. Never reload "/" when HTTP 200 is still hydrating chat.
+		needHome := (state.HTTP == 200 && !state.Chat && !isHomePath(state.Path) && !isLoginPath(state.Path)) ||
+			(!state.LoggedIn && state.HTTP != 200 && state.HTTP != 0 && !isLoginPath(state.Path))
+		if needHome && scope.MarkHome() {
+			logger.Get().Info("muse inspect navigating home once", "account", rec.ID, "headless", b != nil && b.Headless, "http", state.HTTP, "chat", state.Chat, "path", state.Path, "gateway", state.Gateway)
 			if page.Home(ctx) == nil {
-				state, err = page.Login(ctx)
+				state, err = s.waitInspectAfterHome(ctx, b, policy, page)
 				if errors.Is(err, errTabMissing) && b != nil && b.Port > 0 {
-					policy := s.cfg.Get().Accounts
-					for retry := 0; retry < 3 && ctx.Err() == nil; retry++ {
-						if s.sleepFn(ctx, 1200*time.Millisecond) != nil {
-							break
-						}
-						state, err = page.Login(ctx)
-						if !errors.Is(err, errTabMissing) {
-							break
-						}
-						if info, aErr := s.checkAway(ctx, b.Port, policy, false); aErr == nil && info.URL != "" {
-							if kind, detail := classifyAwayTab(info); kind == restrictDeadAccount {
-								return accounts.Inspection{
-									Fatal:          "Tài khoản không vào được Muse: " + detail,
-									DisableAccount: true,
-								}, nil
-							}
-							if !isOAuthOrLoginBounce(info) {
-								break
-							}
+					if info, aErr := s.checkAway(ctx, b.Port, policy, false); aErr == nil {
+						if resolved, ok := s.settleAwayInfo(scope, rec, b, info, err); ok {
+							return resolved, nil
 						}
 					}
 				}
@@ -207,8 +185,19 @@ func (s *Site) Inspect(ctx context.Context, b *browser.Browser, rec accounts.Rec
 			}
 		}
 	}
-	if err != nil || !state.LoggedIn {
+	if err != nil {
+		s.logInspectState(scope, rec, b, state, err)
 		return accounts.Inspection{}, err
+	}
+	if !state.LoggedIn {
+		s.logInspectState(scope, rec, b, state, nil)
+		if isLoginPath(state.Path) || (state.HTTP != 0 && state.HTTP != 200) {
+			return accounts.Inspection{SignedOut: b == nil || b.Headless || rec.Status != accounts.StatusSigningIn}, nil
+		}
+		if state.HTTP == 0 {
+			return accounts.Inspection{}, fmt.Errorf("Không kiểm tra được phiên Muse (%s).", firstNonEmpty(state.Error, "lỗi kết nối trang"))
+		}
+		return accounts.Inspection{}, errPageNotReady
 	}
 	var data museData
 	if err := accounts.DecodeData(rec, &data); err != nil {
@@ -373,4 +362,136 @@ func quotaUsage(q *MuseQuota) []accounts.UsageItem {
 		items = append(items, accounts.UsageItem{Label: "Gói", Value: q.Tier})
 	}
 	return items
+}
+
+func isHomePath(path string) bool {
+	p := strings.TrimSpace(path)
+	return p == "" || p == "/"
+}
+
+func isBlankOrNewTabURL(raw string) bool {
+	u := strings.TrimSpace(raw)
+	return u == "" || u == "about:blank" || u == "chrome://newtab/"
+}
+
+func sanitizeAwayURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return raw
+	}
+	if s := sanitizeURL(u); s != "" {
+		return s
+	}
+	return raw
+}
+
+func (s *Site) settleAwayInfo(scope *accounts.InspectScope, rec accounts.Record, b *browser.Browser, info awayTabInfo, err error) (accounts.Inspection, bool) {
+	if info.URL == "" {
+		return accounts.Inspection{}, false
+	}
+	kind, detail := classifyAwayTab(info)
+	if kind == restrictDeadAccount {
+		return accounts.Inspection{
+			Fatal:          "Tài khoản không vào được Muse: " + detail,
+			DisableAccount: true,
+		}, true
+	}
+	if detail != "" || isOAuthOrLoginBounce(info) {
+		s.logInspectState(scope, rec, b, LoginState{Path: sanitizeAwayURL(info.URL)}, err)
+		return accounts.Inspection{}, true
+	}
+	return accounts.Inspection{}, false
+}
+
+func (s *Site) inspectMissingTab(ctx context.Context, scope *accounts.InspectScope, rec accounts.Record, b *browser.Browser, policy config.AccountConfig, page Page, interactiveSignIn bool) (LoginState, error, accounts.Inspection, bool) {
+	info, aErr := s.checkAway(ctx, b.Port, policy, false)
+	// Wait briefly for a freshly opened blank tab to commit EnsureTab's initial
+	// navigation before issuing another Navigate.
+	if aErr == nil && isBlankOrNewTabURL(info.URL) && !interactiveSignIn {
+		if s.sleepFn(ctx, 500*time.Millisecond) == nil {
+			if retryState, retryErr := page.Login(ctx); !errors.Is(retryErr, errTabMissing) {
+				return retryState, retryErr, accounts.Inspection{}, false
+			}
+			info, aErr = s.checkAway(ctx, b.Port, policy, false)
+		}
+	}
+	if aErr != nil || info.URL == "" {
+		return LoginState{}, errTabMissing, accounts.Inspection{}, false
+	}
+	if resolved, ok := s.settleAwayInfo(scope, rec, b, info, errTabMissing); ok {
+		return LoginState{}, errTabMissing, resolved, true
+	}
+	if interactiveSignIn {
+		return LoginState{}, errTabMissing, accounts.Inspection{}, true
+	}
+	if (info.Ready == "complete" || info.Ready == "interactive") && scope.MarkHome() {
+		logger.Get().Info("muse inspect navigating away tab home", "account", rec.ID, "from", sanitizeAwayURL(info.URL))
+		if navInfo, nErr := s.checkAway(ctx, b.Port, policy, true); nErr == nil {
+			info = navInfo
+		}
+		state, err := s.waitInspectAfterHome(ctx, b, policy, page)
+		if errors.Is(err, errTabMissing) {
+			if resolved, ok := s.settleAwayInfo(scope, rec, b, info, err); ok {
+				return state, err, resolved, true
+			}
+		}
+		return state, err, accounts.Inspection{}, false
+	}
+	s.logInspectState(scope, rec, b, LoginState{Path: sanitizeAwayURL(info.URL)}, errTabMissing)
+	return LoginState{}, errTabMissing, accounts.Inspection{}, false
+}
+
+func (s *Site) waitInspectAfterHome(ctx context.Context, b *browser.Browser, policy config.AccountConfig, page Page) (LoginState, error) {
+	if b == nil || b.Port <= 0 {
+		return page.Login(ctx)
+	}
+	var state LoginState
+	var err error
+	for retry := 0; retry < 4 && ctx.Err() == nil; retry++ {
+		wait := 800 * time.Millisecond
+		if retry == 0 {
+			// Wait briefly after Browser.Navigate so the previous context finishes tearing down.
+			wait = 600 * time.Millisecond
+		}
+		if sErr := s.sleepFn(ctx, wait); sErr != nil {
+			return state, sErr
+		}
+		state, err = page.Login(ctx)
+		if errors.Is(err, errTabMissing) {
+			if info, aErr := s.checkAway(ctx, b.Port, policy, false); aErr == nil && info.URL != "" {
+				if kind, _ := classifyAwayTab(info); kind == restrictDeadAccount || isOAuthOrLoginBounce(info) {
+					return state, err
+				}
+			}
+			continue
+		}
+		var evalErr *browser.EvalError
+		if errors.As(err, &evalErr) {
+			continue
+		}
+		if err != nil {
+			return state, err
+		}
+		if state.LoggedIn || state.blockedReason() != "" || isLoginPath(state.Path) || (state.HTTP != 0 && state.HTTP != 200) {
+			return state, nil
+		}
+	}
+	return state, err
+}
+
+func (s *Site) logInspectState(scope *accounts.InspectScope, rec accounts.Record, b *browser.Browser, state LoginState, err error) {
+	diag := fmt.Sprintf("http=%d|chat=%v|path=%s|gw=%s|err=%v", state.HTTP, state.Chat, state.Path, state.Gateway, err)
+	if !scope.FirstDiag(diag) {
+		return
+	}
+	logger.Get().Info("muse inspect not signed in yet",
+		"account", rec.ID,
+		"headless", b != nil && b.Headless,
+		"http", state.HTTP,
+		"chat", state.Chat,
+		"path", state.Path,
+		"gateway", state.Gateway,
+		"pageError", state.Error,
+		"error", err,
+	)
 }

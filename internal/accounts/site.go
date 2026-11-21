@@ -2,10 +2,65 @@ package accounts
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"SnakeMedia/internal/browser"
 )
+
+type inspectScopeKey struct{}
+
+// InspectScope is shared across every Site.Inspect poll of one Check or sign-in
+// watch loop so a Site reloads a stale page at most once per check instead of
+// on every poll.
+type InspectScope struct {
+	mu       sync.Mutex
+	wentHome bool
+	lastDiag string
+}
+
+// MarkHome reports whether this scope has not yet triggered a Home reload and
+// marks it as having done so. Without a scope (a standalone Site.Inspect call),
+// it returns true so one-off calls still recover once.
+func (s *InspectScope) MarkHome() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.wentHome {
+		return false
+	}
+	s.wentHome = true
+	return true
+}
+
+// FirstDiag reports whether diag has not yet been recorded for this scope,
+// letting polling loops log non-ready diagnostics on state transitions only.
+func (s *InspectScope) FirstDiag(diag string) bool {
+	if s == nil || diag == "" {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lastDiag == diag {
+		return false
+	}
+	s.lastDiag = diag
+	return true
+}
+
+// WithInspectScope attaches a fresh InspectScope to ctx for one polling loop.
+func WithInspectScope(ctx context.Context) context.Context {
+	return context.WithValue(ctx, inspectScopeKey{}, &InspectScope{})
+}
+
+// InspectScopeFrom returns the InspectScope carried by ctx, or nil for a
+// standalone Site.Inspect call.
+func InspectScopeFrom(ctx context.Context) *InspectScope {
+	scope, _ := ctx.Value(inspectScopeKey{}).(*InspectScope)
+	return scope
+}
 
 // Site is what a provider contributes to its accounts: the page their
 // browsers keep open and how to read who is signed in there.
@@ -44,6 +99,10 @@ type Inspection struct {
 	// PausedUntil rests the account until this time on a timed limit (e.g. 24h).
 	PausedUntil time.Time
 	AutoResume  bool
+	// SignedOut tells Check's wait loop the site confirmed the session is
+	// logged out (e.g. HTTP 401 or /login after Home retry), so waitSignedIn
+	// stops waiting out PageReadySeconds immediately.
+	SignedOut bool
 	// VideoCheckDisabled marks SkipVideoCheck on the account while keeping it
 	// SignedIn and Enabled so it keeps running image jobs.
 	VideoCheckDisabled bool
