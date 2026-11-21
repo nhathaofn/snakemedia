@@ -45,15 +45,26 @@ func sendNote(ctx context.Context, page Page, text string, limit time.Duration, 
 		return "", false, fmt.Errorf("Muse không nhận tin nhắn (%s)", reason)
 	}
 	deadline := now().Add(limit)
+	errLimit := max(cfg.PollErrorLimit, 1)
+	errCount := 0
 	for {
-		if status, err := page.Status(ctx, res.SessionID); err == nil && status != sessionRunning {
-			if events, err := page.Result(ctx, res.SessionID); err == nil {
-				if reply := setupReply(events); reply != "" {
-					return reply, true, nil
+		status, err := page.Status(ctx, res.SessionID)
+		if err == nil {
+			errCount = 0
+			if status != sessionRunning {
+				if events, rErr := page.Result(ctx, res.SessionID); rErr == nil {
+					if reply := setupReply(events); reply != "" {
+						return reply, true, nil
+					}
+					if status == sessionCompleted || status == sessionInterrupted {
+						return "", true, errors.New("Muse không trả lời")
+					}
 				}
-				if status == sessionCompleted || status == sessionInterrupted {
-					return "", true, errors.New("Muse không trả lời")
-				}
+			}
+		} else if ctx.Err() == nil {
+			errCount++
+			if errCount >= errLimit {
+				return "", true, fmt.Errorf("không đọc được phản hồi thiết lập: %w", err)
 			}
 		}
 		if !now().Before(deadline) {

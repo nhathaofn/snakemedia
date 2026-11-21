@@ -48,9 +48,11 @@ type Pool struct {
 	launches map[string]*launchLock
 	// lastUsed is when work last got or held each browser; idle headless
 	// browsers are closed after AccountConfig.IdleBrowserMinutes.
-	lastUsed map[string]time.Time
-	closed   bool
-	onClosed func(profileDir string)
+	lastUsed  map[string]time.Time
+	closed    bool
+	closedCh  chan struct{}
+	onClosed  func(profileDir string)
+	onClosing func(profileDir string, b *Browser)
 	// Seams for tests.
 	now        func() time.Time
 	start      func(context.Context, LaunchOptions, config.AccountConfig) (*Browser, error)
@@ -65,7 +67,7 @@ func NewPool(cfg *config.Manager, root string) *Pool {
 		cfg: cfg, root: root,
 		browsers: make(map[string]*Browser), routes: make(map[string]string),
 		inUse: make(map[string]int), launches: make(map[string]*launchLock),
-		lastUsed: make(map[string]time.Time), now: time.Now,
+		lastUsed: make(map[string]time.Time), closedCh: make(chan struct{}), now: time.Now,
 		start: StartBrowser, findChrome: FindChrome,
 		validate: func(ctx context.Context, b *Browser, p config.AccountConfig) error { return b.Validate(ctx, p) },
 		shutdown: (*Browser).Close,
@@ -175,6 +177,9 @@ func (p *Pool) Get(ctx context.Context, profileDir string, want Want) (*Browser,
 	p.routes[path] = want.Route
 	p.lastUsed[path] = p.now()
 	p.mu.Unlock()
+	if b.done != nil {
+		go p.watchExit(path, b)
+	}
 	return b, nil
 }
 
@@ -203,11 +208,41 @@ func (p *Pool) Acquire(profileDir string) (release func()) {
 }
 
 // OnClosed registers fn to run after the pool closed an idle browser on its
-// own, so the owner can drop what it keeps for that browser (its route).
+// own, or when a launched browser exited externally, so the owner can drop
+// what it keeps for that browser (its route).
 func (p *Pool) OnClosed(fn func(profileDir string)) {
 	p.mu.Lock()
 	p.onClosed = fn
 	p.mu.Unlock()
+}
+
+// OnClosing registers fn to run just before an idle headless browser is closed
+// so the owner can persist live state (e.g. cookies) while Chrome still runs.
+func (p *Pool) OnClosing(fn func(profileDir string, b *Browser)) {
+	p.mu.Lock()
+	p.onClosing = fn
+	p.mu.Unlock()
+}
+
+func (p *Pool) watchExit(path string, b *Browser) {
+	defer logger.Recover("theo dõi thoát Chrome")
+	select {
+	case <-b.done:
+	case <-p.closedCh:
+		return
+	}
+	p.mu.Lock()
+	if p.browsers[path] != b {
+		p.mu.Unlock()
+		return
+	}
+	delete(p.browsers, path)
+	delete(p.routes, path)
+	onClosed := p.onClosed
+	p.mu.Unlock()
+	if onClosed != nil {
+		onClosed(path)
+	}
 }
 
 // Reap closes idle headless browsers every reapInterval until ctx ends.
@@ -254,8 +289,12 @@ func (p *Pool) reapIdle() int {
 		p.mu.Lock()
 		b := p.browsers[path]
 		still := b != nil && b.Headless && p.inUse[path] == 0 && p.now().Sub(p.lastUsed[path]) >= idle
+		onClosing := p.onClosing
 		onClosed := p.onClosed
 		p.mu.Unlock()
+		if still && onClosing != nil && b.Port > 0 {
+			onClosing(path, b)
+		}
 		if still && p.closeIdleLocked(path) == nil {
 			closed++
 			logger.Get().Info("closed idle Chrome", "profile", filepath.Base(path), "idle", idle)
@@ -340,7 +379,11 @@ func (p *Pool) closeIdleLocked(path string) error {
 // launch lock) and closed too.
 func (p *Pool) CloseAll() {
 	p.mu.Lock()
+	wasClosed := p.closed
 	p.closed = true
+	if !wasClosed && p.closedCh != nil {
+		close(p.closedCh)
+	}
 	paths := make([]string, 0, len(p.launches))
 	for path := range p.launches {
 		paths = append(paths, path)

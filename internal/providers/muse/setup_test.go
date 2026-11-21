@@ -75,6 +75,26 @@ func TestSendSetupGivesUpAtTheLimit(t *testing.T) {
 	}
 }
 
+// Closing Chrome mid-setup stops polling after PollErrorLimit consecutive status
+// errors instead of keeping watch spinning until the full timeout.
+func TestSendSetupStopsEarlyWhenBrowserCloses(t *testing.T) {
+	cfg := setupConfig()
+	cfg.PollErrorLimit = 3
+	page := &fakePage{
+		sendRes:   SendResult{OK: true, SessionID: "s1"},
+		statusErr: errors.New("connection refused"),
+	}
+	sleeps := 0
+	sleep := func(context.Context, time.Duration) error { sleeps++; return nil }
+	_, sent, err := sendSetup(context.Background(), page, cfg, sleep, time.Now)
+	if err == nil || !sent {
+		t.Fatalf("expected error with sent=true after status errors, got sent=%v err=%v", sent, err)
+	}
+	if sleeps != cfg.PollErrorLimit-1 {
+		t.Fatalf("sleeps = %d, want %d consecutive error polls", sleeps, cfg.PollErrorLimit-1)
+	}
+}
+
 // An account that has sent its setup message (taken or answered) never sends
 // it again; the check happens before any page call, so a nil browser is fine.
 func TestAfterSignInSendsOncePerAccount(t *testing.T) {

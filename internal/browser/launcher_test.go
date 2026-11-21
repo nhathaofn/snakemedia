@@ -26,7 +26,6 @@ func TestBuildArgs_IncludesRealisticFlags(t *testing.T) {
 		"--disable-sync",
 		"--disable-default-apps",
 		"--disable-component-update",
-		"--disable-blink-features=AutomationControlled",
 		"--disable-features=Translate,OptimizationHints,MediaRouter",
 		"--proxy-server=http://127.0.0.1:8888",
 		"https://flow.google.com",
@@ -40,6 +39,9 @@ func TestBuildArgs_IncludesRealisticFlags(t *testing.T) {
 
 	if strings.Contains(argStr, "--enable-automation") {
 		t.Errorf("BuildArgs should NOT contain --enable-automation")
+	}
+	if strings.Contains(argStr, "--disable-blink-features") {
+		t.Errorf("BuildArgs should NOT contain --disable-blink-features (triggers Chrome unsupported-flag infobar)")
 	}
 	if strings.Contains(argStr, "--remote-allow-origins") || strings.Contains(argStr, "--disable-background") ||
 		strings.Contains(argStr, "--max-old-space-size") || strings.Count(argStr, "--disable-features") > 1 {

@@ -59,6 +59,7 @@ func (b *Browser) Validate(ctx context.Context, policy config.AccountConfig) err
 	if v.WebSocket != b.endpoint || !LocalWebSocket(v.WebSocket, b.Port) {
 		return errors.New("Chrome đã đổi phiên; hãy mở lại đúng profile.")
 	}
+	RecordUserAgent(v.UserAgent)
 	return nil
 }
 
@@ -137,6 +138,7 @@ func StartBrowser(ctx context.Context, opts LaunchOptions, policy config.Account
 			if LocalJSON(ctx, b.Port, "/json/version", policy, &v) == nil && LocalWebSocket(v.WebSocket, b.Port) && (b.endpoint == "" || v.WebSocket == b.endpoint) {
 				b.endpoint = v.WebSocket
 				b.Version = v.Browser
+				RecordUserAgent(v.UserAgent)
 				data, _ := json.Marshal(browserEndpoint{Port: b.Port, WebSocket: b.endpoint})
 				if err := utils.WriteFileAtomic(endpointFile, data, 0o600); err != nil {
 					_ = b.Close(policy)

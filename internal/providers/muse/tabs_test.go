@@ -123,77 +123,72 @@ func TestTabPoolLazyOpenReuseAndDynamicScale(t *testing.T) {
 		t.Fatalf("openCalls=%d tabs=%d, want 0 and 1", fc.openCalls, fc.countMuseTabs())
 	}
 
-	// Job 2 needs thread 2 -> opens t2, leaving total tabs = 2.
+	// Job 2 shares the single tab t1 instead of opening a 2nd Chrome renderer tab.
 	t2, err := tp.acquire(ctx, "accA", "j2", port, wantThreads, policy)
-	if err != nil || t2 != "t2" {
-		t.Fatalf("acquire j2 = (%q, %v), want t2", t2, err)
+	if err != nil || t2 != "t1" || fc.openCalls != 0 || fc.countMuseTabs() != 1 {
+		t.Fatalf("acquire j2 = (%q, %v) open=%d tabs=%d, want shared t1 with 1 tab", t2, err, fc.openCalls, fc.countMuseTabs())
 	}
-	if fc.openCalls != 1 || fc.countMuseTabs() != 2 {
-		t.Fatalf("openCalls=%d tabs=%d, want 1 and 2", fc.openCalls, fc.countMuseTabs())
+	if !tp.hasOtherBusy("accA", port, t1, "j1") || !tp.hasOtherBusy("accA", port, t1, "j2") {
+		t.Fatal("expected hasOtherBusy to report sibling job sharing t1")
 	}
 
-	// Job 1 finishes -> t1 stays open for reuse.
-	tp.release(ctx, "accA", port, t1, false, wantFn, policy)
-	if len(fc.closeCalls) != 0 || fc.countMuseTabs() != 2 {
+	// A 3rd job above wantThreads=2 gets errTabCapReached.
+	if extra, err := tp.acquire(ctx, "accA", "j_over", port, wantThreads, policy); !errors.Is(err, errTabCapReached) {
+		t.Fatalf("expected errTabCapReached when at cap, got (%q, %v)", extra, err)
+	}
+
+	// Job 1 finishes -> t1 stays open cleanly with j2 still active.
+	tp.release(ctx, "accA", port, t1, "j1", false, wantFn, policy)
+	if len(fc.closeCalls) != 0 || fc.countMuseTabs() != 1 {
 		t.Fatalf("release kept-warm violated: closed=%v tabs=%d", fc.closeCalls, fc.countMuseTabs())
 	}
-
-	// Job 3 reuses idle t1 instead of opening a 3rd tab.
-	t3, err := tp.acquire(ctx, "accA", "j3", port, wantThreads, policy)
-	if err != nil || t3 != "t1" || fc.openCalls != 1 || fc.countMuseTabs() != 2 {
-		t.Fatalf("acquire j3 = (%q, %v) open=%d tabs=%d", t3, err, fc.openCalls, fc.countMuseTabs())
+	if tp.hasOtherBusy("accA", port, t1, "j2") {
+		t.Fatal("expected hasOtherBusy=false once only j2 remains")
 	}
 
-	// Scale up from 2 -> 4 threads: new jobs open t3 and t4 on the same port.
+	// Job 3 reuses t1 up to wantThreads=4 concurrent slots, still keeping 1 shared tab.
 	wantThreads = 4
-	id3, err := tp.acquire(ctx, "accA", "j4", port, wantThreads, policy)
-	if err != nil {
-		t.Fatalf("acquire j4: %v", err)
+	id3, err := tp.acquire(ctx, "accA", "j3", port, wantThreads, policy)
+	if err != nil || id3 != "t1" {
+		t.Fatalf("acquire j3 = (%q, %v), want t1", id3, err)
 	}
-	id4, err := tp.acquire(ctx, "accA", "j5", port, wantThreads, policy)
-	if err != nil {
-		t.Fatalf("acquire j5: %v", err)
+	id4, err := tp.acquire(ctx, "accA", "j4", port, wantThreads, policy)
+	if err != nil || id4 != "t1" {
+		t.Fatalf("acquire j4 = (%q, %v), want t1", id4, err)
 	}
-	if fc.countMuseTabs() != 4 || id3 == id4 {
-		t.Fatalf("scale up 2->4: tabs=%d id3=%q id4=%q", fc.countMuseTabs(), id3, id4)
+	id5, err := tp.acquire(ctx, "accA", "j5", port, wantThreads, policy)
+	if err != nil || id5 != "t1" || fc.openCalls != 0 || fc.countMuseTabs() != 1 {
+		t.Fatalf("scale up 2->4 shared tab: id5=%q err=%v open=%d tabs=%d", id5, err, fc.openCalls, fc.countMuseTabs())
 	}
 
-	// Scale down from 4 -> 2 while 1 tab is idle and 3 are busy:
-	// first release one tab so we have an idle tab to test reconcileIdle too.
-	tp.release(ctx, "accA", port, id4, false, func() int { return 4 }, policy)
+	// Scale down from 4 -> 2 while 4 jobs share t1: new job j6 hits errTabCapReached.
 	wantThreads = 2
-	tp.reconcileIdle(ctx, wantThreads, policy)
-	if fc.countMuseTabs() != 3 {
-		t.Fatalf("expected reconcileIdle to close the 1 idle extra tab down to 3, got %d", fc.countMuseTabs())
-	}
-
-	// When a still-busy extra tab finishes, release immediately shrinks from 3 -> 2.
-	tp.release(ctx, "accA", port, id3, false, wantFn, policy)
-	if fc.countMuseTabs() != 2 {
-		t.Fatalf("expected release on scale down to close excess tab down to 2, got %d", fc.countMuseTabs())
-	}
-
-	// A pending acquire hitting reduced cap gets errTabCapReached rather than opening a 3rd tab.
 	if extra, err := tp.acquire(ctx, "accA", "j6", port, wantThreads, policy); !errors.Is(err, errTabCapReached) {
-		t.Fatalf("expected errTabCapReached when full, got (%q, %v)", extra, err)
+		t.Fatalf("expected errTabCapReached when shared refs exceed reduced cap, got (%q, %v)", extra, err)
+	}
+
+	// Release jobs down below cap and verify acquire works cleanly again.
+	tp.release(ctx, "accA", port, t1, "j2", false, wantFn, policy)
+	tp.release(ctx, "accA", port, id3, "j3", false, wantFn, policy)
+	tp.release(ctx, "accA", port, id4, "j4", false, wantFn, policy)
+	id6, err := tp.acquire(ctx, "accA", "j6", port, wantThreads, policy)
+	if err != nil || id6 != "t1" {
+		t.Fatalf("expected j6 to reuse shared tab after releasing excess refs, got (%q, %v)", id6, err)
 	}
 }
 
 func TestTabPoolNavigateFailureClosesNewTab(t *testing.T) {
 	const port = 60112
-	fc := newFakeChromeTabs(port, 1)
-	fc.failNavOnID = "t2"
+	fc := newFakeChromeTabs(port, 0)
+	fc.failNavOnID = "t1"
 	tp := fc.pool()
 	policy := config.DefaultAccountConfig()
 	ctx := context.Background()
 
-	if _, err := tp.acquire(ctx, "accA", "j1", port, 2, policy); err != nil {
-		t.Fatal(err)
+	if _, err := tp.acquire(ctx, "accA", "j1", port, 2, policy); err == nil {
+		t.Fatal("expected navigate error on t1")
 	}
-	if _, err := tp.acquire(ctx, "accA", "j2", port, 2, policy); err == nil {
-		t.Fatal("expected navigate error on t2")
-	}
-	if len(fc.closeCalls) != 1 || fc.closeCalls[0] != "t2" || fc.countMuseTabs() != 1 {
+	if len(fc.closeCalls) != 1 || fc.closeCalls[0] != "t1" || fc.countMuseTabs() != 0 {
 		t.Fatalf("failed new tab should be closed cleanly: closed=%v tabs=%d", fc.closeCalls, fc.countMuseTabs())
 	}
 }
@@ -257,30 +252,105 @@ func TestBrowserClosedDropsVerifiedAndTabs(t *testing.T) {
 	}
 }
 
-func TestTabPoolDirtyReleaseClosesBrokenExtraTabButKeepsLastTab(t *testing.T) {
+func TestTabPoolDirtyReleaseAndPeriodicHeapReload(t *testing.T) {
 	const port = 60113
-	fc := newFakeChromeTabs(port, 1)
+	fc := newFakeChromeTabs(port, 2) // start with an extra pre-existing secondary tab
 	tp := fc.pool()
+	tp.reloadAfter = 3
+	navMu := &sync.RWMutex{}
+	tp.navLock = func(string, string) *sync.RWMutex { return navMu }
+	navs := 0
+	origNav := tp.navigate
+	tp.navigate = func(ctx context.Context, target browser.Target, port int, site browser.Site) error {
+		navs++
+		return origNav(ctx, target, port, site)
+	}
 	policy := config.DefaultAccountConfig()
 	ctx := context.Background()
-	wantFn := func() int { return 2 }
+	wantFn := func() int { return 3 }
 
-	t1, err := tp.acquire(ctx, "accA", "j1", port, 2, policy)
-	if err != nil {
-		t.Fatal(err)
+	// Acquiring j1 picks t1 and prunes excess idle t2 down to 1 shared tab.
+	t1, err := tp.acquire(ctx, "accA", "j1", port, 3, policy)
+	if err != nil || t1 != "t1" || fc.countMuseTabs() != 1 || len(fc.closeCalls) != 1 || fc.closeCalls[0] != "t2" {
+		t.Fatalf("acquire j1 should prune excess t2: t=%q err=%v closed=%v tabs=%d", t1, err, fc.closeCalls, fc.countMuseTabs())
 	}
-	t2, err := tp.acquire(ctx, "accA", "j2", port, 2, policy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Dirty release on extra tab t2 closes t2 even when wantThreads is still 2.
-	tp.release(ctx, "accA", port, t2, true, wantFn, policy)
-	if len(fc.closeCalls) != 1 || fc.closeCalls[0] != t2 || fc.countMuseTabs() != 1 {
-		t.Fatalf("dirty extra tab should close cleanly: closed=%v tabs=%d", fc.closeCalls, fc.countMuseTabs())
-	}
-	// Dirty release on the sole remaining tab never closes the last tab in Chrome.
-	tp.release(ctx, "accA", port, t1, true, wantFn, policy)
+	// Dirty release on sole tab never closes Chrome's last tab; marks needsReload.
+	tp.release(ctx, "accA", port, t1, "j1", true, wantFn, policy)
 	if len(fc.closeCalls) != 1 || fc.countMuseTabs() != 1 {
 		t.Fatalf("must never close sole Chrome tab: closed=%v tabs=%d", fc.closeCalls, fc.countMuseTabs())
+	}
+	if _, err := tp.acquire(ctx, "accA", "j2", port, 3, policy); err != nil {
+		t.Fatal(err)
+	}
+	if navs != 1 {
+		t.Fatalf("expected dirty tab reload on next acquire, navs=%d", navs)
+	}
+	// Complete 3 uses after dirty reset to hit reloadAfter=3 while a sibling is running.
+	tp.release(ctx, "accA", port, t1, "j2", false, wantFn, policy) // uses=1
+	_, _ = tp.acquire(ctx, "accA", "j3", port, 3, policy)
+	tp.release(ctx, "accA", port, t1, "j3", false, wantFn, policy) // uses=2
+	_, _ = tp.acquire(ctx, "accA", "j4", port, 3, policy)
+	tp.release(ctx, "accA", port, t1, "j4", false, wantFn, policy) // uses=3 -> needsReload=true
+
+	// Hold nav.RLock() on the shared tab to simulate an active Download/Send on a sibling thread.
+	// acquire(j5) must wait for nav.RUnlock() before reloading t1 to Home.
+	navMu.RLock()
+	type acqRes struct {
+		id  string
+		err error
+	}
+	acquired := make(chan acqRes, 1)
+	go func() {
+		id, err := tp.acquire(ctx, "accA", "j5", port, 3, policy)
+		acquired <- acqRes{id, err}
+	}()
+	time.Sleep(30 * time.Millisecond)
+	if navs != 1 {
+		navMu.RUnlock()
+		t.Fatalf("periodic reload started while nav.RLock was held! navs=%d", navs)
+	}
+	navMu.RUnlock()
+	select {
+	case res := <-acquired:
+		if res.err != nil || res.id != t1 || navs != 2 {
+			t.Fatalf("res=%+v navs=%d, want t1 and navs=2", res, navs)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for j4 reload after nav.RUnlock")
+	}
+}
+
+type fakeBrowserChecker map[string]bool
+
+func (f fakeBrowserChecker) HasRunningBrowser(id string) bool { return f[id] }
+
+func TestColdChromeStaggerPlanner(t *testing.T) {
+	planner := newChromeStaggerPlanner(fakeBrowserChecker{"warm": true})
+	// Warm account + sibling thread launch quickly without full cold stagger.
+	if d := planner("warm"); d < warmThreadStaggerMin || d > warmThreadStaggerMin+time.Duration(warmThreadStaggerSpan)*time.Millisecond {
+		t.Fatalf("warm stagger = %v", d)
+	}
+	// Cold accounts spread beyond the old 5s cap across 20 accounts, capped at 20s.
+	var prev time.Duration
+	for i := range 20 {
+		id := fmt.Sprintf("cold-%d", i)
+		d := planner(id)
+		if i == 0 && d != 0 {
+			t.Fatalf("first cold account stagger = %v, want 0", d)
+		}
+		if i > 0 && d < prev {
+			t.Fatalf("cold stagger regressed at %d: %v < %v", i, d, prev)
+		}
+		if d > maxColdChromeStagger {
+			t.Fatalf("cold stagger exceeded cap: %v > %v", d, maxColdChromeStagger)
+		}
+		sib := planner(id)
+		if sib <= d {
+			t.Fatalf("sibling thread stagger (%v) must follow account cold delay (%v)", sib, d)
+		}
+		prev = d
+	}
+	if prev <= 5*time.Second {
+		t.Fatalf("expected 20 cold accounts to spread past 5s, got max=%v", prev)
 	}
 }

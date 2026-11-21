@@ -66,6 +66,7 @@ type chromePage struct {
 	// account check).
 	nav      *sync.RWMutex
 	targetID string
+	jobID    string
 	onClose  func(dirty bool)
 
 	// mu guards the kept connection. One call uses it at a time (busy); a
@@ -85,8 +86,8 @@ func (p *chromePage) markDirty() {
 	p.mu.Unlock()
 }
 
-// bindTab assigns this page to a dedicated tab target and release hook.
-func (p *chromePage) bindTab(targetID string, nav *sync.RWMutex, onClose func(dirty bool)) {
+// bindTab assigns this page to a tab target (shared or exclusive) and release hook.
+func (p *chromePage) bindTab(targetID, jobID string, nav *sync.RWMutex, onClose func(dirty bool)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.targetID != targetID && !p.busy && p.conn != nil {
@@ -94,8 +95,15 @@ func (p *chromePage) bindTab(targetID string, nav *sync.RWMutex, onClose func(di
 		p.conn = nil
 	}
 	p.targetID = targetID
+	p.jobID = jobID
 	p.nav = nav
 	p.onClose = onClose
+}
+
+func (p *chromePage) boundTab() (targetID, jobID string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.targetID, p.jobID
 }
 
 // Close ends the kept connection; a call still using it ends it when done.

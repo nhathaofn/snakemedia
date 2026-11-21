@@ -33,7 +33,9 @@ func BuildArgs(opts LaunchOptions) []string {
 		"--disable-sync",
 		"--disable-default-apps",
 		"--disable-component-update",
-		"--disable-blink-features=AutomationControlled",
+		// Omit both --enable-automation and --disable-blink-features=AutomationControlled:
+		// Chrome already leaves navigator.webdriver false without --enable-automation,
+		// while --disable-blink-features triggers Chrome's unsupported-flag infobar.
 		// The only --disable-features flag: Chrome keeps just the last one given.
 		"--disable-features=Translate,OptimizationHints,MediaRouter",
 	}

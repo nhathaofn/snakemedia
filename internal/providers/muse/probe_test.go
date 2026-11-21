@@ -2,6 +2,7 @@ package muse
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -352,4 +353,139 @@ const page = (` + pageSource + `)(1024);
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("page login script: %v\n%s", err, out)
 	}
+}
+
+type inspectSeqPage struct {
+	*fakePage
+	states   []LoginState
+	idx      int
+	homes    int
+	loginErr error
+}
+
+func (p *inspectSeqPage) Login(context.Context) (LoginState, error) {
+	if p.loginErr != nil {
+		return LoginState{}, p.loginErr
+	}
+	if len(p.states) == 0 {
+		return p.fakePage.Login(context.Background())
+	}
+	i := min(p.idx, len(p.states)-1)
+	p.idx++
+	return p.states[i], nil
+}
+
+func (p *inspectSeqPage) Home(context.Context) error {
+	p.homes++
+	return nil
+}
+
+func TestSiteInspectAvoidsReloadLoopsAndOAuthYanking(t *testing.T) {
+	t.Run("HTTP 200 without chat at home path hydrates without reloading and reports errPageNotReady until chat appears", func(t *testing.T) {
+		page := &inspectSeqPage{
+			fakePage: &fakePage{quota: &MuseQuota{PercentUsed: 10}},
+			states: []LoginState{
+				{HTTP: 200, Chat: false, Path: "/"},
+				{HTTP: 200, Chat: false, Path: "/"},
+				{HTTP: 200, Chat: true, LoggedIn: true, Path: "/"},
+			},
+		}
+		s, _ := testSite(t, page)
+		ctx := accounts.WithInspectScope(context.Background())
+
+		insp, err := s.Inspect(ctx, &browser.Browser{Port: 1234, Headless: true}, accounts.Record{Account: accounts.Account{ID: "m1"}})
+		if !errors.Is(err, errPageNotReady) || insp.SignedIn {
+			t.Fatalf("poll 1: want errPageNotReady, got insp=%+v err=%v", insp, err)
+		}
+		insp, err = s.Inspect(ctx, &browser.Browser{Port: 1234, Headless: true}, accounts.Record{Account: accounts.Account{ID: "m1"}})
+		if !errors.Is(err, errPageNotReady) || insp.SignedIn {
+			t.Fatalf("poll 2: want errPageNotReady, got insp=%+v err=%v", insp, err)
+		}
+		insp, err = s.Inspect(ctx, &browser.Browser{Port: 1234, Headless: true}, accounts.Record{Account: accounts.Account{ID: "m1"}})
+		if err != nil || !insp.SignedIn {
+			t.Fatalf("poll 3: expected SignedIn once chat hydrated, got insp=%+v err=%v", insp, err)
+		}
+		if page.homes != 0 {
+			t.Fatalf("expected 0 Home reloads while hydrating at /, got %d", page.homes)
+		}
+	})
+
+	t.Run("repeated 401 polls inside one Check scope reload Home at most once", func(t *testing.T) {
+		page := &inspectSeqPage{
+			fakePage: &fakePage{},
+			states: []LoginState{
+				{HTTP: 401, Chat: false, Path: "/"},
+			},
+		}
+		s, _ := testSite(t, page)
+		ctx := accounts.WithInspectScope(context.Background())
+
+		for range 5 {
+			insp, err := s.Inspect(ctx, &browser.Browser{Port: 1234, Headless: true}, accounts.Record{Account: accounts.Account{ID: "m2"}})
+			if err != nil || insp.SignedIn {
+				t.Fatalf("expected signed out inspection without error on 401, got insp=%+v err=%v", insp, err)
+			}
+		}
+		if page.homes != 1 {
+			t.Fatalf("expected Home reload once per Check scope, got %d", page.homes)
+		}
+	})
+
+	t.Run("off-home route without chat navigates Home once per Check scope", func(t *testing.T) {
+		page := &inspectSeqPage{
+			fakePage: &fakePage{quota: &MuseQuota{PercentUsed: 5}},
+			states: []LoginState{
+				{HTTP: 200, Chat: false, Path: "/settings"},
+				{HTTP: 200, Chat: false, Path: "/settings"},
+			},
+		}
+		s, _ := testSite(t, page)
+		ctx := accounts.WithInspectScope(context.Background())
+
+		for range 3 {
+			_, _ = s.Inspect(ctx, &browser.Browser{Port: 1234, Headless: true}, accounts.Record{Account: accounts.Account{ID: "m3"}})
+		}
+		if page.homes != 1 {
+			t.Fatalf("expected Home reload once for /settings route, got %d", page.homes)
+		}
+	})
+
+	t.Run("interactive visible sign-in never reloads Home or pulls away from Google OAuth", func(t *testing.T) {
+		page := &inspectSeqPage{
+			fakePage: &fakePage{},
+			states:   []LoginState{{HTTP: 401, Chat: false, Path: "/"}},
+		}
+		s, _ := testSite(t, page)
+		ctx := accounts.WithInspectScope(context.Background())
+		visible := &browser.Browser{Port: 1234, Headless: false}
+		rec := accounts.Record{Account: accounts.Account{ID: "m4", Status: accounts.StatusSigningIn}}
+
+		for range 4 {
+			insp, err := s.Inspect(ctx, visible, rec)
+			if err != nil || insp.SignedIn {
+				t.Fatalf("unexpected result during interactive sign-in: insp=%+v err=%v", insp, err)
+			}
+		}
+		if page.homes != 0 {
+			t.Fatalf("interactive sign-in must not reload Home on /, got %d reloads", page.homes)
+		}
+
+		navs := 0
+		pageOAuth := &inspectSeqPage{fakePage: &fakePage{}, loginErr: errTabMissing}
+		sOAuth, _ := testSite(t, pageOAuth)
+		sOAuth.awayCheck = func(_ context.Context, _ int, _ config.AccountConfig, navigate bool) (awayTabInfo, error) {
+			if navigate {
+				navs++
+			}
+			return awayTabInfo{
+				URL:   "https://accounts.google.com/v3/signin/identifier",
+				Ready: "complete",
+				Title: "Sign in - Google Accounts",
+			}, nil
+		}
+		insp, err := sOAuth.Inspect(ctx, visible, rec)
+		if err != nil || insp.SignedIn || insp.Fatal != "" || navs != 0 {
+			t.Fatalf("interactive Google OAuth must not navigate away: insp=%+v err=%v navs=%d", insp, err, navs)
+		}
+	})
 }

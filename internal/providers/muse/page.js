@@ -409,10 +409,24 @@ function pageMain(CHUNK) {
         .filter((u) => /\/static\/(?:immutable\/)?chunks\/[^?]+\.js(\?|$)/.test(u)),
     ),
   ];
-  const source = (u) =>
-    fetchTimed(u, {}, 8000)
-      .then((r) => (r.ok ? r.text() : ""))
-      .catch(() => "");
+  const chunkTexts = new Map();
+  const source = (u) => {
+    let pending = chunkTexts.get(u);
+    if (!pending) {
+      pending = fetchTimed(u, {}, 8000)
+        .then((r) => {
+          if (r.ok) return r.text();
+          chunkTexts.delete(u);
+          return "";
+        })
+        .catch(() => {
+          chunkTexts.delete(u);
+          return "";
+        });
+      chunkTexts.set(u, pending);
+    }
+    return pending;
+  };
   // The build the page runs: a found value is remembered per build, because
   // Muse's IDs change with every deployment. Next.js names its build when the
   // page carries __NEXT_DATA__; otherwise the set of loaded chunk files (their

@@ -356,45 +356,34 @@ func TestStateDrivenPumpRefreshesSignedOutEnabledAccountOnceWhenQueueHasWork(t *
 
 func TestTabPoolInvalidateAccountClosesExcessAndMarksRemainingReload(t *testing.T) {
 	const port = 60120
-	fc := newFakeChromeTabs(port, 1)
+	fc := newFakeChromeTabs(port, 2) // pre-existing t1 and excess idle t2
 	tp := fc.pool()
 	policy := config.DefaultAccountConfig()
 	ctx := context.Background()
 
-	t1, err := tp.acquire(ctx, "accA", "j1", port, 2, policy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t2, err := tp.acquire(ctx, "accA", "j2", port, 2, policy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Release t2 so it becomes an idle secondary tab, while t1 remains kept.
-	tp.release(ctx, "accA", port, t2, false, func() int { return 2 }, policy)
-	tp.release(ctx, "accA", port, t1, false, func() int { return 2 }, policy)
+	_, _, _ = tp.syncLocked(ctx, "accA", port, policy)
+	tp.invalidateAccount(ctx, "accA", port, "t1", policy)
 
-	tp.invalidateAccount(ctx, "accA", port, t1, policy)
-
-	if len(fc.closeCalls) != 1 || fc.closeCalls[0] != t2 {
-		t.Fatalf("expected excess idle tab %s closed, closeCalls=%v", t2, fc.closeCalls)
+	if len(fc.closeCalls) != 1 || fc.closeCalls[0] != "t2" {
+		t.Fatalf("expected excess idle tab t2 closed, closeCalls=%v", fc.closeCalls)
 	}
 	fc.mu.Lock()
 	for i := range fc.targets {
-		if fc.targets[i].ID == t1 {
+		if fc.targets[i].ID == "t1" {
 			fc.targets[i].URL = "https://muse.ai/chat/stale"
 		}
 	}
 	fc.mu.Unlock()
 
 	reused, err := tp.acquire(ctx, "accA", "j3", port, 2, policy)
-	if err != nil || reused != t1 {
-		t.Fatalf("reused = (%q, %v), want %s", reused, err, t1)
+	if err != nil || reused != "t1" {
+		t.Fatalf("reused = (%q, %v), want t1", reused, err)
 	}
 	fc.mu.Lock()
 	finalURL := fc.targets[0].URL
 	fc.mu.Unlock()
 	if finalURL != MuseURL {
-		t.Fatalf("expected invalidated slot %s to reload to %s on acquire, got %q", t1, MuseURL, finalURL)
+		t.Fatalf("expected invalidated slot t1 to reload to %s on acquire, got %q", MuseURL, finalURL)
 	}
 }
 

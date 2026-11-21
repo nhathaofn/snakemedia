@@ -60,6 +60,7 @@ type Service struct {
 	emit                   func(events.Event, any)
 	routes                 map[string]proxy.Route // account ID -> route its running browser uses
 	watching               map[string]bool        // accounts with an open sign-in watcher
+	sessionRenewAttempt    map[string]time.Time   // account ID -> last quiet HTTP session renew attempt
 	listeners              []func()
 	removed                []func(Record)
 	browserClosedListeners []func(Record)
@@ -116,9 +117,15 @@ func (s *Service) Start(ctx context.Context, emit func(events.Event, any)) {
 		s.emit = emit
 	}
 	s.pool.OnClosed(s.browserClosed)
+	if h, ok := s.pool.(interface {
+		OnClosing(func(string, *browser.Browser))
+	}); ok {
+		h.OnClosing(s.browserClosing)
+	}
 	s.pool.Reap(ctx)
 	s.mu.Unlock()
 	s.ResumeExpired()
+	s.startSessionRenewal(ctx)
 	s.goBackground(func() {
 		ticker := time.NewTicker(autoResumeInterval)
 		defer ticker.Stop()
@@ -314,24 +321,52 @@ func (s *Service) SyncCookies(ctx context.Context, id string, port int) {
 		return
 	}
 	rec, site, err := s.lookup(id)
-	if err != nil || rec.Source != SourceCookies {
+	if err != nil {
 		return
 	}
 	cookies, err := browser.ReadCookies(ctx, port, s.cfg.Get().Accounts, site.AcceptsCookie)
-	if err != nil || len(cookies) == 0 || cookiesEqual(rec.Cookies, cookies) {
+	if err != nil || len(cookies) == 0 {
+		return
+	}
+	persisted := browser.PersistSessionCookies(cookies, s.now(), browser.DefaultSessionCookieTTL)
+	if sessionOnly := browser.SessionOnlyCookies(cookies); len(sessionOnly) > 0 {
+		// Upgrade session-only cookies (e.g. injected by a Chrome extension without
+		// expirationDate) inside the live Chrome profile so closing Chrome does not
+		// wipe them from disk.
+		_ = s.inject(ctx, port, s.cfg.Get().Accounts, browser.PersistSessionCookies(sessionOnly, s.now(), browser.DefaultSessionCookieTTL))
+	}
+	if cookiesEqual(rec.Cookies, cookies) && len(browser.SessionOnlyCookies(rec.Cookies)) == 0 {
 		return
 	}
 	version := uuid.NewString()
 	_, err = s.Update(id, func(r *Record) {
-		if r.Source != SourceCookies {
-			return
-		}
-		r.Cookies = cookies
+		r.Cookies = persisted
 		r.CookieVersion = version
 	})
-	if err == nil {
+	if err == nil && rec.ProfileDir != "" {
 		_ = os.WriteFile(filepath.Join(rec.ProfileDir, cookieMarker), []byte(version), 0o600)
 	}
+}
+
+// RestoreCookies writes backed-up cookies for id into an open Chrome instance
+// when the profile lost session cookies across a close/restart.
+func (s *Service) RestoreCookies(ctx context.Context, id string, port int) bool {
+	if port <= 0 {
+		return false
+	}
+	rec, err := s.store.get(id)
+	if err != nil || len(rec.Cookies) == 0 {
+		return false
+	}
+	policy := s.cfg.Get().Accounts
+	cookies := browser.PersistSessionCookies(rec.Cookies, s.now(), browser.DefaultSessionCookieTTL)
+	if err := s.inject(ctx, port, policy, cookies); err != nil {
+		return false
+	}
+	if rec.ProfileDir != "" && rec.CookieVersion != "" {
+		_ = os.WriteFile(filepath.Join(rec.ProfileDir, cookieMarker), []byte(rec.CookieVersion), 0o600)
+	}
+	return true
 }
 
 func cookiesEqual(a, b []browser.Cookie) bool {
@@ -493,6 +528,16 @@ func (s *Service) ProxyURL(id string) (*url.URL, error) {
 	return route.URL, nil
 }
 
+// HasRunningBrowser reports whether account id currently has an active Chrome
+// process managed by the pool.
+func (s *Service) HasRunningBrowser(id string) bool {
+	rec, err := s.store.get(id)
+	if err != nil {
+		return false
+	}
+	return s.pool.Running(rec.ProfileDir) != nil
+}
+
 // Acquire marks the account's browser as needed by running work until the
 // returned release is called; it is then never restarted or removed.
 func (s *Service) Acquire(id string) (release func()) {
@@ -550,7 +595,8 @@ func (s *Service) open(ctx context.Context, rec Record, site Site, visible bool)
 	if len(rec.Cookies) > 0 {
 		marker := filepath.Join(b.ProfileDir, cookieMarker)
 		if seeded, _ := os.ReadFile(marker); string(seeded) != rec.CookieVersion {
-			if err := s.inject(ctx, b.Port, policy, rec.Cookies); err != nil {
+			cookies := browser.PersistSessionCookies(rec.Cookies, s.now(), browser.DefaultSessionCookieTTL)
+			if err := s.inject(ctx, b.Port, policy, cookies); err != nil {
 				return nil, err
 			}
 			_ = os.WriteFile(marker, []byte(rec.CookieVersion), 0o600)
@@ -685,6 +731,11 @@ func assignment(rec Record) proxy.Assignment {
 // route or cookies. It returns browser.ErrProfileBusy, and changes nothing,
 // while work holds the browser.
 func (s *Service) closeBrowser(rec Record) error {
+	if b := s.pool.Running(rec.ProfileDir); b != nil && b.Port > 0 {
+		syncCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		s.SyncCookies(syncCtx, rec.ID, b.Port)
+		cancel()
+	}
 	if err := s.pool.CloseIfIdle(rec.ProfileDir); err != nil {
 		return err
 	}
@@ -715,11 +766,12 @@ func (s *Service) CloseHeadlessIfIdle(id string) error {
 // waitSignedIn polls the site until it reports a signed-in session, a fatal
 // account restriction, or timeout passes.
 func (s *Service) waitSignedIn(ctx context.Context, site Site, b *browser.Browser, rec Record, timeout time.Duration) (Inspection, error) {
+	ctx = WithInspectScope(ctx)
 	poll := time.Duration(s.cfg.Get().Accounts.PollIntervalMS) * time.Millisecond
 	deadline := s.now().Add(timeout)
 	for {
 		insp, err := site.Inspect(ctx, b, rec)
-		if err == nil && (insp.SignedIn || insp.Fatal != "") {
+		if err == nil && (insp.SignedIn || insp.Fatal != "" || insp.SignedOut) {
 			return insp, nil
 		}
 		if ctx.Err() != nil {
@@ -772,7 +824,12 @@ func (s *Service) runCheck(ctx context.Context, id string, probeVideo bool) (Rec
 	if s.InUse(id) {
 		return rec, errors.New("Tài khoản đang chạy tác vụ, hãy kiểm tra sau khi tác vụ xong.")
 	}
-	defer func() { _ = s.CloseHeadlessIfIdle(id) }()
+	closeHeadless := true
+	defer func() {
+		if closeHeadless {
+			_ = s.CloseHeadlessIfIdle(id)
+		}
+	}()
 	release := s.Acquire(id)
 	defer release()
 
@@ -787,7 +844,7 @@ func (s *Service) runCheck(ctx context.Context, id string, probeVideo bool) (Rec
 	timeout := time.Duration(policy.PageReadySeconds) * time.Second
 	insp, err := s.waitSignedIn(ctx, site, b, rec, timeout)
 	if err == nil && !insp.SignedIn && insp.Fatal == "" && len(rec.Cookies) > 0 {
-		if s.inject(ctx, b.Port, policy, rec.Cookies) == nil {
+		if s.inject(ctx, b.Port, policy, browser.PersistSessionCookies(rec.Cookies, s.now(), browser.DefaultSessionCookieTTL)) == nil {
 			if tab, found, _ := browser.FindTab(ctx, b.Port, policy, site.Page().Owns); found {
 				_ = browser.Navigate(ctx, tab, b.Port, site.Page())
 			}
@@ -841,7 +898,11 @@ func (s *Service) runCheck(ctx context.Context, id string, probeVideo bool) (Rec
 	if insp.SignedIn && insp.Fatal == "" && b != nil && b.Port > 0 {
 		s.SyncCookies(ctx, id, b.Port)
 	}
-	return s.apply(id, insp)
+	res, applyErr := s.apply(id, insp)
+	if applyErr == nil && insp.SignedIn && insp.Fatal == "" && !insp.DisableAccount {
+		closeHeadless = false
+	}
+	return res, applyErr
 }
 
 // apply records what an inspection found. A session for another identity
@@ -974,6 +1035,7 @@ func (s *Service) watch(b *browser.Browser, id string, site Site) {
 	policy := s.cfg.Get().Accounts
 	ctx, cancel := context.WithTimeout(s.lifetime(), time.Duration(policy.LoginTimeoutSeconds)*time.Second)
 	defer cancel()
+	ctx = WithInspectScope(ctx)
 	signedOut := func(message string) {
 		s.Update(id, func(r *Record) {
 			if r.Status == StatusSigningIn {
@@ -993,11 +1055,24 @@ func (s *Service) watch(b *browser.Browser, id string, site Site) {
 			return
 		}
 		if insp, err := site.Inspect(ctx, b, rec); err == nil && insp.SignedIn {
+			if b != nil && b.Port > 0 {
+				s.SyncCookies(ctx, id, b.Port)
+			}
 			if follow, ok := site.(SignInFollowUp); ok {
 				s.Update(id, func(r *Record) {
 					r.Message = "Đã đăng nhập, đang hoàn tất thiết lập tài khoản…"
 				})
 				insp = follow.AfterSignIn(ctx, b, rec, insp)
+			}
+			// If Chrome closed during AfterSignIn and a newer Check already updated
+			// this account in the meantime, keep the fresher check result.
+			if b != nil && b.Port > 0 && b.Validate(ctx, policy) != nil {
+				if latest, rErr := s.store.get(id); rErr == nil && latest.LastCheckedAt != "" && latest.LastCheckedAt != rec.LastCheckedAt {
+					return
+				}
+			}
+			if b != nil && b.Port > 0 {
+				s.SyncCookies(ctx, id, b.Port)
 			}
 			s.apply(id, insp)
 			return
