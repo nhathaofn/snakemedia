@@ -31,6 +31,7 @@ type localBridge struct {
 	// active counts open client connections; lastUsed (guarded by bridges.mu)
 	// is the last time a route asked for the bridge.
 	active   atomic.Int32
+	holds    int // guarded by bridges.mu
 	lastUsed time.Time
 }
 
@@ -57,8 +58,16 @@ func bridgeKey(p *Parsed) string {
 
 // GetBridge returns a 127.0.0.1 port that forwards traffic to upstream p.
 func (m *bridges) GetBridge(p *Parsed) (int, error) {
+	b, _, err := m.getBridge(p, false)
+	if err != nil {
+		return 0, err
+	}
+	return b.port, nil
+}
+
+func (m *bridges) getBridge(p *Parsed, hold bool) (*localBridge, func(), error) {
 	if p == nil || p.Host == "" || p.Port == 0 {
-		return 0, fmt.Errorf("invalid upstream proxy")
+		return nil, nil, fmt.Errorf("invalid upstream proxy")
 	}
 
 	key := bridgeKey(p)
@@ -67,12 +76,12 @@ func (m *bridges) GetBridge(p *Parsed) (int, error) {
 
 	if b, ok := m.bridges[key]; ok {
 		b.lastUsed = m.now()
-		return b.port, nil
+		return b, m.holdLocked(b, hold), nil
 	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return 0, fmt.Errorf("local bridge listen error: %w", err)
+		return nil, nil, fmt.Errorf("local bridge listen error: %w", err)
 	}
 
 	port := ln.Addr().(*net.TCPAddr).Port
@@ -87,7 +96,19 @@ func (m *bridges) GetBridge(p *Parsed) (int, error) {
 	m.bridges[key] = b
 
 	go b.serve()
-	return port, nil
+	return b, m.holdLocked(b, hold), nil
+}
+
+func (m *bridges) holdLocked(b *localBridge, hold bool) func() {
+	if !hold {
+		return func() {}
+	}
+	b.holds++
+	return sync.OnceFunc(func() {
+		m.mu.Lock()
+		b.holds--
+		m.mu.Unlock()
+	})
 }
 
 // Prune closes bridges no route uses any more: not on a port in keep, no open
@@ -98,7 +119,7 @@ func (m *bridges) Prune(keep map[int]bool) int {
 	defer m.mu.Unlock()
 	closed := 0
 	for key, b := range m.bridges {
-		if keep[b.port] || b.active.Load() > 0 || m.now().Sub(b.lastUsed) < bridgeGrace {
+		if keep[b.port] || b.holds > 0 || b.active.Load() > 0 || m.now().Sub(b.lastUsed) < bridgeGrace {
 			continue
 		}
 		b.close()

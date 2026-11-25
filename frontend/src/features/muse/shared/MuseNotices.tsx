@@ -11,6 +11,7 @@ import { MusePreviousRunToggle } from './PreviousRun';
  */
 export function MuseNotices() {
   const loadError = useMuseStore((s) => s.loadError);
+  const optionsError = useMuseStore((s) => s.optionsError);
   const journalWarning = useMuseStore((s) => s.options?.journalWarning);
   const [dismissed, setDismissed] = useState(false);
   return (
@@ -21,6 +22,11 @@ export function MuseNotices() {
       {loadError && (
         <div role="alert" className="muse-alert muse-alert-danger">
           {loadError}
+        </div>
+      )}
+      {optionsError && (
+        <div role="alert" className="muse-alert muse-alert-warning">
+          Không tải được tuỳ chọn Muse. {optionsError}
         </div>
       )}
       {journalWarning && !dismissed && (

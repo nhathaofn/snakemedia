@@ -323,7 +323,7 @@ func (p *Provider) SubmitJobs(req MuseJobRequest) models.Response[[]MuseJob] {
 			return models.SuccessResponse(slices.Clone(pending.out))
 		}
 	}
-	return p.submitJobs(req, "")
+	return p.submitJobsLocked(req, "")
 }
 
 func submissionHash(req MuseJobRequest) string {
@@ -338,26 +338,34 @@ const maxNodeAttempts = 50
 // runJobID gives one job of a graph run a stable ID derived from the run key,
 // so running the same graph again finds the job it queued before instead of
 // queueing (and paying for) it again. A job that ended without Muse ever
-// taking it (no SessionID) moves on to the next attempt; one Muse took is
-// returned as it is, its failure retried only from the queue.
-func (p *Provider) runJobID(runKey string, parts ...any) (string, *MuseJob) {
-	for attempt := range maxNodeAttempts {
+// taking it moves on to the next attempt. A send with an unknown outcome
+// keeps its job even if the session ID was lost.
+func (p *Provider) runJobID(runKey string, parts ...any) (string, *MuseJob, error) {
+	for attempt := 0; ; attempt++ {
 		id := engine.RequestIDFor(runKey, attempt, parts...)
 		job, ok := p.jobs.get(id)
 		if !ok {
-			return id, nil
+			if p.jobs.journal.Retired(id) {
+				return "", nil, errGraphJobRetired
+			}
+			return id, nil, nil
 		}
-		if (job.Status == MuseJobFailed || job.Status == MuseJobCancelled) && job.SessionID == "" {
+		if attempt+1 < maxNodeAttempts && (job.Status == MuseJobFailed || job.Status == MuseJobCancelled) && !job.mayBePaid() && !job.Sending {
 			continue
 		}
-		return id, &job
+		return id, &job, nil
 	}
-	return uuid.NewString(), nil
 }
 
 // submitJobs queues one job per prompt and repeat. With a graph run key the
 // job IDs are derived from it (runJobID); without one every job is new.
 func (p *Provider) submitJobs(req MuseJobRequest, runKey string) models.Response[[]MuseJob] {
+	p.submitMu.Lock()
+	defer p.submitMu.Unlock()
+	return p.submitJobsLocked(req, runKey)
+}
+
+func (p *Provider) submitJobsLocked(req MuseJobRequest, runKey string) models.Response[[]MuseJob] {
 	if !req.Kind.valid() {
 		return fail[[]MuseJob](errors.New("Loại tác vụ không hợp lệ."), models.CodeInvalidArgument)
 	}
@@ -458,7 +466,10 @@ func (p *Provider) submitJobs(req MuseJobRequest, runKey string) models.Response
 			id := uuid.NewString()
 			if runKey != "" {
 				var existing *MuseJob
-				id, existing = p.runJobID(runKey, req.Kind, pi, r, prompt, refs, info, req.Ratio, req.Duration, boardFrames, boardReview)
+				id, existing, err = p.runJobID(runKey, req.Kind, pi, r, prompt, refs, info, req.Ratio, req.Duration, boardFrames, boardReview)
+				if err != nil {
+					return fail[[]MuseJob](err, models.CodeUnavailable)
+				}
 				if existing != nil {
 					if existing.After != "" && len(existing.Frames) == 0 {
 						if bj, ok := p.jobs.get(existing.After); ok {
@@ -481,7 +492,10 @@ func (p *Provider) submitJobs(req MuseJobRequest, runKey string) models.Response
 				var existingBoard *MuseJob
 				boardID := uuid.NewString()
 				if runKey != "" {
-					boardID, existingBoard = p.runJobID(runKey, "storyboard", pi, r, prompt, refs, info, req.Ratio, board.Frames)
+					boardID, existingBoard, err = p.runJobID(runKey, "storyboard", pi, r, prompt, refs, info, req.Ratio, board.Frames)
+					if err != nil {
+						return fail[[]MuseJob](err, models.CodeUnavailable)
+					}
 				}
 				job.After, job.BoardFrames, job.Review = boardID, board.Frames, board.Review
 				if existingBoard != nil && existingBoard.Status == MuseJobSucceeded && len(existingBoard.Files) > 0 {
@@ -535,6 +549,8 @@ func (p *Provider) submitJobs(req MuseJobRequest, runKey string) models.Response
 	}
 	return models.SuccessResponse(jobs)
 }
+
+var errGraphJobRetired = errors.New("Tác vụ Graph có thể đã dùng quota và đã được dọn khỏi hàng đợi. Hãy kiểm tra lịch sử Muse trước khi tạo lượt mới.")
 
 func (p *Provider) publishSubmittedJobs(fresh []MuseJob, trimmed []string) {
 	if len(trimmed) > 0 {
@@ -677,13 +693,16 @@ func (p *Provider) RemoveJob(id string) models.Response[bool] {
 
 // RunJobs removes the Held/Paused flags from queued jobs so the scheduler picks them up.
 func (p *Provider) RunJobs(ids []string) models.Response[int] {
-	changed := p.updateJobs(ids, func(job *MuseJob) bool {
-		if !job.Held && !job.Paused {
+	changed, err := p.updateJobs(ids, func(job *MuseJob) bool {
+		if job.Status != MuseJobQueued || (!job.Held && !job.Paused) {
 			return false
 		}
 		job.Held, job.Paused = false, false
 		return true
 	})
+	if err != nil {
+		return fail[int](err, models.CodeInternal)
+	}
 	if len(changed) > 0 {
 		p.trigger()
 	}
@@ -1078,13 +1097,16 @@ func (p *Provider) HoldQueued(kind MuseJobKind, mode MuseJobMode) models.Respons
 			ids = append(ids, j.ID)
 		}
 	}
-	changed := p.updateJobs(ids, func(job *MuseJob) bool {
+	changed, err := p.updateJobs(ids, func(job *MuseJob) bool {
 		if !holdable(*job) {
 			return false
 		}
 		job.Held, job.Paused = true, true
 		return true
 	})
+	if err != nil {
+		return fail[int](err, models.CodeInternal)
+	}
 	return models.SuccessResponse(len(changed))
 }
 
@@ -1103,7 +1125,7 @@ func (p *Provider) RetryFailed(kind MuseJobKind, mode MuseJobMode) models.Respon
 			ids = append(ids, j.ID)
 		}
 	}
-	changed := p.updateJobs(ids, func(job *MuseJob) bool {
+	changed, err := p.updateJobs(ids, func(job *MuseJob) bool {
 		if !retryable(*job) {
 			return false
 		}
@@ -1111,6 +1133,9 @@ func (p *Provider) RetryFailed(kind MuseJobKind, mode MuseJobMode) models.Respon
 		job.Attempts, job.Held, job.Paused = 0, false, false
 		return true
 	})
+	if err != nil {
+		return fail[int](err, models.CodeInternal)
+	}
 	if len(changed) > 0 {
 		p.trigger()
 	}

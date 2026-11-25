@@ -405,7 +405,7 @@ export const MuseSettingsPage: React.FC = () => {
             </p>
             <p className="settings-row-hint">
               {assetCount > 0
-                ? `Hiện có ${assetCount} tư liệu trong kho. Chọn "Chuyển kèm ảnh hiện có" để tự động chép toàn bộ thư mục dự án sang vị trí mới và xoá bản cũ sau khi xác nhận an toàn.`
+                ? `Kho có ${assetCount} tư liệu. Nếu chỉ đổi đường dẫn, ảnh chưa có ở thư mục mới sẽ tạm thời không mở được. Chọn "Chuyển kèm ảnh hiện có" để chuyển các ảnh đang được kho quản lý.`
                 : 'Kho hiện chưa có tư liệu nào. Bạn vẫn có thể chọn chuyển thư mục cấu trúc hoặc đổi đường dẫn.'}
             </p>
           </div>

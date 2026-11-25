@@ -220,3 +220,41 @@ func TestVaultDirectoryMigrationMovesExistingAssetsSafely(t *testing.T) {
 		t.Fatalf("moved file missing at new vault dir: %v", err)
 	}
 }
+
+func TestVaultMigrationRefusesExistingDestination(t *testing.T) {
+	p := testProvider(t, &fakePage{})
+	url, err := p.media.Put(assetPrefix+"migration", "image/png", ".png", testPNGBytes(t, 16, 16))
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := p.SaveAsset(MuseAsset{
+		Project: "OLIVA", Type: MuseTypeChar, Tag: "jimena", Role: MuseRoleCharacter,
+		Items: []MuseAssetItem{{URL: url, Angle: "front", Primary: true}},
+	})
+	if !saved.Success {
+		t.Fatal(saved.Error)
+	}
+	oldRoot := p.vaultDir()
+	rel := saved.Data.Items[0].VaultRelPath
+	dest := t.TempDir()
+	collision := filepath.Join(dest, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(collision), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const original = "existing destination file"
+	if err := os.WriteFile(collision, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if res := p.SetAssetVaultDirectory(dest, true); res.Success {
+		t.Fatal("migration accepted a collision")
+	}
+	if got, err := os.ReadFile(collision); err != nil || string(got) != original {
+		t.Fatalf("destination changed: %q, %v", got, err)
+	}
+	if p.vaultDir() != oldRoot {
+		t.Fatal("failed migration changed the vault root")
+	}
+	if _, err := os.Stat(filepath.Join(oldRoot, filepath.FromSlash(rel))); err != nil {
+		t.Fatal(err)
+	}
+}

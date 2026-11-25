@@ -17,6 +17,7 @@ import {
   IconAction,
   RevealList,
   SegmentedControl,
+  VideoThumbnail,
   confirmAction,
 } from '../../../components/ui';
 import { LIST_REVEAL_STEP } from '../../../constants';
@@ -254,12 +255,7 @@ export const MuseLibraryPage: React.FC = () => {
                     >
                       {item.kind === MuseJobKind.Video ? (
                         <>
-                          <video
-                            src={item.localUrl}
-                            className="muse-lib-media"
-                            preload="metadata"
-                            muted
-                          />
+                          <VideoThumbnail src={item.localUrl} className="muse-lib-media" />
                           <span className="muse-lib-play" aria-hidden="true">
                             <Icon icon={Play} size="lg" />
                           </span>

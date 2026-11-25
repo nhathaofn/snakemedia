@@ -56,6 +56,7 @@ export const TaskRow = memo(function TaskRow({
   actions,
 }: TaskRowProps) {
   const running = task.status === FlowImageTaskStatus.Running;
+  const rechecking = task.status === FlowImageTaskStatus.Queued && !!task.requestId;
   const ended =
     task.status === FlowImageTaskStatus.Failed || task.status === FlowImageTaskStatus.Cancelled;
   const shownReferences = task.references.slice(0, 2);
@@ -78,7 +79,7 @@ export const TaskRow = memo(function TaskRow({
 
       <QueuePrompt
         prompt={task.prompt}
-        editable={!running}
+        editable={!running && !rechecking}
         saveLabel={task.status === FlowImageTaskStatus.Queued ? 'Lưu' : 'Lưu & chạy lại'}
         onSave={(prompt) => actions.edit(task.id, prompt)}
       />

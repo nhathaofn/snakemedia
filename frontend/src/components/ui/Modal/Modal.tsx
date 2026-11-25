@@ -8,6 +8,8 @@ import './Modal.css';
 const focusable =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+const openPanels: HTMLElement[] = [];
+
 export interface ModalProps {
   /** Called on Escape, a click on the backdrop or the close button. */
   onClose: () => void;
@@ -47,22 +49,32 @@ export function Modal({
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
     const panel = panelRef.current;
-    const first = panel?.querySelector<HTMLElement>(focusable);
-    (first ?? panel)?.focus();
+    if (!panel) return;
+    openPanels.push(panel);
+    const focusableItems = () =>
+      Array.from(panel.querySelectorAll<HTMLElement>(focusable)).filter(
+        (item) => item.tabIndex >= 0 && item.getClientRects().length > 0,
+      );
+    (focusableItems()[0] ?? panel).focus();
     const onKeyDown = (event: KeyboardEvent) => {
+      if (openPanels.at(-1) !== panel || event.defaultPrevented) return;
       if (event.key === 'Escape') {
+        event.preventDefault();
         event.stopPropagation();
         closeRef.current();
         return;
       }
-      if (event.key !== 'Tab' || !panel) return;
-      const items = Array.from(panel.querySelectorAll<HTMLElement>(focusable));
+      if (event.key !== 'Tab') return;
+      const items = focusableItems();
       if (items.length === 0) {
         event.preventDefault();
         return;
       }
       const last = items[items.length - 1];
-      if (event.shiftKey && document.activeElement === items[0]) {
+      if (!items.includes(document.activeElement as HTMLElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : items[0]).focus();
+      } else if (event.shiftKey && document.activeElement === items[0]) {
         event.preventDefault();
         last.focus();
       } else if (!event.shiftKey && document.activeElement === last) {
@@ -73,7 +85,10 @@ export function Modal({
     window.addEventListener('keydown', onKeyDown);
     return () => {
       window.removeEventListener('keydown', onKeyDown);
-      opener?.focus?.();
+      const wasTop = openPanels.at(-1) === panel;
+      openPanels.splice(openPanels.indexOf(panel), 1);
+      const next = openPanels.at(-1);
+      if (wasTop && (!next || next.contains(opener))) opener?.focus();
     };
   }, []);
 

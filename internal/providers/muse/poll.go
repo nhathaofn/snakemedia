@@ -402,15 +402,25 @@ func (p *Provider) restingUntil(ctx context.Context, accountID string, page Page
 	return pausedUntil(museView(acc), p.cfg.Get().Muse, p.now())
 }
 
-// refreshQuotaLater reads the account's quota once in the background, so the
-// account card and the next plan see what the job cost (tracked, so Close
-// waits for it and idle Chrome stays alive until it completes).
+type quotaRefresh struct {
+	next Page
+}
+
+// refreshQuotaLater coalesces completions on the same account into one queued
+// quota read while another is in progress.
 func (p *Provider) refreshQuotaLater(accountID string, page Page) {
+	page = p.detachedQuotaPage(accountID, page)
 	p.mu.Lock()
 	if p.acct.quotaPending == nil {
-		p.acct.quotaPending = make(map[string]int)
+		p.acct.quotaPending = make(map[string]*quotaRefresh)
 	}
-	p.acct.quotaPending[accountID]++
+	if active := p.acct.quotaPending[accountID]; active != nil {
+		active.next = page
+		p.mu.Unlock()
+		return
+	}
+	active := &quotaRefresh{}
+	p.acct.quotaPending[accountID] = active
 	p.mu.Unlock()
 	p.wg.Add(1)
 	go func() {
@@ -418,15 +428,25 @@ func (p *Provider) refreshQuotaLater(accountID string, page Page) {
 		defer logger.Recover("cập nhật hạn mức Muse")
 		defer func() {
 			p.mu.Lock()
-			if p.acct.quotaPending[accountID]--; p.acct.quotaPending[accountID] <= 0 {
+			if p.acct.quotaPending[accountID] == active {
 				delete(p.acct.quotaPending, accountID)
 			}
 			p.mu.Unlock()
 			p.closeIdleBrowserIfDone(accountID)
 		}()
-		qCtx, cancel := context.WithTimeout(p.lifetime(), p.quotaRefreshTimeout())
-		defer cancel()
-		p.refreshQuota(qCtx, accountID, page)
+		for page != nil {
+			func() {
+				qCtx, cancel := context.WithTimeout(p.lifetime(), p.quotaRefreshTimeout())
+				defer cancel()
+				p.refreshQuota(qCtx, accountID, page)
+			}()
+			p.mu.Lock()
+			page, active.next = active.next, nil
+			if page == nil {
+				delete(p.acct.quotaPending, accountID)
+			}
+			p.mu.Unlock()
+		}
 	}()
 }
 

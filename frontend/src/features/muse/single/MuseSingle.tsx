@@ -13,7 +13,14 @@ import {
   Trash2,
 } from 'lucide-react';
 import { PromptBar, QuantityField } from '../../../components/studio';
-import { Button, Icon, IconAction, RevealList, Spinner } from '../../../components/ui';
+import {
+  Button,
+  Icon,
+  IconAction,
+  RevealList,
+  Spinner,
+  VideoThumbnail,
+} from '../../../components/ui';
 import { LIST_REVEAL_STEP, MUSE_SINGLE_MAX_VARIANTS } from '../../../constants';
 import { MuseJobKind, MuseJobMode, MuseJobStatus } from '../../../types';
 import type { MuseJob } from '../../../types';
@@ -340,7 +347,7 @@ export const SingleTile = memo(function SingleTile({
                   onClick={() => onPreview(url)}
                 >
                   {job.kind === MuseJobKind.Video ? (
-                    <video src={url} preload="metadata" muted />
+                    <VideoThumbnail src={url} />
                   ) : (
                     <img src={url} alt="" loading="lazy" decoding="async" />
                   )}

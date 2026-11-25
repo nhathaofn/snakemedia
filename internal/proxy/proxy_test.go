@@ -161,16 +161,16 @@ func TestSecretsAreRedacted(t *testing.T) {
 }
 
 // A signed-in account waits for its pinned line instead of moving to another
-// IP while that line is dead; it moves only once the line leaves the list.
-func TestKeptPinIsNotMovedWhileDead(t *testing.T) {
+// IP while that line is dead or after it leaves the list.
+func TestKeptPinIsNotMovedWhileDeadOrRemoved(t *testing.T) {
 	now := time.Now()
 	dead := map[string]time.Time{"1.2.3.4:8080": now.Add(time.Minute)}
 	a := Assignment{Account: "a", Name: "A", Auto: "1.2.3.4:8080", Keep: true}
 	if p, _, err := pick(a, nil, "1.2.3.4:8080\n2.3.4.5:8080", dead, now); err == nil || p != nil {
 		t.Fatalf("kept pin moved: %v %v", p, err)
 	}
-	if _, line, err := pick(a, nil, "2.3.4.5:8080", dead, now); err != nil || line != "2.3.4.5:8080" {
-		t.Fatalf("a removed pin must be replaced: %v %v", line, err)
+	if p, _, err := pick(a, nil, "2.3.4.5:8080", dead, now); err == nil || p != nil {
+		t.Fatalf("a removed pin must require an explicit assignment: %v %v", p, err)
 	}
 	a.Keep = false
 	if _, line, err := pick(a, nil, "1.2.3.4:8080\n2.3.4.5:8080", dead, now); err != nil || line != "2.3.4.5:8080" {

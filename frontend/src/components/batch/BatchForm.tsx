@@ -92,6 +92,7 @@ export function BatchForm({
     else setLocalText(next);
   };
   const [adding, setAdding] = useState(false);
+  const addingRef = useRef(false);
   const [note, setNote] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [pickedMode, setMode] = useState<PromptMode>(loadPromptMode);
@@ -105,7 +106,8 @@ export function BatchForm({
   // Adds list (from the box when fromBox) once; a second Enter while the first
   // is being added does nothing.
   const add = async (list: string[], fromBox: boolean) => {
-    if (adding || blockedReason || list.length === 0) return;
+    if (addingRef.current || blockedReason || list.length === 0) return;
+    const submittedText = text;
     const fresh = newPrompts(list, pending);
     const skipped = list.length - fresh.length;
     if (fresh.length === 0) {
@@ -113,13 +115,15 @@ export function BatchForm({
       if (fromBox) setText('');
       return;
     }
+    addingRef.current = true;
     setAdding(true);
     try {
       if (await onAdd(fresh)) {
-        if (fromBox) setText('');
+        if (fromBox && boxRef.current?.value === submittedText) setText('');
         setNote(skipped > 0 ? `Đã bỏ qua ${skipped} prompt trùng.` : null);
       }
     } finally {
+      addingRef.current = false;
       setAdding(false);
     }
   };

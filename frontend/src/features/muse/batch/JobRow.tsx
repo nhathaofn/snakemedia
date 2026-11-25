@@ -3,7 +3,7 @@ import { memo } from 'react';
 import { BookmarkPlus, Play } from 'lucide-react';
 import { QueuePrompt, QueueProgress } from '../../../components/batch';
 import type { QueueTone } from '../../../components/batch';
-import { Icon, IconAction } from '../../../components/ui';
+import { Icon, IconAction, VideoThumbnail } from '../../../components/ui';
 import { MuseJobKind, MuseJobStatus } from '../../../types';
 import type { MuseJob } from '../../../types';
 import { isEnded, jobNote, jobStatusLabels } from '../shared/format';
@@ -112,7 +112,7 @@ export const JobRow = memo(function JobRow({
               >
                 {job.kind === MuseJobKind.Video ? (
                   <>
-                    <video className="queue-result-thumb" src={url} preload="metadata" muted />
+                    <VideoThumbnail className="queue-result-thumb" src={url} />
                     <span className="queue-result-play" aria-hidden="true">
                       <Icon icon={Play} size="sm" />
                     </span>

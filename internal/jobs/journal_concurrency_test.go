@@ -2,10 +2,50 @@ package jobs
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 )
+
+func TestFailedWriteRollsBackConcurrentMutations(t *testing.T) {
+	dir := t.TempDir()
+	parent := filepath.Join(dir, "journal")
+	path := filepath.Join(parent, "jobs.json")
+	j := New(path, Options[rec]{})
+	if err := j.Add(rec{ID: "first"}, rec{ID: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(dir, "saved")
+	if err := os.Rename(parent, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(parent, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		if err := j.Remove("first"); err == nil {
+			t.Error("remove succeeded while journal was inaccessible")
+		}
+	})
+	wg.Go(func() {
+		if _, err := j.Update("second", func(r *rec) { r.Done = true }); err == nil {
+			t.Error("update succeeded while journal was inaccessible")
+		}
+	})
+	wg.Wait()
+	if got := j.List(); len(got) != 2 || got[0].ID != "first" || got[1].ID != "second" || got[1].Done {
+		t.Fatalf("rollback changed the committed journal: %+v", got)
+	}
+}
+
+func TestAddRejectsDuplicateIDsInSameBatch(t *testing.T) {
+	j, _ := open(t, 0)
+	if err := j.Add(rec{ID: "same"}, rec{ID: "same"}); err == nil || len(j.List()) != 0 {
+		t.Fatalf("duplicate IDs were accepted: %v, %+v", err, j.List())
+	}
+}
 
 func TestConcurrentUpdatesAllReachDisk(t *testing.T) {
 	j, path := open(t, 0)

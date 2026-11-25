@@ -2,6 +2,8 @@ package media
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"regexp"
@@ -32,6 +34,19 @@ func OutputName(n int, provider string) string {
 		code[i] = nameCodeLetters[int(b)%len(nameCodeLetters)]
 	}
 	return fmt.Sprintf("%d-snakemedia-%s-%s", n, provider, code)
+}
+
+// PlannedOutputName gives a retried operation the same six-character suffix.
+// SaveToOnce confirms file content when that name is already in use.
+func PlannedOutputName(n int, provider, operation, source string) string {
+	sum := sha256.Sum256([]byte(operation + "\x00" + source))
+	value := binary.LittleEndian.Uint64(sum[:8])
+	var code [nameCodeLength]byte
+	for i := range code {
+		code[i] = nameCodeLetters[value%uint64(len(nameCodeLetters))]
+		value /= uint64(len(nameCodeLetters))
+	}
+	return fmt.Sprintf("%d-snakemedia-%s-%s", max(1, n), provider, code[:])
 }
 
 // NextNumber is one more than the highest number of the files OutputName made

@@ -61,10 +61,10 @@ func TestJournalFromANewerBuildIsKeptAndNeverOverwritten(t *testing.T) {
 
 func TestStampAndCheckFormat(t *testing.T) {
 	for in, want := range map[string]string{
-		`{"id":"a"}`:                         `{"formatVersion":3,"id":"a"}`,
-		`{}`:                                 `{"formatVersion":3}`,
-		`{"id":"a","formatVersion":1}`:       `{"formatVersion":3,"id":"a"}`,
-		`{"formatVersion":1,"id":"a","v":2}`: `{"formatVersion":3,"id":"a","v":2}`,
+		`{"id":"a"}`:                         `{"formatVersion":4,"id":"a"}`,
+		`{}`:                                 `{"formatVersion":4}`,
+		`{"id":"a","formatVersion":1}`:       `{"formatVersion":4,"id":"a"}`,
+		`{"formatVersion":1,"id":"a","v":2}`: `{"formatVersion":4,"id":"a","v":2}`,
 		`[1]`:                                `[1]`,
 	} {
 		if got := string(Stamp([]byte(in))); got != want {
@@ -77,7 +77,7 @@ func TestStampAndCheckFormat(t *testing.T) {
 	if err := CheckFormat(Stamp([]byte(`{"id":"a"}`))); err != nil {
 		t.Errorf("own format refused: %v", err)
 	}
-	if err := CheckFormat([]byte(`{"formatVersion":4}`)); !errors.Is(err, ErrNewerFormat) {
+	if err := CheckFormat([]byte(`{"formatVersion":5}`)); !errors.Is(err, ErrNewerFormat) {
 		t.Errorf("newer format = %v", err)
 	}
 }

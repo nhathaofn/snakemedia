@@ -14,7 +14,8 @@ import '../../../components/batch/BatchForm.css';
 import '../../../components/studio/Studio.css';
 import '../shared/Muse.css';
 import './MuseAssetsPage.css';
-import { Button, Icon, confirmAction } from '../../../components/ui';
+import { Button, Icon, RevealList, confirmAction } from '../../../components/ui';
+import { LIST_REVEAL_STEP } from '../../../constants';
 import { api, unwrap } from '../../../services';
 import { useAppStore } from '../../../stores';
 import { MuseAsset, MuseAssetType, MuseRefRole } from '../../../types';
@@ -459,8 +460,13 @@ export function MuseAssetsPage() {
             </Button>
           </div>
         ) : (
-          <div className="muse-assets-grid">
-            {filtered.map((a) => (
+          <RevealList
+            className="muse-assets-grid"
+            items={filtered}
+            keyOf={(asset) => asset.id}
+            step={LIST_REVEAL_STEP}
+            resetKey={JSON.stringify([search, projectFilter, typeFilter, roleFilter])}
+            render={(a) => (
               <AssetCard
                 key={a.id}
                 asset={a}
@@ -470,8 +476,8 @@ export function MuseAssetsPage() {
                 onEdit={setEditing}
                 onDelete={removeOne}
               />
-            ))}
-          </div>
+            )}
+          />
         )}
       </section>
 

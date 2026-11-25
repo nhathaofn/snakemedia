@@ -14,7 +14,6 @@ import (
 	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/media"
 	"SnakeMedia/internal/models"
-	"SnakeMedia/pkg/utils"
 	"github.com/google/uuid"
 )
 
@@ -746,128 +745,6 @@ func (p *Provider) UpdateAssetsRole(ids []string, role MuseRefRole) models.Respo
 // ImportAssetImages copies picked images into the temporary media folder before SaveAsset.
 func (p *Provider) ImportAssetImages(paths []string) models.Response[[]MuseReference] {
 	return p.importImages(paths, assetPrefix)
-}
-
-// GetAssetVaultDirectory returns the active Asset Vault path (configured folder or AppData default).
-func (p *Provider) GetAssetVaultDirectory() models.Response[string] {
-	dir := p.vaultDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fail[string](fmt.Errorf("Không tạo được thư mục kho tư liệu: %w", err), models.CodeInternal)
-	}
-	return models.SuccessResponse(dir)
-}
-
-// SetAssetVaultDirectory updates config.Muse.AssetVaultDir to dir (or clears it when empty
-// to reset back to AppData) and optionally migrates existing vault files into the target folder.
-func (p *Provider) SetAssetVaultDirectory(newDir string, migrate bool) models.Response[string] {
-	newDir = strings.TrimSpace(newDir)
-	if newDir != "" {
-		abs, err := filepath.Abs(newDir)
-		if err != nil {
-			return fail[string](fmt.Errorf("Đường dẫn kho tư liệu không hợp lệ: %w", err), models.CodeInvalidArgument)
-		}
-		newDir = abs
-	}
-	targetDir := newDir
-	if targetDir == "" {
-		targetDir = p.defaultVaultDir
-	}
-	if err := os.MkdirAll(targetDir, 0o755); err != nil {
-		return fail[string](fmt.Errorf("Không tạo được thư mục kho tư liệu: %w", err), models.CodeInternal)
-	}
-	p.media.AllowRoot(targetDir)
-
-	p.assetMu.Lock()
-	defer p.assetMu.Unlock()
-
-	oldDir := p.vaultDir()
-	sameDir := strings.EqualFold(filepath.Clean(oldDir), filepath.Clean(targetDir))
-
-	type movedPair struct {
-		src string
-		dst string
-	}
-	var moved []movedPair
-
-	if !migrate && !sameDir {
-		missingAtDest := 0
-		for _, a := range p.assets.List() {
-			for _, it := range a.Items {
-				if !strings.HasPrefix(it.URL, media.VaultRoute) {
-					continue
-				}
-				rel := it.VaultRelPath
-				if rel == "" {
-					rel = strings.TrimPrefix(it.URL, media.VaultRoute)
-				}
-				srcAbs := filepath.Join(oldDir, filepath.FromSlash(rel))
-				dstAbs := filepath.Join(targetDir, filepath.FromSlash(rel))
-				if _, dstErr := os.Stat(dstAbs); dstErr != nil {
-					if _, srcErr := os.Stat(srcAbs); srcErr == nil {
-						missingAtDest++
-					}
-				}
-			}
-		}
-		if missingAtDest > 0 {
-			logger.Get().Warn("muse vault directory switched without migration; existing vault files remain in old folder",
-				"missingFiles", missingAtDest, "oldDir", oldDir, "newDir", targetDir)
-		}
-	}
-
-	if migrate && !sameDir {
-		for _, a := range p.assets.List() {
-			for _, it := range a.Items {
-				if !strings.HasPrefix(it.URL, media.VaultRoute) {
-					continue
-				}
-				rel := it.VaultRelPath
-				if rel == "" {
-					rel = strings.TrimPrefix(it.URL, media.VaultRoute)
-				}
-				srcAbs := filepath.Join(oldDir, filepath.FromSlash(rel))
-				dstAbs := filepath.Join(targetDir, filepath.FromSlash(rel))
-				if _, err := os.Stat(srcAbs); err != nil {
-					continue
-				}
-				if err := copyFileToFile(srcAbs, dstAbs); err != nil {
-					for _, m := range moved {
-						_ = os.Remove(m.dst)
-					}
-					return fail[string](fmt.Errorf("Không chuyển được ảnh %s sang thư mục mới: %w", filepath.Base(srcAbs), err), models.CodeInternal)
-				}
-				moved = append(moved, movedPair{src: srcAbs, dst: dstAbs})
-			}
-		}
-	}
-
-	if p.cfg != nil {
-		cfg := p.cfg.Get()
-		cfg.Muse.AssetVaultDir = newDir
-		if _, err := p.cfg.Update(cfg); err != nil {
-			for _, m := range moved {
-				_ = os.Remove(m.dst)
-			}
-			return fail[string](fmt.Errorf("Không lưu được cài đặt thư mục kho: %w", err), models.CodeInternal)
-		}
-	}
-
-	for _, m := range moved {
-		_ = os.Remove(m.src)
-	}
-	return models.SuccessResponse(targetDir)
-}
-
-// OpenAssetVaultFolder opens the active Asset Vault folder in the system file explorer.
-func (p *Provider) OpenAssetVaultFolder() models.Response[bool] {
-	dir := p.vaultDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fail[bool](err, models.CodeInternal)
-	}
-	if err := utils.OpenFolder(dir); err != nil {
-		return fail[bool](err, models.CodeInternal)
-	}
-	return models.SuccessResponse(true)
 }
 
 func (p *Provider) removeUnusedVaultFiles(absCandidates []string) {

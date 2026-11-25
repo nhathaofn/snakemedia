@@ -14,7 +14,8 @@ import (
 // Version 2 records partial Muse output saves by source URL so older builds
 // cannot mistake a compact saved-file list for a fully saved batch.
 // Version 3 extends MuseAsset with Project, Type, and structured Items (angles/variants).
-const FormatVersion = 3
+// Version 4 keeps IDs of retired Graph jobs that may have been billed.
+const FormatVersion = 4
 
 // ErrNewerFormat marks data saved by a newer build of the app (after the user
 // went back to an older one). It is kept as it is and never overwritten: the

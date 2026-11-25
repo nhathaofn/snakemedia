@@ -507,6 +507,7 @@ var errAccountResting = errors.New("Tài khoản vẫn hết lượt Muse.")
 
 // refreshQuota reads the account's quota from its page and stores it.
 func (p *Provider) refreshQuota(ctx context.Context, accountID string, page Page) {
+	started := p.now()
 	p.recordQuotaAttempt(accountID)
 	ctx, cancel := context.WithTimeout(ctx, p.quotaRefreshTimeout())
 	defer cancel()
@@ -517,15 +518,20 @@ func (p *Provider) refreshQuota(ctx context.Context, accountID string, page Page
 		}
 		return
 	}
-	if q.CheckedAt == "" {
-		q.CheckedAt = p.now().UTC().Format(time.RFC3339)
-	}
+	q.CheckedAt = started.UTC().Format(time.RFC3339Nano)
 	var before float64 = -1
+	accepted := false
 	p.updateAccount(accountID, func(_ *accounts.Record, d *museData) {
+		if checked, ok := quotaCheckedTime(d.Quota); ok && checked.After(started) {
+			return
+		}
 		if d.Quota != nil {
 			before = d.Quota.PercentUsed
 		}
 		d.Quota = q
+		accepted = true
 	})
-	logger.Get().Info("muse quota read", "account", accountID, "percentBefore", before, "percent", q.PercentUsed, "topup", q.TopupBalance)
+	if accepted {
+		logger.Get().Info("muse quota read", "account", accountID, "percentBefore", before, "percent", q.PercentUsed, "topup", q.TopupBalance)
+	}
 }

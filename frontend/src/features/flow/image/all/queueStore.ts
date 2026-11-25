@@ -23,23 +23,26 @@ export function mergeTasks(
   snapshot: readonly FlowImageTask[],
   touched: ReadonlyMap<string, FlowImageTask | null>,
 ): FlowImageTask[] {
-  let tasks = snapshot.slice();
-  touched.forEach((task, id) => {
-    tasks = task ? upsertTask(tasks, task) : tasks.filter((item) => item.id !== id);
-  });
-  return tasks;
+  if (touched.size === 0) return snapshot.slice();
+  const tasks = new Map(snapshot.map((task) => [task.id, task]));
+  for (const [id, task] of touched) {
+    if (task) tasks.set(id, task);
+    else tasks.delete(id);
+  }
+  return [...tasks.values()];
 }
 
 /** Counts shown in the panel summary. */
 export function countTasks(tasks: readonly FlowImageTask[]) {
-  const counts = { running: 0, queued: 0, held: 0, succeeded: 0, failed: 0 };
+  const counts = { running: 0, queued: 0, held: 0, succeeded: 0, failed: 0, cancelled: 0 };
   for (const task of tasks) {
     if (task.status === FlowImageTaskStatus.Running) counts.running++;
     else if (task.status === FlowImageTaskStatus.Queued) {
       if (task.held) counts.held++;
       else counts.queued++;
     } else if (task.status === FlowImageTaskStatus.Succeeded) counts.succeeded++;
-    else counts.failed++;
+    else if (task.status === FlowImageTaskStatus.Failed) counts.failed++;
+    else if (task.status === FlowImageTaskStatus.Cancelled) counts.cancelled++;
   }
   return counts;
 }
@@ -55,6 +58,7 @@ export const TASK_FILTERS: readonly { value: TaskFilter; label: string }[] = [
   { value: 'held', label: 'Tạm dừng' },
   { value: FlowImageTaskStatus.Succeeded, label: 'Xong' },
   { value: FlowImageTaskStatus.Failed, label: 'Lỗi' },
+  { value: FlowImageTaskStatus.Cancelled, label: 'Đã hủy' },
 ];
 
 /** Whether task shows under filter; only user-paused queued tasks count as Tạm dừng. */
@@ -74,11 +78,7 @@ interface QueueState {
   loadError: string | null;
   /** Loads the queue; calls made while one is running share it. */
   load: () => Promise<void>;
-  setTask: (task: FlowImageTask | null) => void;
-  /** Applies tasks added at once (FlowImageTasksAdded). */
-  addTasks: (tasks: readonly FlowImageTask[] | null) => void;
-  /** Drops tasks removed or trimmed at once (FlowImageTasksRemoved). */
-  removeTasks: (ids: readonly string[] | null) => void;
+  applyEvents: (changes: ReadonlyMap<string, FlowImageTask | null>) => void;
   dismissWarning: () => void;
 }
 
@@ -111,21 +111,9 @@ export const useImageQueueStore = create<QueueState>((set) => ({
     })();
     return reload;
   },
-  setTask: (task) => {
-    if (!task?.id) return;
-    if (reload) touched.set(task.id, task);
-    set((state) => ({ tasks: upsertTask(state.tasks, task) }));
-  },
-  addTasks: (added) => {
-    if (!added?.length) return;
-    if (reload) added.forEach((task) => touched.set(task.id, task));
-    set((state) => ({ tasks: added.reduce(upsertTask, state.tasks) }));
-  },
-  removeTasks: (ids) => {
-    if (!ids?.length) return;
-    const gone = new Set(ids);
-    if (reload) gone.forEach((id) => touched.set(id, null));
-    set((state) => ({ tasks: state.tasks.filter((task) => !gone.has(task.id)) }));
+  applyEvents: (changes) => {
+    if (reload) changes.forEach((value, id) => touched.set(id, value));
+    set((state) => ({ tasks: mergeTasks(state.tasks, changes) }));
   },
   dismissWarning: () => set({ warning: '' }),
 }));

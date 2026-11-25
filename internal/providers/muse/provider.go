@@ -351,17 +351,15 @@ func (p *Provider) trigger() {
 }
 
 func (p *Provider) pump() {
-	if p.accounts != nil {
-		p.accounts.ResumeExpired()
-	}
 	records, err := p.accounts.Records(accounts.ProviderMuse)
 	if err != nil {
 		return
 	}
 	views := make([]MuseAccount, len(records))
+	routeErrors := p.accounts.RouteErrors(records)
 	for i, rec := range records {
 		views[i] = museView(rec)
-		if err := p.accounts.RouteError(rec); err != nil {
+		if err := routeErrors[i]; err != nil {
 			views[i].NoRoute = err.Error()
 		}
 	}
@@ -877,7 +875,7 @@ func (p *Provider) closeIdleBrowserIfDone(accountID string) {
 	}
 	p.mu.Lock()
 	stopped := p.ctx == nil || p.ctx.Err() != nil
-	stillRunning := p.acct.quotaPending[accountID] > 0
+	stillRunning := p.acct.quotaPending[accountID] != nil
 	for _, runningAcc := range p.running {
 		if runningAcc == accountID {
 			stillRunning = true
@@ -914,19 +912,19 @@ func (p *Provider) updateJob(id string, change func(*MuseJob)) (MuseJob, error) 
 // under the journal's lock and reports whether it changed the job, so it
 // re-checks the job's state itself. Each changed job is emitted as updateJob
 // would; on a failed write nothing is emitted, like a failed updateJob.
-func (p *Provider) updateJobs(ids []string, change func(*MuseJob) bool) []MuseJob {
+func (p *Provider) updateJobs(ids []string, change func(*MuseJob) bool) ([]MuseJob, error) {
 	if len(ids) == 0 {
-		return nil
+		return nil, nil
 	}
 	changed, err := p.jobs.updateMany(ids, change)
 	if err != nil {
 		logger.Get().Warn("cannot save muse jobs", "jobs", len(ids), "error", err)
-		return nil
+		return nil, err
 	}
 	for _, job := range changed {
 		p.emit(events.EventMuseJobUpdated, job)
 	}
-	return changed
+	return changed, nil
 }
 
 // updateAccount changes an account's shared fields and Muse data together,

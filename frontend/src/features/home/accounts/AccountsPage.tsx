@@ -4,7 +4,7 @@ import { Cookie, ListChecks, LogIn, Video } from 'lucide-react';
 import './AccountsPage.css';
 import { Button, Icon, SegmentedControl, confirmAction } from '../../../components/ui';
 import { ACCOUNT_CHECK_CONCURRENCY } from '../../../constants';
-import { useAccountsLive, useNow } from '../../../hooks';
+import { useNow } from '../../../hooks';
 import { api, unwrap } from '../../../services';
 import { useAccountsStore, useAppStore } from '../../../stores';
 import { AccountProvider } from '../../../types';
@@ -45,7 +45,6 @@ const isProvider = (value: string | null): value is AccountProvider =>
  * `?provider=muse` opens a provider's tab.
  */
 export const AccountsPage: React.FC = () => {
-  useAccountsLive();
   const [params, setParams] = useSearchParams();
   const requested = params.get('provider');
   const provider = isProvider(requested) ? requested : AccountProvider.Flow;

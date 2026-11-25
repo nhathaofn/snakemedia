@@ -99,6 +99,34 @@ func TestGraphRerunFindsItsJobs(t *testing.T) {
 	}
 }
 
+func TestGraphRerunKeepsJobWithUnknownSend(t *testing.T) {
+	p := testProvider(t, &fakePage{})
+	req := MuseJobRequest{Kind: MuseJobImage, Prompts: []string{"one image"}}
+	const key = "run-unknown/image"
+	job := mustSubmit(t, p, req, key)[0]
+	if _, err := p.jobs.update(job.ID, func(j *MuseJob) {
+		j.Status, j.SendUnknown, j.Error = MuseJobFailed, true, errSendUnknown.Error()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.jobs.load(); err != nil {
+		t.Fatal(err)
+	}
+	again := mustSubmit(t, p, req, key)
+	if len(again) != 1 || again[0].ID != job.ID || len(p.jobs.list()) != 1 {
+		t.Fatalf("rerun created a job after an unknown send: %+v", again)
+	}
+	if err := p.jobs.remove(job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.jobs.load(); err != nil {
+		t.Fatal(err)
+	}
+	if res := p.submitJobs(req, key); res.Success || res.Error != errGraphJobRetired.Error() || len(p.jobs.list()) != 0 {
+		t.Fatalf("rerun created a job after a billable record was retired: %+v", res)
+	}
+}
+
 func TestNodeOptionSourcesAndParamsCheck(t *testing.T) {
 	p := testProvider(t, &fakePage{})
 	acc := addSignedIn(t, p, "A")

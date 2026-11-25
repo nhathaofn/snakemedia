@@ -57,6 +57,8 @@ type Service struct {
 
 	mu                     sync.Mutex
 	ctx                    context.Context
+	stop                   context.CancelFunc
+	closing                bool
 	emit                   func(events.Event, any)
 	routes                 map[string]proxy.Route // account ID -> route its running browser uses
 	openLocks              map[string]*sync.Mutex // serializes per-account open/route setup
@@ -114,6 +116,7 @@ const autoResumeInterval = 30 * time.Second
 // checks) and how changes reach the frontend.
 func (s *Service) Start(ctx context.Context, emit func(events.Event, any)) {
 	s.mu.Lock()
+	ctx, s.stop = context.WithCancel(ctx)
 	s.ctx = ctx
 	if emit != nil {
 		s.emit = emit
@@ -219,23 +222,31 @@ func (s *Service) pruneBridges() {
 // Close shuts every account browser and proxy bridge down.
 func (s *Service) Close() {
 	s.mu.Lock()
+	if s.closing {
+		s.mu.Unlock()
+		return
+	}
+	s.closing = true
+	if s.stop != nil {
+		s.stop()
+	}
 	if s.notifyTimer != nil {
 		s.notifyTimer.Stop()
 		s.notifyTimer = nil
 	}
 	s.mu.Unlock()
-	s.pool.CloseAll()
-	s.proxies.Close()
-	// With the browsers gone, running checks end quickly; a stuck one does
-	// not hold up the app's exit for long.
 	done := make(chan struct{})
 	go func() {
+		defer close(done)
+		defer logger.Recover("đóng tài khoản")
+		s.pool.CloseAll()
+		s.proxies.Close()
 		s.background.Wait()
-		close(done)
 	}()
 	select {
 	case <-done:
 	case <-time.After(closeWait):
+		logger.Get().Warn("accounts did not close in time")
 	}
 }
 
@@ -244,7 +255,13 @@ const closeWait = 5 * time.Second
 
 // goBackground runs fn as tracked background work (see Close).
 func (s *Service) goBackground(fn func()) {
+	s.mu.Lock()
+	if s.closing {
+		s.mu.Unlock()
+		return
+	}
 	s.background.Add(1)
+	s.mu.Unlock()
 	go func() {
 		defer s.background.Done()
 		defer logger.Recover("tác vụ tài khoản")
@@ -399,6 +416,10 @@ func (s *Service) lifetime() context.Context {
 // fires, so it always carries the latest state.
 func (s *Service) notify() {
 	s.mu.Lock()
+	if s.closing {
+		s.mu.Unlock()
+		return
+	}
 	if s.notifyDelay <= 0 {
 		s.mu.Unlock()
 		s.notifyNow()
@@ -472,6 +493,19 @@ func (s *Service) Records(provider Provider) ([]Record, error) {
 
 // Record returns one account.
 func (s *Service) Record(id string) (Record, error) { return s.store.get(id) }
+
+// RouteErrors resolves access for a provider's account list in one pass.
+func (s *Service) RouteErrors(records []Record) []error {
+	all, err := s.store.list()
+	if err != nil {
+		errs := make([]error, len(records))
+		for i := range errs {
+			errs[i] = err
+		}
+		return errs
+	}
+	return s.routeErrors(records, all)
+}
 
 // Update applies change to an account, saves it and tells listeners.
 func (s *Service) Update(id string, change func(*Record)) (Record, error) {
@@ -593,10 +627,16 @@ func (s *Service) open(ctx context.Context, rec Record, site Site, visible bool)
 	om := s.openLock(rec.ID)
 	om.Lock()
 	defer om.Unlock()
-	route, err := s.route(ctx, rec)
+	current, err := s.store.get(rec.ID)
 	if err != nil {
 		return nil, err
 	}
+	rec = current
+	route, releaseRoute, err := s.acquireRoute(ctx, rec)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseRoute()
 	// A Chrome that fails to start says nothing about the proxy, so only a
 	// page that fails to load through it marks the proxy dead.
 	b, err := s.pool.Get(ctx, rec.ProfileDir, browser.Want{Visible: visible, Route: route.Key, Args: route.Args})
@@ -700,24 +740,32 @@ func sameRoute(a, b proxy.Route) bool {
 // route returns the proxy route the account's browser must use: the one it
 // runs on, or a fresh pick that is recorded on the account.
 func (s *Service) route(ctx context.Context, rec Record) (proxy.Route, error) {
+	route, release, err := s.acquireRoute(ctx, rec)
+	if release != nil {
+		release()
+	}
+	return route, err
+}
+
+func (s *Service) acquireRoute(ctx context.Context, rec Record) (proxy.Route, func(), error) {
 	s.mu.Lock()
 	cached, ok := s.routes[rec.ID]
 	s.mu.Unlock()
 	if ok && s.pool.Running(rec.ProfileDir) != nil {
-		return cached, nil
+		return cached, func() {}, nil
 	}
 	records, err := s.store.list()
 	if err != nil {
-		return proxy.Route{}, err
+		return proxy.Route{}, nil, err
 	}
 	others := make([]proxy.Assignment, 0, len(records))
 	for _, other := range records {
 		others = append(others, assignment(other))
 	}
-	route, err := s.proxies.Route(ctx, assignment(rec), others)
+	route, release, err := s.proxies.AcquireRoute(ctx, assignment(rec), others)
 	if err != nil {
 		s.Update(rec.ID, func(r *Record) { r.ProxyStatus, r.Message = string(proxy.StatusDead), err.Error() })
-		return proxy.Route{}, err
+		return proxy.Route{}, nil, err
 	}
 	s.Update(rec.ID, func(r *Record) {
 		prevLine := assignment(*r).Line()
@@ -737,7 +785,7 @@ func (s *Service) route(ctx context.Context, rec Record) (proxy.Route, error) {
 		}
 		r.ProxyIP = route.IP
 	})
-	return route, nil
+	return route, release, nil
 }
 
 func rotating(line string) bool {

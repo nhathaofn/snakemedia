@@ -108,7 +108,7 @@ type accountRuntime struct {
 	stateRefreshBusy map[string]bool
 	backoff          map[string]time.Time
 	quotaAttempt     map[string]time.Time
-	quotaPending     map[string]int
+	quotaPending     map[string]*quotaRefresh
 	recycleBrowser   map[string]bool
 }
 
@@ -121,7 +121,7 @@ func newAccountRuntime() accountRuntime {
 		stateRefreshBusy: make(map[string]bool),
 		backoff:          make(map[string]time.Time),
 		quotaAttempt:     make(map[string]time.Time),
-		quotaPending:     make(map[string]int),
+		quotaPending:     make(map[string]*quotaRefresh),
 		recycleBrowser:   make(map[string]bool),
 	}
 }

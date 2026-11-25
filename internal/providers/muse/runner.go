@@ -93,8 +93,8 @@ func (p *Provider) execute(ctx context.Context, jobID, accountID string) error {
 		}
 		started := false
 		job, err = p.updateJob(jobID, func(j *MuseJob) {
-			// The user may have cancelled the job since it was planned.
-			if j.Status != MuseJobQueued {
+			// The user may have stopped or cancelled the job since it was planned.
+			if j.Status != MuseJobQueued || j.Held || waitsForBoard(*j) {
 				return
 			}
 			started = true

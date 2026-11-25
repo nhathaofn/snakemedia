@@ -31,7 +31,7 @@ func (s *Store) SaveNode() engine.Node {
 		Inputs:      []engine.Port{{Name: "media", Label: "Ảnh hoặc video", Type: engine.PortMedia, Multiple: true}},
 		Outputs:     []engine.Port{{Name: "paths", Label: "Đường dẫn", Type: engine.PortText, Multiple: true}},
 		Params:      []engine.Param{{Name: "dir", Label: "Thư mục", Kind: engine.ParamText}},
-	}, func(_ context.Context, req SaveRequest) (SaveNodeResult, error) {
+	}, func(ctx context.Context, req SaveRequest) (SaveNodeResult, error) {
 		if req.Dir == "" {
 			return SaveNodeResult{}, engine.Invalid("Chưa chọn thư mục lưu.")
 		}
@@ -40,7 +40,19 @@ func (s *Store) SaveNode() engine.Node {
 			return SaveNodeResult{}, engine.Invalid(err.Error())
 		}
 		res := SaveNodeResult{Paths: []string{}}
-		for _, m := range req.Media {
+		for i, m := range req.Media {
+			if err := ctx.Err(); err != nil {
+				return res, err
+			}
+			if key := engine.RunKey(ctx); key != "" {
+				name := PlannedOutputName(i+1, ProviderOf(m.LocalURL), key, m.LocalURL)
+				path, err := s.SaveToOnce(m.LocalURL, dir, name)
+				if err != nil {
+					return res, err
+				}
+				res.Paths = append(res.Paths, path)
+				continue
+			}
 			saved, err := engine.FromResponse(s.Save(m.LocalURL, func(string) (string, error) { return dir, nil }))
 			if err != nil {
 				return res, err

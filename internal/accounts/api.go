@@ -192,6 +192,9 @@ func (s *Service) SetProxy(id, line string) models.Response[Account] {
 			return fail[Account](errors.New("Định dạng proxy không hợp lệ."), models.CodeInvalidArgument)
 		}
 	}
+	lock := s.openLock(id)
+	lock.Lock()
+	defer lock.Unlock()
 	rec, err := s.store.get(id)
 	if err != nil {
 		return fail[Account](err, notFoundOr(err))

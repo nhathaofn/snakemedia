@@ -63,6 +63,7 @@ type Set struct {
 	sites     []accounts.Site
 	built     []Provider
 	news      []func(Deps) Provider
+	stop      context.CancelFunc
 	closeWait time.Duration // 0 means closeWait; tests shorten it
 }
 
@@ -109,6 +110,7 @@ func (s *Set) Register(reg *engine.Registry, extra ...engine.Node) error {
 
 // Start starts every provider with background work, in plugin order.
 func (s *Set) Start(ctx context.Context, emit func(events.Event, any)) {
+	ctx, s.stop = context.WithCancel(ctx)
 	for _, p := range s.built {
 		if l, ok := p.(Lifecycle); ok {
 			l.Start(ctx, emit)
@@ -125,6 +127,9 @@ const closeWait = 10 * time.Second
 // Close closes every provider with background work, in plugin order, for at
 // most closeWait in all.
 func (s *Set) Close() {
+	if s.stop != nil {
+		s.stop()
+	}
 	wait := s.closeWait
 	if wait <= 0 {
 		wait = closeWait

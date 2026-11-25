@@ -43,7 +43,7 @@ describe('image queue store helpers', () => {
         task('e', FlowImageTaskStatus.Failed),
         task('f', FlowImageTaskStatus.Cancelled),
       ]),
-    ).toEqual({ running: 1, queued: 1, held: 1, succeeded: 1, failed: 2 });
+    ).toEqual({ running: 1, queued: 1, held: 1, succeeded: 1, failed: 1, cancelled: 1 });
   });
 
   it('filters paused tasks apart from newly added or waiting queued tasks', () => {

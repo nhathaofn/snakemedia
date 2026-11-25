@@ -146,8 +146,15 @@ func (s *Service) renewOneSession(ctx context.Context, rec Record, refresher Ses
 	}
 	// Do not overwrite live Chrome state if Chrome opened or a job started in
 	// the meantime.
+	lock := s.openLock(rec.ID)
+	lock.Lock()
+	defer lock.Unlock()
 	if s.InUse(rec.ID) || s.pool.Running(rec.ProfileDir) != nil {
 		return
+	}
+	unchanged := func(r *Record) bool {
+		return r.Status == StatusSignedIn && r.CookieVersion == rec.CookieVersion &&
+			r.Proxy == rec.Proxy && (rec.ProxyAuto == "" || r.ProxyAuto == rec.ProxyAuto)
 	}
 	nowUTC := now.UTC().Format(time.RFC3339)
 	if res.SignedOut {
@@ -156,7 +163,7 @@ func (s *Service) renewOneSession(ctx context.Context, rec Record, refresher Ses
 			msg = "Phiên đăng nhập đã hết hạn. Bấm Mở Chrome để đăng nhập lại."
 		}
 		_, _ = s.Update(rec.ID, func(r *Record) {
-			if r.Status != StatusSignedIn {
+			if !unchanged(r) {
 				return
 			}
 			r.Status = StatusSignedOut
@@ -175,7 +182,7 @@ func (s *Service) renewOneSession(ctx context.Context, rec Record, refresher Ses
 	}
 	version := uuid.NewString()
 	_, _ = s.Update(rec.ID, func(r *Record) {
-		if r.Status != StatusSignedIn {
+		if !unchanged(r) {
 			return
 		}
 		r.Cookies = persisted
@@ -186,7 +193,7 @@ func (s *Service) renewOneSession(ctx context.Context, rec Record, refresher Ses
 }
 
 func (s *Service) httpClientForAccount(ctx context.Context, rec Record) (*http.Client, func(), error) {
-	route, err := s.route(ctx, rec)
+	route, release, err := s.acquireRoute(ctx, rec)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -203,6 +210,7 @@ func (s *Service) httpClientForAccount(ctx context.Context, rec Record) (*http.C
 	}
 	if route.Key != proxy.DirectRoute {
 		if route.URL == nil {
+			release()
 			s.pruneBridges()
 			return nil, nil, errors.New("proxy route missing URL")
 		}
@@ -210,6 +218,7 @@ func (s *Service) httpClientForAccount(ctx context.Context, rec Record) (*http.C
 	}
 	cleanup := func() {
 		transport.CloseIdleConnections()
+		release()
 		if s.pool.Running(rec.ProfileDir) == nil {
 			s.pruneBridges()
 		}

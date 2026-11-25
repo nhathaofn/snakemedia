@@ -471,6 +471,10 @@ func copyBytesToVault(dstAbs string, data []byte) error {
 }
 
 func copyFileToFile(srcAbs, dstAbs string) error {
+	return copyVaultFile(srcAbs, dstAbs, os.Rename)
+}
+
+func copyVaultFile(srcAbs, dstAbs string, install func(string, string) error) error {
 	in, err := os.Open(srcAbs)
 	if err != nil {
 		return err
@@ -484,12 +488,9 @@ func copyFileToFile(srcAbs, dstAbs string) error {
 		return err
 	}
 	tmpName := tmp.Name()
-	cleanup := true
 	defer func() {
-		if cleanup {
-			_ = tmp.Close()
-			_ = os.Remove(tmpName)
-		}
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 	}()
 	if _, err := io.Copy(tmp, in); err != nil {
 		return err
@@ -500,11 +501,7 @@ func copyFileToFile(srcAbs, dstAbs string) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpName, dstAbs); err != nil {
-		return err
-	}
-	cleanup = false
-	return nil
+	return install(tmpName, dstAbs)
 }
 
 func moveFileSafe(srcAbs, dstAbs string) error {

@@ -5,6 +5,7 @@ import (
 	"reflect"
 
 	"SnakeMedia/internal/jobs"
+	"github.com/google/uuid"
 )
 
 // MuseJobKind is what a job asks Muse to make.
@@ -220,6 +221,10 @@ func newJobStore(path string, maxJobs func() int) *jobStore {
 		Limit:     maxJobs,
 		Normalize: normalizeJob,
 		Transient: onlyStepChanged,
+		KeepID: func(j MuseJob) bool {
+			id, err := uuid.Parse(j.ID)
+			return err == nil && id.Version() == 5 && (j.mayBePaid() || j.Sending || j.Status == MuseJobSucceeded)
+		},
 	})}
 }
 

@@ -25,3 +25,17 @@ export function onNextFrame(apply: () => void): void {
   scheduled = true;
   nextFrame(flush);
 }
+
+export function collectByIdOnNextFrame<T>(apply: (changes: ReadonlyMap<string, T>) => void) {
+  let changes = new Map<string, T>();
+  return (id: string, value: T) => {
+    if (changes.size === 0) {
+      onNextFrame(() => {
+        const current = changes;
+        changes = new Map();
+        apply(current);
+      });
+    }
+    changes.set(id, value);
+  };
+}
