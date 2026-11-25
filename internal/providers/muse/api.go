@@ -1041,8 +1041,16 @@ func (p *Provider) checkReferenceFiles(refs []string) error {
 	return nil
 }
 
+func canonicalDirPath(dir string) string {
+	clean := filepath.Clean(dir)
+	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
+		return resolved
+	}
+	return clean
+}
+
 func sameDirPath(a, b string) bool {
-	ca, cb := filepath.Clean(a), filepath.Clean(b)
+	ca, cb := canonicalDirPath(a), canonicalDirPath(b)
 	if runtime.GOOS == "windows" {
 		return strings.EqualFold(ca, cb)
 	}

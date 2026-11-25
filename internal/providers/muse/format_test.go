@@ -161,7 +161,7 @@ func TestUpdateJobsFormatUpdatesUnstartedQueueAndStoryboard(t *testing.T) {
 	p := testProvider(t, page)
 	acc := addSignedIn(t, p, "A")
 	withCaps(p, acc, 6)
-	outDir := t.TempDir()
+	outDir := resolvedTempDir(t)
 	p.media.AllowRoot(outDir)
 
 	// Queue a video batch with storyboard, a single video, an image batch, and a paid video.
@@ -234,8 +234,8 @@ func TestUpdateJobsConfigMovesFolderAndUpdatesRefs(t *testing.T) {
 	acc := addSignedIn(t, p, "A")
 	withCaps(p, acc, 6)
 
-	outA := t.TempDir()
-	outB := t.TempDir()
+	outA := resolvedTempDir(t)
+	outB := resolvedTempDir(t)
 	p.media.AllowRoot(outA)
 	p.media.AllowRoot(outB)
 

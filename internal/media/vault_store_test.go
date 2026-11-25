@@ -23,7 +23,10 @@ func vaultTestPNG() []byte {
 
 func TestVaultRouteServesImagesAndRejectsTraversal(t *testing.T) {
 	store := NewStore(t.TempDir())
-	vault := t.TempDir()
+	vault, err := cleanDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	thumbs := filepath.Join(t.TempDir(), "vault-thumbs")
 	store.SetVaultDir(func() string { return vault }, thumbs)
 

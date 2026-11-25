@@ -204,7 +204,7 @@ func TestVaultDirectoryMigrationMovesExistingAssetsSafely(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	newDir := filepath.Join(t.TempDir(), "MuseAssetsCustom")
+	newDir := filepath.Join(resolvedTempDir(t), "MuseAssetsCustom")
 	res := p.SetAssetVaultDirectory(newDir, true)
 	if !res.Success {
 		t.Fatalf("SetAssetVaultDirectory failed: %s", res.Error)
