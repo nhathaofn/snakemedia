@@ -83,7 +83,7 @@ func (s *Store) saveFile(dir, name, src string) (string, error) {
 	}
 	return writeUniqueFile(dir, name, ext, func(w io.Writer) error {
 		if ext == ".jpg" {
-			return jpeg.Encode(w, opaque(img), &jpeg.Options{Quality: jpegQuality})
+			return jpeg.Encode(w, Opaque(img), &jpeg.Options{Quality: jpegQuality})
 		}
 		return png.Encode(w, img)
 	})
@@ -102,8 +102,8 @@ func decodeImage(path string) (image.Image, error) {
 	return img, nil
 }
 
-// opaque lays an image on white, since JPG has no transparency.
-func opaque(img image.Image) image.Image {
+// Opaque lays an image on white, since JPG has no transparency.
+func Opaque(img image.Image) image.Image {
 	// An RGBA or NRGBA image with no transparent pixel already encodes to the
 	// same JPG; other types (YCbCr, Gray) are kept on the RGBA path so the
 	// written file does not change.

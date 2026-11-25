@@ -720,6 +720,12 @@ func (a *App) UpdateMuseJobsFormat(req muse.MuseJobsFormatRequest) models.Respon
 	return logged("UpdateMuseJobsFormat", a.muse.UpdateJobsFormat(req))
 }
 
+// UpdateMuseJobsConfig updates output folder and/or reference attachments on
+// unstarted queued Muse jobs.
+func (a *App) UpdateMuseJobsConfig(req muse.MuseJobsConfigRequest) models.Response[int] {
+	return logged("UpdateMuseJobsConfig", a.muse.UpdateJobsConfig(req))
+}
+
 // HoldMuseQueued puts the queued jobs of kind and mode (all when empty) on hold.
 func (a *App) HoldMuseQueued(kind muse.MuseJobKind, mode muse.MuseJobMode) models.Response[int] {
 	return logged("HoldMuseQueued", a.muse.HoldQueued(kind, mode))
@@ -783,7 +789,7 @@ func (a *App) UpdateMuseAssetsRole(ids []string, role muse.MuseRefRole) models.R
 
 // PickMuseAssetFolder asks the user for a folder of asset images and scans it
 // in natural filename order for batch import.
-func (a *App) PickMuseAssetFolder() models.Response[muse.MuseAssetFolderScan] {
+func (a *App) PickMuseAssetFolder(recursive bool) models.Response[muse.MuseAssetFolderScan] {
 	if err := a.muse.AssetImportReady(); err != nil {
 		return models.ErrorResponse[muse.MuseAssetFolderScan](err.Error(), models.CodeUnavailable)
 	}
@@ -796,12 +802,75 @@ func (a *App) PickMuseAssetFolder() models.Response[muse.MuseAssetFolderScan] {
 	if dir == "" {
 		return models.SuccessResponse(muse.MuseAssetFolderScan{Canceled: true, Images: []muse.MuseFolderImage{}})
 	}
-	return logged("PickMuseAssetFolder", a.muse.ScanAssetFolder(dir))
+	return logged("PickMuseAssetFolder", a.muse.ScanAssetFolder(dir, recursive))
 }
 
-// ImportMuseAssetBatch imports multiple single-image assets in one write.
+// PickMuseAssetFiles lets the user pick multiple external image files to
+// inspect and batch-import into the Asset Vault.
+func (a *App) PickMuseAssetFiles() models.Response[muse.MuseAssetFolderScan] {
+	if err := a.muse.AssetImportReady(); err != nil {
+		return models.ErrorResponse[muse.MuseAssetFolderScan](err.Error(), models.CodeUnavailable)
+	}
+	patterns := a.muse.ImageFilePatterns()
+	opts := runtime.OpenDialogOptions{Title: "Chọn nhiều ảnh tư liệu"}
+	if len(patterns) > 0 {
+		opts.Filters = []runtime.FileFilter{{DisplayName: "Ảnh Muse nhận", Pattern: strings.Join(patterns, ";")}}
+	}
+	paths, err := runtime.OpenMultipleFilesDialog(a.ctx, opts)
+	if err != nil {
+		return models.ErrorResponse[muse.MuseAssetFolderScan]("Không mở được hộp thoại chọn ảnh: "+err.Error(), models.CodeInternal)
+	}
+	if len(paths) == 0 {
+		return models.SuccessResponse(muse.MuseAssetFolderScan{Canceled: true, Images: []muse.MuseFolderImage{}})
+	}
+	return logged("PickMuseAssetFiles", a.muse.ScanAssetPaths(paths))
+}
+
+// ScanMuseAssetPaths inspects explicit OS file paths (e.g. from drag-and-drop).
+func (a *App) ScanMuseAssetPaths(paths []string) models.Response[muse.MuseAssetFolderScan] {
+	return logged("ScanMuseAssetPaths", a.muse.ScanAssetPaths(paths))
+}
+
+// ImportMuseAssetBatch imports multiple assets/items into the Vault in one write.
 func (a *App) ImportMuseAssetBatch(req muse.MuseAssetBatchRequest) models.Response[muse.MuseAssetBatchResult] {
 	return logged("ImportMuseAssetBatch", a.muse.ImportAssetBatch(req))
+}
+
+// ImportMuseAssetFromMedia adds an in-app generated image directly to the Vault.
+func (a *App) ImportMuseAssetFromMedia(req muse.MuseMediaAssetImportRequest) models.Response[muse.MuseAsset] {
+	return logged("ImportMuseAssetFromMedia", a.muse.ImportAssetFromMedia(req))
+}
+
+// UpdateMuseAssetItem patches one item inside an existing Vault asset.
+func (a *App) UpdateMuseAssetItem(assetID, itemID string, patch muse.MuseAssetItemPatch) models.Response[muse.MuseAsset] {
+	return logged("UpdateMuseAssetItem", a.muse.UpdateAssetItem(assetID, itemID, patch))
+}
+
+// GetMuseAssetVaultDirectory returns the active Muse Asset Vault folder path.
+func (a *App) GetMuseAssetVaultDirectory() models.Response[string] {
+	return logged("GetMuseAssetVaultDirectory", a.muse.GetAssetVaultDirectory())
+}
+
+// PickMuseAssetVaultDirectoryPath opens a directory dialog to pick a new Vault folder.
+func (a *App) PickMuseAssetVaultDirectoryPath() models.Response[string] {
+	dir, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Chọn thư mục Kho tư liệu Muse",
+	})
+	if err != nil {
+		return models.ErrorResponse[string]("Không mở được hộp thoại chọn thư mục: "+err.Error(), models.CodeInternal)
+	}
+	return models.SuccessResponse(dir)
+}
+
+// SetMuseAssetVaultDirectory updates Muse's Asset Vault directory (empty = default)
+// and optionally copies existing Vault files to the new folder before removing old copies.
+func (a *App) SetMuseAssetVaultDirectory(dir string, migrate bool) models.Response[string] {
+	return logged("SetMuseAssetVaultDirectory", a.muse.SetAssetVaultDirectory(dir, migrate))
+}
+
+// OpenMuseAssetVaultFolder opens the active Muse Asset Vault folder in Explorer.
+func (a *App) OpenMuseAssetVaultFolder() models.Response[bool] {
+	return logged("OpenMuseAssetVaultFolder", a.muse.OpenAssetVaultFolder())
 }
 
 // PickMuseAssetImages asks the user for an asset's images and imports them.
@@ -820,30 +889,16 @@ func (a *App) PickMuseAssetImages() models.Response[[]muse.MuseReference] {
 	return logged("PickMuseAssetImages", a.muse.ImportAssetImages(paths))
 }
 
-// PickMuseSourceVideo asks the user for a sample video to remake and
-// imports it; an empty LocalURL means the dialog was closed.
-func (a *App) PickMuseSourceVideo() models.Response[muse.MuseReference] {
-	patterns := a.muse.VideoFilePatterns()
-	if len(patterns) == 0 {
-		return a.muse.ImportSourceVideo("")
-	}
-	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title:   "Chọn video mẫu",
-		Filters: []runtime.FileFilter{{DisplayName: "Video Muse nhận", Pattern: strings.Join(patterns, ";")}},
-	})
-	if err != nil {
-		return models.ErrorResponse[muse.MuseReference]("Không mở được hộp thoại chọn video: "+err.Error(), models.CodeInternal)
-	}
-	if path == "" {
-		return models.SuccessResponse(muse.MuseReference{})
-	}
-	return logged("PickMuseSourceVideo", a.muse.ImportSourceVideo(path))
+// CheckMusePrompt says what a prompt attaches from the asset library (optionally
+// scoped to project, kind, and storyboard frames) and what may go wrong.
+func (a *App) CheckMusePrompt(prompt, project string, assetIDs []string, kind muse.MuseJobKind, boardFrames int) models.Response[muse.MusePromptCheck] {
+	return a.muse.CheckPromptForSpec(prompt, project, assetIDs, kind, boardFrames)
 }
 
-// CheckMusePrompt says what a prompt attaches from the asset library and
-// what may go wrong.
-func (a *App) CheckMusePrompt(prompt string, assetIDs []string) models.Response[muse.MusePromptCheck] {
-	return a.muse.CheckPrompt(prompt, assetIDs)
+// PreviewMuseMessages composes the exact messages that would be sent to Muse
+// for a prompt batch without queueing or running jobs.
+func (a *App) PreviewMuseMessages(req muse.MuseJobRequest) models.Response[[]muse.MusePromptPreview] {
+	return a.muse.PreviewMessages(req)
 }
 
 // ListMuseTemplates lists the saved Muse prompts.

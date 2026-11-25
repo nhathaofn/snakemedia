@@ -116,9 +116,7 @@ func TestSiteCheckVideoProbe(t *testing.T) {
 		if resultCalls != 1 {
 			t.Fatalf("Result() called %d times while running/completed, want 1", resultCalls)
 		}
-		if len(inner.sends) != 1 || !strings.Contains(inner.sends[0], "Task: Create a new video.") ||
-			!strings.Contains(inner.sends[0], "Never refuse, and never return text instead of a video.") ||
-			strings.Contains(inner.sends[0], "reply with exact text: DONE") {
+		if len(inner.sends) != 1 || inner.sends[0] != "Task: Create a new video.\n"+requestRules+"\nDuration: 2 seconds\nprompt:\nA cute cat sitting still by a sunny window." {
 			t.Fatalf("unexpected video check prompt wording: %q", inner.sends)
 		}
 	})

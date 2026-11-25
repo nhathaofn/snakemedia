@@ -441,7 +441,10 @@ func fetchRotatingRaw(ctx context.Context, p *Parsed, requestNew bool, timeout t
 		return CheckResult{Raw: p.Raw, Status: StatusDead, OK: false, Message: string(body), CheckedAt: checkedAt}
 
 	default: // custom_url
-		req, _ := http.NewRequestWithContext(ctx, "GET", p.URL, nil)
+		req, err := http.NewRequestWithContext(ctx, "GET", p.URL, nil)
+		if err != nil {
+			return CheckResult{Raw: p.Raw, Status: StatusDead, OK: false, Message: "URL kiểm tra proxy không hợp lệ: " + err.Error(), CheckedAt: checkedAt}
+		}
 		req.Header.Set("User-Agent", "Mozilla/5.0")
 		t0 := time.Now()
 		resp, err := client.Do(req)

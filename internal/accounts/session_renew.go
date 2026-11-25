@@ -168,7 +168,8 @@ func (s *Service) renewOneSession(ctx context.Context, rec Record, refresher Ses
 	if len(res.Cookies) == 0 {
 		return
 	}
-	persisted := browser.PersistSessionCookies(res.Cookies, now, browser.DefaultSessionCookieTTL)
+	merged := preserveSessionCookieExpiry(rec.Cookies, res.Cookies, now)
+	persisted := browser.PersistSessionCookies(merged, now, browser.DefaultSessionCookieTTL)
 	if cookiesEqual(rec.Cookies, persisted) && cookiesExpiryEqual(rec.Cookies, persisted) {
 		return
 	}
@@ -221,6 +222,28 @@ func sessionRenewJitter(id string) time.Duration {
 	_, _ = h.Write([]byte(id))
 	minutes := h.Sum32() % uint32(sessionRenewJitterMax/time.Minute)
 	return time.Duration(minutes) * time.Minute
+}
+
+// preserveSessionCookieExpiry keeps existing synthetic expiration timestamps
+// on session cookies (Expires <= 0 in incoming) when the value is unchanged and
+// still comfortably outside sessionRenewNearExpiryWindow, avoiding noisy
+// CookieVersion churn during quiet HTTP renewals.
+func preserveSessionCookieExpiry(existing, incoming []browser.Cookie, now time.Time) []browser.Cookie {
+	out := make([]browser.Cookie, len(incoming))
+	minKeep := float64(now.Add(sessionRenewNearExpiryWindow).Unix())
+	for i, c := range incoming {
+		if c.Expires <= 0 {
+			for _, old := range existing {
+				if old.Name == c.Name && old.Domain == c.Domain && old.Path == c.Path &&
+					old.Value == c.Value && old.Expires > minKeep {
+					c.Expires = old.Expires
+					break
+				}
+			}
+		}
+		out[i] = c
+	}
+	return out
 }
 
 func earliestAuthCookieExpiry(cookies []browser.Cookie) (time.Time, bool) {

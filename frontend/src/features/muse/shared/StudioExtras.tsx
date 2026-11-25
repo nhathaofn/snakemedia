@@ -5,7 +5,7 @@ import { ChevronDown } from 'lucide-react';
 import { Icon } from '../../../components/ui';
 import { api } from '../../../services';
 import { useAppStore } from '../../../stores';
-import { MuseRefMode } from '../../../types';
+import { MuseJobKind, MuseRefMode } from '../../../types';
 import type { MuseAsset } from '../../../types';
 import type { MuseDraft } from './museDraft';
 import { liveAssetIds, useMuseStudioStore } from './museStudioStore';
@@ -68,6 +68,33 @@ export function ExtrasGroup({
   );
 }
 
+/** Selects an Asset Vault project scope so @tag resolution prefers that project's assets. */
+export function ProjectScopeField({ draft, update }: { draft: MuseDraft; update: DraftUpdate }) {
+  const { assets } = useMuseStudio();
+  const projects = Array.from(
+    new Set(assets.map((a) => (a.project ?? '').trim()).filter((p) => p !== '')),
+  ).sort();
+  if (projects.length === 0) return null;
+  return (
+    <label className="studio-field-group">
+      <span className="studio-field-label">Dự án tư liệu</span>
+      <select
+        className="batch-input batch-select"
+        aria-label="Dự án tư liệu"
+        value={draft.project}
+        onChange={(e) => update({ project: e.target.value })}
+      >
+        <option value="">Tất cả dự án</option>
+        {projects.map((p) => (
+          <option key={p} value={p}>
+            {p}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 /**
  * Assets of the Tư liệu screen attached to every prompt (a fixed model or
  * product). Assets a prompt names with @tag are attached to that prompt alone.
@@ -83,21 +110,28 @@ export function FixedAssetsField({ draft, update }: { draft: MuseDraft; update: 
       </span>
     );
   }
+  const activeProject = (draft.project ?? '').trim().toUpperCase();
+  const scoped = activeProject
+    ? assets.filter(
+        (a) => chosen.includes(a.id) || !a.project || a.project.toUpperCase() === activeProject,
+      )
+    : assets;
   const q = filter.trim().toLowerCase().replace(/^@/, '');
   const shown = q
-    ? assets.filter(
+    ? scoped.filter(
         (a) =>
           chosen.includes(a.id) ||
           a.tag.toLowerCase().includes(q) ||
-          a.name.toLowerCase().includes(q),
+          a.name.toLowerCase().includes(q) ||
+          (a.project ?? '').toLowerCase().includes(q),
       )
-    : assets;
+    : scoped;
   return (
     <div className="studio-field-group">
       <span className="studio-field-label">
         Gắn vào mọi prompt{chosen.length > 0 ? ` (${chosen.length})` : ''}
       </span>
-      {assets.length > 10 && (
+      {scoped.length > 10 && (
         <input
           type="text"
           className="batch-input muse-asset-filter-input"
@@ -110,13 +144,14 @@ export function FixedAssetsField({ draft, update }: { draft: MuseDraft; update: 
       <div className="muse-asset-chips">
         {shown.map((a) => {
           const on = chosen.includes(a.id);
+          const count = a.images.length;
           return (
             <button
               key={a.id}
               type="button"
               className={`muse-asset-chip${on ? ' is-on' : ''}`}
               aria-pressed={on}
-              title={a.name || a.tag}
+              title={`${a.project ? `[${a.project}] ` : ''}${a.name || a.tag}${count > 1 ? ` (${count} góc)` : ''}`}
               onClick={() =>
                 update({
                   assetIds: on ? chosen.filter((id) => id !== a.id) : [...chosen, a.id],
@@ -126,12 +161,16 @@ export function FixedAssetsField({ draft, update }: { draft: MuseDraft; update: 
               {a.images[0] && (
                 <img src={thumbUrl(a.images[0])} alt="" loading="lazy" decoding="async" />
               )}
-              <span>@{a.tag}</span>
+              <span>
+                {a.project ? `${a.project}/` : ''}@{a.tag}
+              </span>
             </button>
           );
         })}
       </div>
-      <span className="studio-field-hint">Mỗi prompt còn gọi riêng bằng @tag hoặc đúng tên.</span>
+      <span className="studio-field-hint">
+        Gọi @tag hoặc @tag_góc (ví dụ @jimena_close_soot); không ghi góc sẽ lấy ảnh chính.
+      </span>
     </div>
   );
 }
@@ -202,8 +241,8 @@ export function StoryboardField({ draft, update }: { draft: MuseDraft; update: D
 }
 
 /**
- * Saved prompts. With onInsert (Đơn) the text goes into the prompt; a batch
- * box keeps its own text, so the template is copied for pasting.
+ * Saved prompts. Passes the selected template text to onInsert when provided,
+ * falling back to clipboard copy otherwise.
  */
 export function TemplateField({ onInsert }: { onInsert?: (text: string) => void }) {
   const { templates } = useMuseStudio();
@@ -242,31 +281,54 @@ export function TemplateField({ onInsert }: { onInsert?: (text: string) => void 
 }
 
 /** What the Đơn prompt will attach from the library, and hints that never block it. */
-export function PromptCheckHint({ prompt, assetIds }: { prompt: string; assetIds: string[] }) {
+export function PromptCheckHint({
+  kind = MuseJobKind.Video,
+  prompt,
+  project = '',
+  assetIds,
+  boardFrames = 0,
+}: {
+  kind?: MuseJobKind;
+  prompt: string;
+  project?: string;
+  assetIds: string[];
+  boardFrames?: number;
+}) {
   const { assets } = useMuseStudio();
   // The answer is kept with the prompt it was for, so a stale one is never shown.
-  const [check, setCheck] = useState<{ key: string; tags: string[]; warnings: string[] } | null>(
-    null,
-  );
+  const [check, setCheck] = useState<{
+    key: string;
+    tags: string[];
+    images: number;
+    warnings: string[];
+    estimatedBytes?: number;
+    budgetBytes?: number;
+  } | null>(null);
   const ids = assetIds.join(',');
-  const key = `${ids}|${prompt}`;
-  const active = assets.length > 0 && prompt.trim() !== '';
+  const frames = kind === MuseJobKind.Video ? boardFrames : 0;
+  const key = `${kind}|${frames}|${project}|${ids}|${prompt}`;
+  const active = (assets.length > 0 || frames > 0) && prompt.trim() !== '';
   useEffect(() => {
     if (!active) return;
     const timer = window.setTimeout(() => {
       api
-        .checkMusePrompt(prompt, liveAssetIds(ids ? ids.split(',') : []))
+        .checkMusePrompt(prompt, liveAssetIds(ids ? ids.split(',') : []), project, kind, frames)
         .then((res) => setCheck(res.success && res.data ? { key, ...res.data } : null))
         .catch(() => setCheck(null));
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [active, key, prompt, ids]);
+  }, [active, key, prompt, project, ids, kind, frames]);
   if (!active || check?.key !== key) return null;
   if (check.tags.length === 0 && check.warnings.length === 0) return null;
+  const estMb = check.estimatedBytes ? (check.estimatedBytes / (1024 * 1024)).toFixed(1) : null;
+  const budgetMb = check.budgetBytes ? Math.round(check.budgetBytes / (1024 * 1024)) : 8;
   return (
     <div className="studio-field-group">
       {check.tags.length > 0 && (
-        <span className="studio-field-hint">Gắn tư liệu: @{check.tags.join(', @')}</span>
+        <span className="studio-field-hint">
+          Gắn tư liệu: @{check.tags.join(', @')} ({check.images} ảnh
+          {estMb ? ` · ~${estMb}/${budgetMb} MB JPEG` : ''})
+        </span>
       )}
       {check.warnings.map((w) => (
         <span key={w} className="studio-field-hint is-warning">

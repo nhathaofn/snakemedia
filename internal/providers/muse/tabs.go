@@ -54,6 +54,7 @@ type tabPool struct {
 	reloadAfter int
 
 	navLock     func(accountID, targetID string) *sync.RWMutex
+	routeLock   func(accountID, targetID string) *sync.Mutex
 	listTargets func(context.Context, int, config.AccountConfig) ([]browser.Target, error)
 	openTab     func(context.Context, int, config.AccountConfig) (browser.Target, error)
 	navigate    func(context.Context, browser.Target, int, browser.Site) error
@@ -233,11 +234,9 @@ func removeJobFromSlot(jobs []string, jobID string) []string {
 	if len(jobs) == 0 {
 		return jobs
 	}
-	if jobID != "" {
-		for i := len(jobs) - 1; i >= 0; i-- {
-			if jobs[i] == jobID {
-				return slices.Delete(jobs, i, i+1)
-			}
+	for i := len(jobs) - 1; i >= 0; i-- {
+		if jobs[i] == jobID {
+			return slices.Delete(jobs, i, i+1)
 		}
 	}
 	return jobs[:len(jobs)-1]
@@ -344,6 +343,12 @@ func (tp *tabPool) reloadSharedTab(ctx context.Context, accountID string, port i
 	if !ok {
 		return errTabMissing
 	}
+	if tp.routeLock != nil {
+		if rm := tp.routeLock(accountID, targetID); rm != nil {
+			rm.Lock()
+			defer rm.Unlock()
+		}
+	}
 	if tp.navLock != nil {
 		if nav := tp.navLock(accountID, targetID); nav != nil {
 			nav.Lock()
@@ -375,7 +380,7 @@ func (tp *tabPool) waitOnMuse(ctx context.Context, port int, targetID string, po
 				return nil
 			}
 			if t.URL != "" && t.URL != "about:blank" && t.URL != "chrome://newtab/" {
-				return fmt.Errorf("Tab Muse mới điều hướng sang trang khác (%s)", t.URL)
+				return fmt.Errorf("Tab Muse mới điều hướng sang trang khác (%s)", sanitizeAwayURL(t.URL))
 			}
 		}
 		if !tp.now().Before(deadline) {
@@ -394,8 +399,9 @@ func (tp *tabPool) release(ctx context.Context, accountID string, port int, targ
 	if targetID == "" || port <= 0 {
 		return
 	}
+	want := 0
 	if wantThreads != nil {
-		_ = wantThreads()
+		want = wantThreads()
 	}
 	needsClose := false
 	reloadAfter := tp.reloadThreshold()
@@ -409,7 +415,7 @@ func (tp *tabPool) release(ctx context.Context, accountID string, port int, targ
 				if dirty || (reloadAfter > 0 && st.slots[i].uses >= reloadAfter) {
 					st.slots[i].needsReload = true
 				}
-				needsClose = len(st.slots) > 1 && !st.slots[i].busy() && (dirty || i > 0)
+				needsClose = len(st.slots) > 1 && !st.slots[i].busy() && (dirty || i > 0 || (want > 0 && i >= want))
 				break
 			}
 		}

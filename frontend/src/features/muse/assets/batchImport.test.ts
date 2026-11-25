@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MuseAsset, MuseAssetBatchConflict, MuseRefRole } from '../../../types';
-import type { MuseFolderImage } from '../../../types';
+import { MuseAsset, MuseAssetBatchConflict, MuseFolderImage, MuseRefRole } from '../../../types';
 import {
   buildBatchRows,
   parseAliasLines,
@@ -9,13 +8,14 @@ import {
   sanitizeTag,
 } from './batchImport';
 
-const makeImage = (fileName: string, error = ''): MuseFolderImage => ({
-  path: `C:\\imgs\\${fileName}`,
-  fileName,
-  size: 1024,
-  previewUrl: '',
-  error,
-});
+const makeImage = (fileName: string, error = ''): MuseFolderImage =>
+  MuseFolderImage.createFrom({
+    path: `C:\\imgs\\${fileName}`,
+    fileName,
+    size: 1024,
+    previewUrl: '',
+    error,
+  });
 
 describe('batchImport helpers', () => {
   it('parses alias lines with @tag, delimiter, and spaces', () => {

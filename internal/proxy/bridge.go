@@ -179,8 +179,8 @@ func (b *localBridge) handleClient(client net.Conn) {
 			return
 		}
 		dest := req.Host
-		if !strings.Contains(dest, ":") {
-			dest = net.JoinHostPort(dest, "80")
+		if _, _, splitErr := net.SplitHostPort(dest); splitErr != nil {
+			dest = net.JoinHostPort(strings.Trim(dest, "[]"), "80")
 		}
 		upstream, err = dialer.Dial("tcp", dest)
 		if err != nil {
@@ -224,7 +224,7 @@ func (b *localBridge) handleClient(client net.Conn) {
 			return
 		}
 
-		pipe(client, upstream)
+		pipe(bufferedConn{Conn: client, r: reader}, upstream)
 		return
 	}
 
@@ -246,11 +246,32 @@ func (b *localBridge) handleClient(client net.Conn) {
 	if err != nil {
 		return
 	}
-	pipe(client, upstream)
+	pipe(bufferedConn{Conn: client, r: reader}, upstream)
 }
 
 func basicAuth(p *Parsed) string {
 	return "Basic " + base64.StdEncoding.EncodeToString([]byte(p.User+":"+p.Pass))
+}
+
+// bufferedConn serves pre-read bytes from r before falling back to Conn.Read.
+type bufferedConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c bufferedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
+
+func (c bufferedConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
+func closeWrite(c net.Conn) {
+	if cw, ok := c.(interface{ CloseWrite() error }); ok {
+		_ = cw.CloseWrite()
+	}
 }
 
 func pipe(c1, c2 net.Conn) {
@@ -259,12 +280,12 @@ func pipe(c1, c2 net.Conn) {
 	go func() {
 		defer wg.Done()
 		_, _ = io.Copy(c1, c2)
-		_ = c1.SetDeadline(time.Now())
+		closeWrite(c1)
 	}()
 	go func() {
 		defer wg.Done()
 		_, _ = io.Copy(c2, c1)
-		_ = c2.SetDeadline(time.Now())
+		closeWrite(c2)
 	}()
 	wg.Wait()
 }

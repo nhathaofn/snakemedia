@@ -38,8 +38,8 @@ export function CheckMuseAPI(arg1, arg2) {
   return window['go']['main']['App']['CheckMuseAPI'](arg1, arg2);
 }
 
-export function CheckMusePrompt(arg1, arg2) {
-  return window['go']['main']['App']['CheckMusePrompt'](arg1, arg2);
+export function CheckMusePrompt(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['CheckMusePrompt'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function CheckProxies() {
@@ -114,6 +114,10 @@ export function GetImageModels() {
   return window['go']['main']['App']['GetImageModels']();
 }
 
+export function GetMuseAssetVaultDirectory() {
+  return window['go']['main']['App']['GetMuseAssetVaultDirectory']();
+}
+
 export function GetMuseOptions() {
   return window['go']['main']['App']['GetMuseOptions']();
 }
@@ -164,6 +168,10 @@ export function ImportFlowProjectImageReference(arg1, arg2, arg3, arg4) {
 
 export function ImportMuseAssetBatch(arg1) {
   return window['go']['main']['App']['ImportMuseAssetBatch'](arg1);
+}
+
+export function ImportMuseAssetFromMedia(arg1) {
+  return window['go']['main']['App']['ImportMuseAssetFromMedia'](arg1);
 }
 
 export function InstallTool(arg1) {
@@ -226,6 +234,10 @@ export function OpenLogFolder() {
   return window['go']['main']['App']['OpenLogFolder']();
 }
 
+export function OpenMuseAssetVaultFolder() {
+  return window['go']['main']['App']['OpenMuseAssetVaultFolder']();
+}
+
 export function OpenMuseOutputFolder() {
   return window['go']['main']['App']['OpenMuseOutputFolder']();
 }
@@ -234,20 +246,24 @@ export function PickFlowImageReferences() {
   return window['go']['main']['App']['PickFlowImageReferences']();
 }
 
-export function PickMuseAssetFolder() {
-  return window['go']['main']['App']['PickMuseAssetFolder']();
+export function PickMuseAssetFiles() {
+  return window['go']['main']['App']['PickMuseAssetFiles']();
+}
+
+export function PickMuseAssetFolder(arg1) {
+  return window['go']['main']['App']['PickMuseAssetFolder'](arg1);
 }
 
 export function PickMuseAssetImages() {
   return window['go']['main']['App']['PickMuseAssetImages']();
 }
 
-export function PickMuseReferences() {
-  return window['go']['main']['App']['PickMuseReferences']();
+export function PickMuseAssetVaultDirectoryPath() {
+  return window['go']['main']['App']['PickMuseAssetVaultDirectoryPath']();
 }
 
-export function PickMuseSourceVideo() {
-  return window['go']['main']['App']['PickMuseSourceVideo']();
+export function PickMuseReferences() {
+  return window['go']['main']['App']['PickMuseReferences']();
 }
 
 export function PickVideo() {
@@ -256,6 +272,10 @@ export function PickVideo() {
 
 export function PostponeTool(arg1) {
   return window['go']['main']['App']['PostponeTool'](arg1);
+}
+
+export function PreviewMuseMessages(arg1) {
+  return window['go']['main']['App']['PreviewMuseMessages'](arg1);
 }
 
 export function RemoveAccount(arg1) {
@@ -366,6 +386,10 @@ export function SaveProxies(arg1) {
   return window['go']['main']['App']['SaveProxies'](arg1);
 }
 
+export function ScanMuseAssetPaths(arg1) {
+  return window['go']['main']['App']['ScanMuseAssetPaths'](arg1);
+}
+
 export function SetAccountEnabled(arg1, arg2) {
   return window['go']['main']['App']['SetAccountEnabled'](arg1, arg2);
 }
@@ -376,6 +400,10 @@ export function SetAccountProxy(arg1, arg2) {
 
 export function SetAccountVideoCheck(arg1, arg2) {
   return window['go']['main']['App']['SetAccountVideoCheck'](arg1, arg2);
+}
+
+export function SetMuseAssetVaultDirectory(arg1, arg2) {
+  return window['go']['main']['App']['SetMuseAssetVaultDirectory'](arg1, arg2);
 }
 
 export function SubmitFlowImageTasks(arg1) {
@@ -394,8 +422,16 @@ export function UpdateFlowImageTasksSettings(arg1) {
   return window['go']['main']['App']['UpdateFlowImageTasksSettings'](arg1);
 }
 
+export function UpdateMuseAssetItem(arg1, arg2, arg3) {
+  return window['go']['main']['App']['UpdateMuseAssetItem'](arg1, arg2, arg3);
+}
+
 export function UpdateMuseAssetsRole(arg1, arg2) {
   return window['go']['main']['App']['UpdateMuseAssetsRole'](arg1, arg2);
+}
+
+export function UpdateMuseJobsConfig(arg1) {
+  return window['go']['main']['App']['UpdateMuseJobsConfig'](arg1);
 }
 
 export function UpdateMuseJobsFormat(arg1) {

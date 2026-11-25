@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useId, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
@@ -37,6 +37,7 @@ export function Modal({
   footer,
   children,
 }: ModalProps) {
+  const titleId = useId();
   const panelRef = useRef<HTMLElement>(null);
   const closeRef = useRef(onClose);
   useEffect(() => {
@@ -84,14 +85,14 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={title ? undefined : label}
-        aria-labelledby={title ? 'modal-title' : undefined}
+        aria-labelledby={title ? titleId : undefined}
         tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
         {title ? (
           <header className="modal-header">
             <div>
-              <h2 id="modal-title">{title}</h2>
+              <h2 id={titleId}>{title}</h2>
               {subtitle && <p>{subtitle}</p>}
             </div>
             <button type="button" className="modal-close" aria-label="Đóng" onClick={onClose}>

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Trash2 } from 'lucide-react';
-import { Button, Icon } from '../../../components/ui';
+import { Button, Icon, confirmAction } from '../../../components/ui';
 import { api, unwrapList } from '../../../services';
 import { useAppStore } from '../../../stores';
 import type { MuseCleanResult } from '../../../types';
@@ -17,9 +17,12 @@ export const CleanChatsButton: React.FC<{ disabled?: boolean }> = ({ disabled })
 
   const clean = async () => {
     if (
-      !window.confirm(
-        'Gửi tin nhắn dọn cho mọi tài khoản Muse đã đăng nhập? Muse sẽ xoá các đoạn chat khác của tài khoản. Tài khoản còn tác vụ đang chạy được bỏ qua.',
-      )
+      !(await confirmAction({
+        title: 'Dọn đoạn chat phụ?',
+        message:
+          'Gửi tin nhắn dọn cho mọi tài khoản Muse đã đăng nhập? Muse sẽ xoá các đoạn chat khác của tài khoản. Tài khoản còn tác vụ đang chạy được bỏ qua.',
+        confirmLabel: 'Gửi dọn chat',
+      }))
     )
       return;
     setBusy(true);

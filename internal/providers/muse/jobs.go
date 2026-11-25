@@ -90,9 +90,6 @@ type MuseJob struct {
 	// Review holds the video once its frames arrive, whatever ran it before,
 	// so the user sees the storyboard and runs the video themselves.
 	Review bool `json:"review,omitempty"`
-	// SourceVideo is a local media URL of a sample video the job remakes as a
-	// similar new one (sampleLines), attached before every image.
-	SourceVideo string `json:"sourceVideo,omitempty"`
 	// OutputDir is the batch's own folder (under the folder the user chose,
 	// see batchFolder) a Hàng loạt job's files are saved into, and Index the
 	// prompt's place in that batch (from 1), which numbers them
@@ -250,6 +247,14 @@ func (s *jobStore) load() error { return s.journal.Load() }
 
 func (s *jobStore) list() []MuseJob {
 	res := s.journal.List()
+	for i := range res {
+		normalizeJob(&res[i])
+	}
+	return res
+}
+
+func (s *jobStore) listActive() []MuseJob {
+	res := s.journal.ListActive()
 	for i := range res {
 		normalizeJob(&res[i])
 	}

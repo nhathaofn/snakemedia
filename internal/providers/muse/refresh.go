@@ -37,6 +37,7 @@ type accountLease struct {
 	accounts *accounts.Service
 	id       string
 	release  func()
+	recycle  func() error // test seam for RecycleHeadless failure
 }
 
 func acquireAccountLease(accts *accounts.Service, id string) *accountLease {
@@ -57,6 +58,9 @@ func (l *accountLease) Release() {
 // can shut down an idle headless Chrome (and still refuses safely if another
 // thread holds a lease on the same account), then re-acquires immediately.
 func (l *accountLease) RecycleHeadless() error {
+	if l != nil && l.recycle != nil {
+		return l.recycle()
+	}
 	if l == nil || l.accounts == nil || l.id == "" {
 		return nil
 	}
@@ -73,7 +77,7 @@ func (p *Provider) sessionVerified(accountID string, port int) bool {
 	now := p.now()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	v, ok := p.verifiedPorts[accountID]
+	v, ok := p.acct.verifiedPorts[accountID]
 	if !ok || v.port != port {
 		return false
 	}
@@ -86,9 +90,10 @@ func (p *Provider) markSessionVerified(accountID string, port int) {
 	}
 	now := p.now()
 	p.mu.Lock()
-	if p.verifiedPorts != nil {
-		p.verifiedPorts[accountID] = verifiedSession{port: port, at: now}
+	if p.acct.verifiedPorts == nil {
+		p.acct.verifiedPorts = make(map[string]verifiedSession)
 	}
+	p.acct.verifiedPorts[accountID] = verifiedSession{port: port, at: now}
 	p.mu.Unlock()
 }
 
@@ -97,31 +102,31 @@ func (p *Provider) clearSessionVerified(accountID string) {
 		return
 	}
 	p.mu.Lock()
-	delete(p.verifiedPorts, accountID)
+	delete(p.acct.verifiedPorts, accountID)
 	p.mu.Unlock()
 }
 
 func (p *Provider) accountRefreshEpoch(accountID string) int64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.sessionEpoch[accountID]
+	return p.acct.sessionEpoch[accountID]
 }
 
 func (p *Provider) bumpRefreshEpoch(accountID string) int64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.sessionEpoch == nil {
-		p.sessionEpoch = make(map[string]int64)
+	if p.acct.sessionEpoch == nil {
+		p.acct.sessionEpoch = make(map[string]int64)
 	}
-	p.sessionEpoch[accountID]++
-	return p.sessionEpoch[accountID]
+	p.acct.sessionEpoch[accountID]++
+	return p.acct.sessionEpoch[accountID]
 }
 
 func (p *Provider) recentRefreshOutcome(accountID string, sinceEpoch int64) (refreshOutcome, bool) {
 	now := p.now()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	out, ok := p.lastRefresh[accountID]
+	out, ok := p.acct.lastRefresh[accountID]
 	if !ok || out.epoch <= sinceEpoch || now.Sub(out.at) > recentRecoveryWindow {
 		return refreshOutcome{}, false
 	}
@@ -131,12 +136,12 @@ func (p *Provider) recentRefreshOutcome(accountID string, sinceEpoch int64) (ref
 func (p *Provider) recordRefreshOutcome(accountID string, epoch int64, acc accounts.Record, err error) {
 	now := p.now()
 	p.mu.Lock()
-	if p.lastRefresh == nil {
-		p.lastRefresh = make(map[string]refreshOutcome)
+	if p.acct.lastRefresh == nil {
+		p.acct.lastRefresh = make(map[string]refreshOutcome)
 	}
-	p.lastRefresh[accountID] = refreshOutcome{acc: acc, err: err, at: now, epoch: epoch}
+	p.acct.lastRefresh[accountID] = refreshOutcome{acc: acc, err: err, at: now, epoch: epoch}
 	if err == nil {
-		delete(p.accountBackoff, accountID)
+		delete(p.acct.backoff, accountID)
 	}
 	p.mu.Unlock()
 }
@@ -146,7 +151,7 @@ func (p *Provider) clearAccountBackoff(accountID string) {
 		return
 	}
 	p.mu.Lock()
-	delete(p.accountBackoff, accountID)
+	delete(p.acct.backoff, accountID)
 	p.mu.Unlock()
 }
 
@@ -269,6 +274,8 @@ func (p *Provider) refreshAccountForRun(ctx context.Context, accountID string, j
 				} else {
 					loginErr = openErr
 				}
+			} else {
+				loginErr = &notSentError{err: fmt.Errorf("Không khởi động lại được trình duyệt tài khoản: %w", rErr)}
 			}
 		}
 	}
@@ -520,7 +527,7 @@ func (p *Provider) clearStateRefreshSeen(accountID string) {
 		return
 	}
 	p.mu.Lock()
-	delete(p.stateRefreshSeen, accountID)
+	delete(p.acct.stateRefreshSeen, accountID)
 	p.mu.Unlock()
 }
 
@@ -580,18 +587,18 @@ func (p *Provider) scheduleStateAccountRefresh(rec accounts.Record, reason strin
 		p.mu.Unlock()
 		return
 	}
-	if p.stateRefreshSeen == nil {
-		p.stateRefreshSeen = make(map[string]string)
+	if p.acct.stateRefreshSeen == nil {
+		p.acct.stateRefreshSeen = make(map[string]string)
 	}
-	if p.stateRefreshBusy == nil {
-		p.stateRefreshBusy = make(map[string]bool)
+	if p.acct.stateRefreshBusy == nil {
+		p.acct.stateRefreshBusy = make(map[string]bool)
 	}
-	if p.stateRefreshBusy[rec.ID] || p.stateRefreshSeen[rec.ID] == fp {
+	if p.acct.stateRefreshBusy[rec.ID] || p.acct.stateRefreshSeen[rec.ID] == fp {
 		p.mu.Unlock()
 		return
 	}
-	p.stateRefreshSeen[rec.ID] = fp
-	p.stateRefreshBusy[rec.ID] = true
+	p.acct.stateRefreshSeen[rec.ID] = fp
+	p.acct.stateRefreshBusy[rec.ID] = true
 	p.wg.Add(1)
 	p.mu.Unlock()
 
@@ -600,12 +607,17 @@ func (p *Provider) scheduleStateAccountRefresh(rec accounts.Record, reason strin
 		defer logger.Recover("làm mới tài khoản Muse", func(error) {})
 		defer func() {
 			p.mu.Lock()
-			delete(p.stateRefreshBusy, rec.ID)
+			delete(p.acct.stateRefreshBusy, rec.ID)
 			p.mu.Unlock()
 			p.closeIdleBrowserIfDone(rec.ID)
 			p.trigger()
 		}()
 		if p.accounts.InUse(rec.ID) {
+			p.mu.Lock()
+			if p.acct.stateRefreshSeen != nil && p.acct.stateRefreshSeen[rec.ID] == fp {
+				delete(p.acct.stateRefreshSeen, rec.ID)
+			}
+			p.mu.Unlock()
 			return
 		}
 		lease := acquireAccountLease(p.accounts, rec.ID)
@@ -625,8 +637,8 @@ func (p *Provider) scheduleStateAccountRefresh(rec accounts.Record, reason strin
 			if latest, rErr := p.accounts.Record(rec.ID); rErr == nil && latest.Proxy == rec.Proxy && latest.CookieVersion == rec.CookieVersion {
 				afterFP := reason + ":" + stateRefreshFingerprint(latest)
 				p.mu.Lock()
-				if p.stateRefreshSeen != nil && p.stateRefreshSeen[rec.ID] == fp {
-					p.stateRefreshSeen[rec.ID] = afterFP
+				if p.acct.stateRefreshSeen != nil && p.acct.stateRefreshSeen[rec.ID] == fp {
+					p.acct.stateRefreshSeen[rec.ID] = afterFP
 				}
 				p.mu.Unlock()
 			}

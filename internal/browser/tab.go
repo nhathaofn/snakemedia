@@ -60,7 +60,7 @@ func EnsureTab(ctx context.Context, port int, policy config.AccountConfig, site 
 		}
 		blank = &created
 	}
-	return Navigate(ctx, *blank, port, site)
+	return NavigateWithPolicy(ctx, *blank, port, site, policy)
 }
 
 var lastCleanUA atomic.Value
@@ -88,12 +88,12 @@ func LastUserAgent() string {
 // normalizeHeadlessUserAgent strips Chrome's "HeadlessChrome/" marker from
 // CDP Emulation when running headless=new, using the live browser version from
 // /json/version so sites see the same browser identity as visible Chrome.
-func normalizeHeadlessUserAgent(ctx context.Context, conn *Conn, port int) {
+func normalizeHeadlessUserAgent(ctx context.Context, conn *Conn, port int, policy config.AccountConfig) {
 	if port <= 0 {
 		return
 	}
 	var v browserVersion
-	if err := LocalJSON(ctx, port, "/json/version", config.DefaultAccountConfig(), &v); err != nil {
+	if err := LocalJSON(ctx, port, "/json/version", policy, &v); err != nil {
 		return
 	}
 	if v.UserAgent == "" {
@@ -109,14 +109,23 @@ func normalizeHeadlessUserAgent(ctx context.Context, conn *Conn, port int) {
 
 // Navigate loads the site's home page in tab t, installing its boot script first.
 func Navigate(ctx context.Context, t Target, port int, site Site) error {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	return NavigateWithPolicy(ctx, t, port, site, config.DefaultAccountConfig())
+}
+
+// NavigateWithPolicy loads the site's home page using policy's timeouts and CDP limits.
+func NavigateWithPolicy(ctx context.Context, t Target, port int, site Site, policy config.AccountConfig) error {
+	timeout := time.Duration(policy.BrowserStartupTimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	conn, err := Dial(ctx, t, port, 0)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	normalizeHeadlessUserAgent(ctx, conn, port)
+	normalizeHeadlessUserAgent(ctx, conn, port, policy)
 	if site.Boot != "" {
 		_ = conn.Call(ctx, "Page.enable", nil, nil)
 		if err := conn.Call(ctx, "Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": site.Boot}, nil); err != nil {

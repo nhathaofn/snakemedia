@@ -63,14 +63,37 @@ func findTopBox(r io.ReadSeeker, kind string) ([]byte, error) {
 			}
 			size, headerLen = binary.BigEndian.Uint64(header[8:16]), 16
 		}
-		if size != 0 && size < headerLen {
+		if size != 0 && (size < headerLen || size-headerLen > math.MaxInt64) {
+			if size >= headerLen {
+				return nil, errors.New("box " + name + " quá lớn")
+			}
 			return nil, errors.New("box MP4 không hợp lệ")
 		}
 		if name == kind {
-			if size == 0 || size-headerLen > maxMP4Box {
-				return nil, errors.New("box " + kind + " quá lớn")
+			var bodyLen uint64
+			if size == 0 {
+				cur, err := r.Seek(0, io.SeekCurrent)
+				if err != nil {
+					return nil, err
+				}
+				end, err := r.Seek(0, io.SeekEnd)
+				if err != nil {
+					return nil, err
+				}
+				if _, err := r.Seek(cur, io.SeekStart); err != nil {
+					return nil, err
+				}
+				if end < cur || uint64(end-cur) > maxMP4Box {
+					return nil, errors.New("box " + kind + " quá lớn")
+				}
+				bodyLen = uint64(end - cur)
+			} else {
+				if size-headerLen > maxMP4Box {
+					return nil, errors.New("box " + kind + " quá lớn")
+				}
+				bodyLen = size - headerLen
 			}
-			body := make([]byte, size-headerLen)
+			body := make([]byte, bodyLen)
 			if _, err := io.ReadFull(r, body); err != nil {
 				return nil, err
 			}

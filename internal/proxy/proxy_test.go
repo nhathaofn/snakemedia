@@ -1,13 +1,17 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -476,5 +480,83 @@ func TestUsableEachMatchesUsable(t *testing.T) {
 	}
 	if len(m.UsableEach(nil, as)) != 0 {
 		t.Fatal("no accounts, no answers")
+	}
+}
+
+func TestBridgePreservesCoalescedConnectPayloadAndHalfCloseResponse(t *testing.T) {
+	// Upstream mock proxy implementing HTTP CONNECT tunnel that echoes request bytes after EOF.
+	upstreamLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstreamLn.Close()
+	go func() {
+		for {
+			c, err := upstreamLn.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				r := bufio.NewReader(conn)
+				req, err := http.ReadRequest(r)
+				if err != nil || req.Method != http.MethodConnect {
+					return
+				}
+				_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n")
+				body, _ := io.ReadAll(r)
+				time.Sleep(40 * time.Millisecond)
+				_, _ = conn.Write(append([]byte("ECHO:"), body...))
+			}(c)
+		}
+	}()
+
+	uHost, uPort, _ := net.SplitHostPort(upstreamLn.Addr().String())
+	portNum, err := strconv.Atoi(uPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bm := newBridges(func() time.Duration { return 3 * time.Second })
+	t.Cleanup(bm.Close)
+	bridgePort, err := bm.GetBridge(&Parsed{Scheme: "http", Host: uHost, Port: portNum})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clientConn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", bridgePort), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientConn.Close()
+	_ = clientConn.SetDeadline(time.Now().Add(3 * time.Second))
+
+	// Coalesce CONNECT + early payload in the same buffer, then half-close write side.
+	_, err = io.WriteString(clientConn, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\nCOALESCED_HELLO")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tc, ok := clientConn.(*net.TCPConn); ok {
+		_ = tc.CloseWrite()
+	}
+	rawResp, err := io.ReadAll(clientConn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := string(rawResp)
+	if !strings.Contains(resp, "200 Connection Established") || !strings.Contains(resp, "ECHO:COALESCED_HELLO") {
+		t.Fatalf("bridge lost coalesced payload or half-closed response: %q", resp)
+	}
+}
+
+func TestCheckCustomURLControlCharReturnsErrorInsteadOfPanic(t *testing.T) {
+	p := &Parsed{
+		Type:     TypeRotating,
+		Provider: "custom_url",
+		URL:      "http://127.0.0.1:1/bad\x7fpath",
+		Raw:      "custom_url|bad",
+	}
+	res := fetchRotatingRaw(context.Background(), p, false, 2*time.Second)
+	if res.OK || res.Status != StatusDead || !strings.Contains(res.Message, "URL") {
+		t.Fatalf("expected invalid URL dead CheckResult without panic, got %+v", res)
 	}
 }

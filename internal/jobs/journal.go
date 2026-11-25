@@ -46,6 +46,7 @@ type Journal[T Record] struct {
 	transient func(before, after T) bool
 	items     []T
 	byID      map[string]int
+	active    map[string]bool
 	// blocked stops every write: the file belongs to a newer build.
 	blocked error
 
@@ -81,7 +82,7 @@ type Options[T Record] struct {
 
 // New returns a journal stored at path. Call Load before using it.
 func New[T Record](path string, opts Options[T]) *Journal[T] {
-	j := &Journal[T]{path: path, limit: opts.Limit, normalize: opts.Normalize, transient: opts.Transient, items: []T{}, byID: map[string]int{}}
+	j := &Journal[T]{path: path, limit: opts.Limit, normalize: opts.Normalize, transient: opts.Transient, items: []T{}, byID: map[string]int{}, active: map[string]bool{}}
 	j.flushed = sync.NewCond(&j.mu)
 	return j
 }
@@ -143,6 +144,28 @@ func (j *Journal[T]) List() []T {
 	return slices.Clone(j.items)
 }
 
+// ListActive returns a copy of every unfinished record (!Finished()), oldest
+// first, without copying or iterating over finished records.
+func (j *Journal[T]) ListActive() []T {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if len(j.active) == 0 {
+		return []T{}
+	}
+	idxs := make([]int, 0, len(j.active))
+	for id := range j.active {
+		if i, ok := j.byID[id]; ok {
+			idxs = append(idxs, i)
+		}
+	}
+	slices.Sort(idxs)
+	out := make([]T, len(idxs))
+	for k, i := range idxs {
+		out[k] = j.items[i]
+	}
+	return out
+}
+
 // Path is the journal file.
 func (j *Journal[T]) Path() string { return j.path }
 
@@ -192,17 +215,30 @@ func (j *Journal[T]) Add(records ...T) error {
 func (j *Journal[T]) AddTrimming(records ...T) ([]string, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if j.blocked != nil {
+		return nil, j.blocked
+	}
 	for _, r := range records {
 		if _, dup := j.byID[r.JobID()]; dup {
 			return nil, fmt.Errorf("tác vụ %s đã có", r.JobID())
 		}
 	}
+	prev := slices.Clone(j.items)
 	for _, r := range records {
 		j.items = append(j.items, r)
-		j.byID[r.JobID()] = len(j.items) - 1
+		id := r.JobID()
+		j.byID[id] = len(j.items) - 1
+		if !r.Finished() {
+			j.active[id] = true
+		}
 	}
 	trimmed := j.trimLocked()
-	return trimmed, j.saveLocked()
+	if err := j.saveLocked(); err != nil {
+		j.items = prev
+		j.reindexLocked()
+		return nil, err
+	}
+	return trimmed, nil
 }
 
 // SaveBatch applies updates to existing records and appends adds in one
@@ -261,6 +297,10 @@ func (j *Journal[T]) UpdateTransient(id string, change func(*T)) (T, error) {
 func (j *Journal[T]) update(id string, change func(*T), persist bool) (T, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if persist && j.blocked != nil {
+		var zero T
+		return zero, j.blocked
+	}
 	i, ok := j.byID[id]
 	if !ok {
 		var zero T
@@ -269,10 +309,25 @@ func (j *Journal[T]) update(id string, change func(*T), persist bool) (T, error)
 	before := j.items[i]
 	change(&j.items[i])
 	record := j.items[i]
+	if record.Finished() {
+		delete(j.active, record.JobID())
+	} else {
+		j.active[record.JobID()] = true
+	}
 	if !persist || (j.transient != nil && j.transient(before, record)) {
 		return record, nil
 	}
-	return record, j.saveLocked()
+	if err := j.saveLocked(); err != nil {
+		j.items[i] = before
+		if before.Finished() {
+			delete(j.active, before.JobID())
+		} else {
+			j.active[before.JobID()] = true
+		}
+		var zero T
+		return zero, err
+	}
+	return record, nil
 }
 
 // UpdateMany applies change to each listed record (unknown IDs are skipped)
@@ -282,6 +337,10 @@ func (j *Journal[T]) update(id string, change func(*T), persist bool) (T, error)
 func (j *Journal[T]) UpdateMany(ids []string, change func(*T) bool) ([]T, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if j.blocked != nil {
+		return nil, j.blocked
+	}
+	prev := slices.Clone(j.items)
 	var changed []T
 	persist := false
 	for _, id := range ids {
@@ -294,6 +353,11 @@ func (j *Journal[T]) UpdateMany(ids []string, change func(*T) bool) ([]T, error)
 			continue
 		}
 		record := j.items[i]
+		if record.Finished() {
+			delete(j.active, record.JobID())
+		} else {
+			j.active[record.JobID()] = true
+		}
 		changed = append(changed, record)
 		if j.transient == nil || !j.transient(before, record) {
 			persist = true
@@ -302,7 +366,12 @@ func (j *Journal[T]) UpdateMany(ids []string, change func(*T) bool) ([]T, error)
 	if !persist {
 		return changed, nil
 	}
-	return changed, j.saveLocked()
+	if err := j.saveLocked(); err != nil {
+		j.items = prev
+		j.reindexLocked()
+		return nil, err
+	}
+	return changed, nil
 }
 
 // RemoveWhere deletes every record drop selects and returns how many went.
@@ -315,6 +384,10 @@ func (j *Journal[T]) RemoveWhere(drop func(T) bool) (int, error) {
 func (j *Journal[T]) RemoveWhereIDs(drop func(T) bool) ([]string, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if j.blocked != nil {
+		return nil, j.blocked
+	}
+	prev := slices.Clone(j.items)
 	var removed []string
 	j.items = slices.DeleteFunc(j.items, func(r T) bool {
 		if drop(r) {
@@ -327,26 +400,45 @@ func (j *Journal[T]) RemoveWhereIDs(drop func(T) bool) ([]string, error) {
 		return nil, nil
 	}
 	j.reindexLocked()
-	return removed, j.saveLocked()
+	if err := j.saveLocked(); err != nil {
+		j.items = prev
+		j.reindexLocked()
+		return nil, err
+	}
+	return removed, nil
 }
 
 // Remove deletes the record with id.
 func (j *Journal[T]) Remove(id string) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if j.blocked != nil {
+		return j.blocked
+	}
 	i, ok := j.byID[id]
 	if !ok {
 		return ErrNotFound
 	}
+	prev := slices.Clone(j.items)
 	j.items = slices.Delete(j.items, i, i+1)
 	j.reindexLocked()
-	return j.saveLocked()
+	if err := j.saveLocked(); err != nil {
+		j.items = prev
+		j.reindexLocked()
+		return err
+	}
+	return nil
 }
 
 func (j *Journal[T]) reindexLocked() {
 	j.byID = make(map[string]int, len(j.items))
+	j.active = make(map[string]bool)
 	for i, r := range j.items {
-		j.byID[r.JobID()] = i
+		id := r.JobID()
+		j.byID[id] = i
+		if !r.Finished() {
+			j.active[id] = true
+		}
 	}
 }
 

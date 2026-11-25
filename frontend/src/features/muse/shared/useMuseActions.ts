@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
+import { confirmAction } from '../../../components/ui';
 import { api, unwrap } from '../../../services';
 import { useAppStore } from '../../../stores';
 import { MuseJobKind as Kind, MuseJobRequest, MuseStoryboard } from '../../../types';
@@ -63,8 +64,19 @@ export function useMuseActions() {
           );
         }),
       retry: (job) => {
-        if (mayBePaid(job) && !window.confirm(RETRY_PAID_CONFIRM)) return;
-        void act(async () => setJob(unwrap(await api.retryMuseJob(job.id))));
+        void act(async () => {
+          if (
+            mayBePaid(job) &&
+            !(await confirmAction({
+              title: 'Chạy lại tác vụ đã gửi?',
+              message: RETRY_PAID_CONFIRM,
+              confirmLabel: 'Chạy lại',
+            }))
+          ) {
+            return;
+          }
+          setJob(unwrap(await api.retryMuseJob(job.id)));
+        });
       },
       // The backend reports the started job through MuseJobUpdated.
       run: (id) => void act(async () => void unwrap(await api.runMuseJobs([id]))),
@@ -122,6 +134,7 @@ export function useMuseSubmit(kind: MuseJobKind, mode: MuseJobMode) {
           outputDir,
           ratio: draft.ratio,
           duration: draft.duration,
+          project: draft.project || undefined,
           refMode: draft.refMode || undefined,
           assets: draft.assetIds?.length ? liveAssetIds(draft.assetIds) : undefined,
           storyboard:

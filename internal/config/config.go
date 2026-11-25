@@ -326,6 +326,9 @@ func migrate(data []byte, cfg *AppConfig) {
 			cfg.Tools.Paths[program] = path
 		}
 	}
+	if isLegacyMuseSetupMessage(cfg.Muse.SetupMessage) {
+		cfg.Muse.SetupMessage = ""
+	}
 }
 
 // quarantine moves an unusable config file aside so the user's data is kept for inspection.

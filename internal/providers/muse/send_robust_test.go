@@ -194,12 +194,12 @@ func TestCapabilitiesAreReadAgain(t *testing.T) {
 	p := testProvider(t, page)
 	acc := addSignedIn(t, p, "A")
 	old := testCaps()
-	old.MaxFiles = 1
+	old.ImageTypes = []MuseFileType{{Mime: "image/webp", Extensions: []string{".webp"}}}
 	old.CheckedAt = p.now().UTC().Format(time.RFC3339)
 	p.updateAccount(acc.ID, func(_ *accounts.Record, d *museData) { d.Capabilities = old })
 	rec, _ := p.accounts.Record(acc.ID)
 
-	png, _ := p.media.Put("ref", "image/png", ".png", []byte("png"))
+	png, _ := p.media.Put("ref", "image/png", ".png", testPNGBytes(t, 16, 16))
 	job := MuseJob{References: []string{png, png}}
 	atts, err := p.attachments(context.Background(), job, rec, page)
 	if err != nil || len(atts) != 2 || page.capsReads != 1 {

@@ -6,7 +6,7 @@ import { AccountWarning } from '../../../components/accounts';
 import { Icon } from '../../../components/ui';
 import { useNow } from '../../../hooks';
 import { api, unwrap } from '../../../services';
-import { useAccountsStore, useAppStore } from '../../../stores';
+import { useAccountsStore } from '../../../stores';
 import { AccountProvider, MuseJobKind } from '../../../types';
 import type { MuseOptions, MuseReference } from '../../../types';
 import { accountReady, formatBytes } from '../../../utils';
@@ -22,38 +22,22 @@ export function MusePanel({ children }: { children: ReactNode }) {
 }
 
 /**
- * How many Muse accounts can take jobs now, or where to add one. It reads the
- * clock itself (rests end over time), so the panel does not re-render on it.
+ * Warns when no Muse account is ready to take jobs. When at least one account
+ * is ready, renders nothing to keep the studio panel compact.
  */
-function MuseAccountStatus() {
-  const useApi = useAppStore((s) => s.config?.muse?.useApi);
+export function MuseAccountStatus() {
   const accounts = useAccountsStore((s) => s.accounts);
   const now = useNow();
-  if (useApi) {
-    return (
-      <div className="studio-status is-ready">
-        <span className="status-dot active" />
-        <span>Muse API (muse2api) sẵn sàng</span>
-      </div>
-    );
-  }
   const ready = accounts.filter(
     (a) => a.provider === AccountProvider.Muse && accountReady(a, now),
   ).length;
-  if (ready === 0) {
-    return (
-      <AccountWarning
-        provider={AccountProvider.Muse}
-        message="Chưa có tài khoản Muse sẵn sàng; tác vụ sẽ chờ."
-        compact
-      />
-    );
-  }
+  if (ready > 0) return null;
   return (
-    <div className="studio-status is-ready">
-      <span className="status-dot active" />
-      <span>{ready} tài khoản Muse sẵn sàng</span>
-    </div>
+    <AccountWarning
+      provider={AccountProvider.Muse}
+      message="Chưa có tài khoản Muse sẵn sàng; tác vụ sẽ chờ."
+      compact
+    />
   );
 }
 
@@ -62,8 +46,8 @@ const LIMITS_UNKNOWN =
   'Chưa đọc được giới hạn đính kèm của Muse. Kiểm tra một tài khoản Muse đã đăng nhập (Trang chủ → Tài khoản) để thêm ảnh tham chiếu.';
 
 /**
- * Reference images for the next jobs. What Muse accepts (count, size, formats)
- * comes from the limits read on the accounts (MuseOptions).
+ * Reference images for the next jobs. Muse normalizes outgoing attachments to
+ * .jpg <= 2048px within the 8 MB inline payload ceiling, with no 4-file count cap.
  */
 export function ReferencesField({
   label = 'Ảnh tham chiếu',
@@ -79,11 +63,17 @@ export function ReferencesField({
   onChange: (references: MuseReference[]) => void;
   onError: (cause: unknown) => void;
 }) {
-  const maxFiles = options?.known ? options.maxFiles : 0;
+  const budgetBytes = options?.inlineBudgetBytes || 8 * 1024 * 1024;
   const pick = async () => {
     try {
       const picked = unwrap(await api.pickMuseReferences());
-      onChange([...references, ...picked].slice(0, maxFiles));
+      const merged = [...references];
+      for (const item of picked) {
+        if (!merged.some((r) => r.localUrl === item.localUrl)) {
+          merged.push(item);
+        }
+      }
+      onChange(merged);
     } catch (cause) {
       onError(cause);
     }
@@ -96,9 +86,9 @@ export function ReferencesField({
         {options?.known && (
           <span
             className="studio-field-badge"
-            title={`Muse nhận ${options.imageExtensions.join(', ')}; mỗi ảnh ≤ ${formatBytes(options.maxFileBytes, 0)}.`}
+            title={`Muse nhận ${options.imageExtensions.join(', ')}; ảnh được tự nén .jpg ≤ 2048px lúc gửi trong trần ${formatBytes(budgetBytes, 0)}.`}
           >
-            {references.length}/{maxFiles}
+            {references.length} ảnh
           </span>
         )}
       </span>
@@ -117,18 +107,16 @@ export function ReferencesField({
           </div>
         ))}
         {/* Shown even before Muse's limits are known, locked with the reason. */}
-        {(!options?.known || references.length < maxFiles) && (
-          <button
-            type="button"
-            className="muse-thumb muse-thumb-add"
-            aria-label="Thêm ảnh tham chiếu"
-            title={options?.known ? 'Thêm ảnh tham chiếu' : LIMITS_UNKNOWN}
-            disabled={!options?.known}
-            onClick={() => void pick()}
-          >
-            <Icon icon={ImagePlus} size="lg" />
-          </button>
-        )}
+        <button
+          type="button"
+          className="muse-thumb muse-thumb-add"
+          aria-label="Thêm ảnh tham chiếu"
+          title={options?.known ? 'Thêm ảnh tham chiếu' : LIMITS_UNKNOWN}
+          disabled={!options?.known}
+          onClick={() => void pick()}
+        >
+          <Icon icon={ImagePlus} size="lg" />
+        </button>
       </div>
       {!options?.known && <span className="studio-field-hint">{LIMITS_UNKNOWN}</span>}
     </div>
@@ -170,21 +158,53 @@ export function FormatFields({
   };
   return (
     <div className="muse-format-fields">
-      <label className="studio-field-group">
+      <div className="studio-field-group">
         <span className="studio-field-label">Tỉ lệ</span>
-        <select
-          className="batch-input batch-select"
-          value={ratio}
-          onChange={(e) => pick({ ratio: e.target.value })}
-        >
-          <option value="">Theo prompt</option>
-          {ratios.map((r) => (
-            <option key={r.value} value={r.value}>
-              {r.value} {r.label}
-            </option>
-          ))}
-        </select>
-      </label>
+        {ratios.length > 0 && ratios.length <= 5 ? (
+          <div className="muse-ratio-pills" role="radiogroup" aria-label="Tỉ lệ">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={ratio === ''}
+              className={`muse-ratio-pill${ratio === '' ? ' is-on' : ''}`}
+              onClick={() => pick({ ratio: '' })}
+            >
+              Theo prompt
+            </button>
+            {ratios.map((r) => (
+              <button
+                key={r.value}
+                type="button"
+                role="radio"
+                aria-checked={ratio === r.value}
+                title={`${r.value} ${r.label}`}
+                className={`muse-ratio-pill${ratio === r.value ? ' is-on' : ''}`}
+                onClick={() => pick({ ratio: r.value })}
+              >
+                <span
+                  className={`muse-ratio-frame is-${r.value.replace(':', '-')}`}
+                  aria-hidden="true"
+                />
+                <span>{r.value}</span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <select
+            className="batch-input batch-select"
+            aria-label="Tỉ lệ"
+            value={ratio}
+            onChange={(e) => pick({ ratio: e.target.value })}
+          >
+            <option value="">Theo prompt</option>
+            {ratios.map((r) => (
+              <option key={r.value} value={r.value}>
+                {r.value} {r.label}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
       {video && (
         <label className="studio-field-group">
           <span className="studio-field-label">Thời lượng</span>

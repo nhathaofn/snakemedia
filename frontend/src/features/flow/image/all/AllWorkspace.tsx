@@ -1,9 +1,10 @@
 import { thumbUrl } from '../../../../services';
 import { useCallback, useMemo, useState } from 'react';
-import { X } from 'lucide-react';
+import { BookmarkPlus, X } from 'lucide-react';
 import { QueueFilterBar, QueueTable } from '../../../../components/batch';
 import { PreviousRunToggle } from '../../../../components/feedback';
-import { Icon, Modal } from '../../../../components/ui';
+import { Button, Icon, Modal } from '../../../../components/ui';
+import { SaveToVaultDialog, type VaultImportSource } from '../../../muse/assets/SaveToVaultDialog';
 import { api } from '../../../../services/api';
 import { useAppStore } from '../../../../stores';
 import { FlowImageTaskStatus } from '../../../../types';
@@ -36,6 +37,7 @@ export function AllWorkspace() {
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [filter, setFilter] = useState<TaskFilter>('all');
   const [previewImage, setPreviewImage] = useState<GeneratedImageItem | null>(null);
+  const [vaultSources, setVaultSources] = useState<VaultImportSource[] | null>(null);
   const [gallery, setGallery] = useState<{ task: FlowImageTask; number: number } | null>(null);
   const [bankOpen, setBankOpen] = useState(false);
 
@@ -100,6 +102,15 @@ export function AllWorkspace() {
           return next;
         }),
       preview: setPreviewImage,
+      saveToVault: (task, result) => {
+        if (!result.localUrl) return;
+        setVaultSources([
+          {
+            localUrl: result.localUrl,
+            suggestedPrompt: result.prompt || task.prompt,
+          },
+        ]);
+      },
       showReferences: (task, number) => setGallery({ task, number }),
       cancel: (id) =>
         void api.cancelFlowImageTask(id).then((res) => {
@@ -190,6 +201,31 @@ export function AllWorkspace() {
         }}
         actions={
           <>
+            {selectedTasks.some((t) => t.results.some((r) => r.localUrl)) && (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() =>
+                  setVaultSources(
+                    selectedTasks.flatMap((t) =>
+                      t.results.flatMap((r) =>
+                        r.localUrl
+                          ? [
+                              {
+                                localUrl: r.localUrl,
+                                suggestedPrompt: r.prompt || t.prompt,
+                              },
+                            ]
+                          : [],
+                      ),
+                    ),
+                  )
+                }
+              >
+                <Icon icon={BookmarkPlus} size="sm" />
+                <span>Lưu vào Tư liệu</span>
+              </Button>
+            )}
             <PreviousRunToggle count={offered} />
             <QueueActions
               selectedCount={selectedTasks.length}
@@ -317,6 +353,10 @@ export function AllWorkspace() {
         >
           <img src={previewImage.localUrl} alt={previewImage.prompt} decoding="async" />
         </Modal>
+      )}
+
+      {vaultSources && (
+        <SaveToVaultDialog sources={vaultSources} onClose={() => setVaultSources(null)} />
       )}
     </div>
   );

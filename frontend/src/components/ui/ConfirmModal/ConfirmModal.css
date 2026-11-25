@@ -1,0 +1,17 @@
+/* Shared styling for confirmAction dialogs (matches PreviousRunPrompt spacing). */
+.confirm-dialog-message {
+  margin: 0;
+  padding: var(--space-6) var(--space-8);
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.confirm-dialog-actions {
+  display: flex;
+  width: 100%;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-4);
+}

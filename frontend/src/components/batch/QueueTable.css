@@ -195,6 +195,7 @@
   display: flex;
   min-width: 0;
   align-items: center;
+  gap: var(--space-2);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   line-height: 1.45;
@@ -411,6 +412,8 @@
 
 /* A long prompt inside its cell shows a few lines; the full text is its title. */
 .queue-table-prompt > span {
+  flex: 1;
+  min-width: 0;
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;

@@ -115,7 +115,7 @@ func (p *Provider) cleanAccount(ctx context.Context, rec accounts.Record, text s
 	if err := p.waitSignedIn(ctx, page, time.Duration(p.cfg.Get().Accounts.PageReadySeconds)*time.Second); err != nil {
 		return "", err
 	}
-	reply, _, err := sendNote(ctx, page, text, time.Duration(minutes)*time.Minute, p.cfg.Get().Muse, p.sleep, p.now)
+	reply, _, err := sendNoteWithLabel(ctx, page, text, "dọn chat", time.Duration(minutes)*time.Minute, p.cfg.Get().Muse, p.sleep, p.now)
 	return reply, err
 }
 
@@ -132,7 +132,7 @@ func (p *Provider) reserveForClean(accountID string) bool {
 			return false
 		}
 	}
-	for _, job := range p.jobs.list() {
+	for _, job := range p.jobs.listActive() {
 		if job.Status == MuseJobProcessing && job.AccountID == accountID {
 			return false
 		}

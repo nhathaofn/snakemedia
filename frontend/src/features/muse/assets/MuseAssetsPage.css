@@ -5,6 +5,23 @@
   gap: var(--space-3);
 }
 
+.muse-assets-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.muse-assets-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
 .muse-assets-lead {
   max-width: var(--muse-lead-max);
   color: var(--text-secondary);
@@ -66,8 +83,8 @@
 /* Asset cards: a square cover of up to three views, then tag, name and lock. */
 .muse-assets-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(var(--muse-asset-card-min), 1fr));
-  gap: var(--space-8);
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: var(--space-6);
 }
 
 .muse-asset-card,
@@ -78,12 +95,15 @@
   border-radius: var(--radius-lg);
   background: var(--bg-secondary);
   overflow: hidden;
-  transition: border-color var(--transition-fast);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .muse-asset-card:hover,
 .muse-template-card:hover {
   border-color: var(--primary);
+  box-shadow: var(--shadow-md);
 }
 
 .muse-asset-cover {
@@ -91,7 +111,8 @@
   display: grid;
   aspect-ratio: 4 / 3;
   gap: var(--border-width);
-  background: var(--media-letterbox);
+  background: var(--surface-media);
+  cursor: pointer;
 }
 
 .muse-asset-cover.is-2 {
@@ -132,7 +153,14 @@
   color: var(--accent);
 }
 
-.muse-role-badge.is-product {
+.muse-role-badge.is-animal,
+.muse-role-badge.is-vehicle {
+  color: var(--primary);
+}
+
+.muse-role-badge.is-product,
+.muse-role-badge.is-prop,
+.muse-role-badge.is-document {
   color: var(--warning);
 }
 
@@ -165,8 +193,7 @@
   font-size: var(--font-size-body);
 }
 
-.muse-asset-name span,
-.muse-asset-lock {
+.muse-asset-name span {
   overflow: hidden;
   color: var(--text-secondary);
   font-size: var(--font-size-small);
@@ -174,18 +201,30 @@
   white-space: nowrap;
 }
 
+.muse-asset-lock {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .muse-asset-footer {
   display: flex;
   justify-content: flex-end;
-  gap: var(--space-2);
-  padding: 0 var(--space-4) var(--space-4);
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-4);
+  border-top: var(--border-width) solid var(--border-color);
 }
 
 /* Saved prompts: name and actions on one line, the text clamped below. */
 .muse-templates-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(var(--muse-template-card-min), 1fr));
-  gap: var(--space-8);
+  gap: var(--space-6);
 }
 
 .muse-template-card {
@@ -223,7 +262,7 @@
 
 /* The asset dialog: images on top, tag and name side by side, roles as choices. */
 .muse-asset-dialog {
-  width: min(var(--muse-asset-dialog-width), calc(100vw - var(--space-11)));
+  width: min(760px, calc(100vw - var(--space-11)));
 }
 
 .muse-asset-form {
@@ -378,7 +417,7 @@
 .muse-assets-search input {
   flex: 1;
   min-width: 0;
-  padding: var(--space-4) 0;
+  padding: var(--space-3) 0;
   border: 0;
   background: transparent;
   color: var(--text-primary);
@@ -402,6 +441,11 @@
 .muse-assets-search-clear:hover,
 .muse-batch-clear-btn:hover {
   color: var(--text-primary);
+}
+
+.muse-assets-role-filter,
+.muse-assets-type-filter {
+  height: 36px;
 }
 
 .muse-assets-role-filter {
@@ -473,7 +517,18 @@
 
 /* Batch import dialog */
 .muse-batch-dialog {
-  width: min(var(--muse-batch-dialog-width), calc(100vw - var(--space-11)));
+  width: min(1140px, calc(100vw - var(--space-11)));
+}
+
+.muse-batch-folder-row .batch-folder-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.muse-batch-folder-row .batch-folder-control output {
+  flex: 1 1 220px;
 }
 
 .muse-batch-body {
@@ -543,8 +598,14 @@
 
 .muse-batch-options {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-6);
+}
+
+@media (max-width: 760px) {
+  .muse-batch-options {
+    grid-template-columns: 1fr;
+  }
 }
 
 .muse-batch-table-wrap {
@@ -709,4 +770,341 @@
 
 .muse-batch-footer .muse-dialog-actions {
   width: auto;
+}
+
+/* Asset Vault extensions */
+.muse-vault-project-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.muse-vault-tab {
+  padding: var(--space-2) var(--space-4);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: var(--font-size-small);
+  cursor: pointer;
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.muse-vault-tab:hover {
+  border-color: var(--primary);
+  color: var(--text-primary);
+}
+
+.muse-vault-tab.is-on {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--text-on-primary);
+}
+
+.muse-asset-cover-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+  height: 100%;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: var(--font-size-caption);
+}
+
+.muse-asset-submeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.muse-type-tag,
+.muse-proj-tag {
+  padding: 1px var(--space-3);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+}
+
+.muse-proj-tag {
+  border-color: var(--feedback-primary-border);
+  background: var(--feedback-primary-bg);
+  color: var(--primary);
+}
+
+.muse-asset-count-pill {
+  position: absolute;
+  bottom: var(--space-3);
+  right: var(--space-3);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-full);
+  background: var(--media-overlay);
+  color: var(--text-on-media);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  box-shadow: var(--shadow-md);
+}
+
+.muse-asset-items-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-4);
+}
+
+.muse-asset-items-grid .muse-asset-image.is-add {
+  width: 100%;
+  height: 100%;
+  min-height: 180px;
+}
+
+.muse-vault-item-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+}
+
+.muse-vault-item-card.is-primary {
+  border-color: var(--primary);
+}
+
+.muse-vault-item-card.is-rejected {
+  opacity: 0.6;
+  border-style: dashed;
+}
+
+.muse-vault-item-thumb-wrap {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--media-letterbox);
+}
+
+.muse-vault-item-thumb-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.muse-vault-item-tools {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: flex;
+  gap: var(--space-1);
+}
+
+.muse-vault-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-full);
+  background: var(--media-overlay);
+  color: var(--text-on-media);
+  cursor: pointer;
+  box-shadow: var(--shadow-md);
+}
+
+.muse-vault-tool-btn:hover {
+  background: var(--media-overlay-strong);
+}
+
+.muse-vault-tool-btn.is-on {
+  color: var(--warning);
+}
+
+.muse-vault-tool-btn.is-warn,
+.muse-vault-tool-btn.is-danger {
+  color: var(--danger);
+}
+
+.muse-vault-item-filename {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-caption);
+  color: var(--text-secondary);
+}
+
+.muse-vault-item-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+
+.muse-vault-item-fields .batch-input,
+.muse-batch-table td .batch-input {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-caption);
+  height: 28px;
+}
+
+.muse-batch-table .col-img {
+  min-width: 160px;
+}
+
+.muse-batch-table .col-proj {
+  min-width: 118px;
+}
+
+.muse-batch-table .col-tag {
+  min-width: 150px;
+}
+
+.muse-batch-table .col-meta {
+  min-width: 210px;
+}
+
+.muse-batch-table .col-role {
+  min-width: 160px;
+}
+
+.muse-batch-table .col-status {
+  min-width: 160px;
+}
+
+.muse-form-row-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+@media (max-width: 560px) {
+  .muse-form-row-3 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.muse-vault-save-head {
+  display: flex;
+  gap: var(--space-4);
+  align-items: flex-start;
+}
+
+.muse-vault-save-thumb {
+  width: 88px;
+  height: 88px;
+  border-radius: var(--radius-md);
+  object-fit: cover;
+  background: var(--media-letterbox);
+  flex-shrink: 0;
+}
+
+.muse-vault-save-meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  flex: 1;
+}
+
+.muse-vault-preview-name {
+  display: block;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-small);
+  color: var(--primary);
+  word-break: break-all;
+}
+
+.muse-vault-mode-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.muse-vault-mode-btn {
+  padding: var(--space-1) var(--space-3);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+}
+
+.muse-vault-mode-btn.is-on {
+  border-color: var(--primary);
+  color: var(--primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.muse-batch-folder-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.muse-batch-quick-bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+}
+
+.muse-batch-quick-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.muse-batch-quick-input {
+  width: 120px;
+  height: 28px;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--font-size-small);
+}
+
+.muse-batch-file-meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.muse-batch-hint {
+  font-size: var(--font-size-caption);
+  color: var(--warning);
+}
+
+.muse-batch-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.muse-batch-meta-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(64px, 1fr));
+  gap: var(--space-1);
+}
+
+.muse-assets-type-filter {
+  width: auto;
+  min-width: 140px;
 }

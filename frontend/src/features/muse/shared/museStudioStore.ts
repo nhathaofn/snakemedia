@@ -28,9 +28,10 @@ export const useMuseStudioStore = create<MuseStudioState>((set, get) => ({
     started = true;
     get()
       .load()
-      .catch((cause: unknown) =>
-        set({ loaded: true, loadError: cause instanceof Error ? cause.message : String(cause) }),
-      );
+      .catch((cause: unknown) => {
+        started = false;
+        set({ loaded: true, loadError: cause instanceof Error ? cause.message : String(cause) });
+      });
   },
   load: async () => {
     const [assets, templates] = await Promise.all([

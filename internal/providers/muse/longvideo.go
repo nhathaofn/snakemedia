@@ -38,31 +38,19 @@ func clipCount(seconds int) int {
 	return (seconds + museClipSeconds - 1) / museClipSeconds
 }
 
-// longVideoLines are the guide of a video made of several clips in one chat:
-// the plan rule, how to split, keep and join the clips, the per-message limit
-// and the status protocol parseLongStatus reads. Nothing in it names a genre,
-// language or voice.
+// longVideoLines provide only the technical multi-clip protocol for videos
+// longer than one Muse clip (~10s): sequential clip spans, joining into one MP4,
+// the per-message video call limit, and the STATUS line read by parseLongStatus.
 func longVideoLines(job MuseJob) []string {
 	n := clipCount(job.Duration)
 	shape := ""
 	if r, ok := ratioFor(job.Ratio, job.Kind); ok {
 		shape = ", " + r.Value
 	}
-	anchors := "Before clip 1, make an anchor image for each recurring person, object or place and reuse it in every clip it appears in."
-	if len(job.References) > 0 || len(job.Frames) > 0 {
-		anchors = "Use the attached images as anchors: storyboard frames for their assigned scenes, other images in their roles; make extra anchors only for recurring subjects they do not cover."
-	}
 	return []string{
-		fmt.Sprintf("Long video: this is longer than one generated clip (about %d s). Make it as %d clips (%s) and join them into one MP4 of %d s%s.", museClipSeconds, n, clipTable(job.Duration), job.Duration, shape),
-		planRule[MuseJobVideo],
-		"1. Plan first: split the prompt over the clips without skipping, repeating or reordering anything, and put each clip's exact lines and speakers in that clip.",
-		"2. Keep every recurring person, outfit, voice, place and style the same in all clips: write their descriptions once and reuse them word for word in each clip prompt. " + anchors,
-		"3. From clip 2 on, each clip opens as a cut to a new camera angle, never from the previous clip's last frame; keep positions, props and light continuous.",
-		"4. Join the clips in order as straight cuts at one resolution and frame rate, and check the final length.",
-		fmt.Sprintf("5. One message allows at most %d successful video generations, retries included. If clips are still missing at that limit, keep them and stop; I will ask you to continue in this chat.", museVideosPerMessage),
-		"6. Do not retry an unchanged refused clip. Use an allowed alternative that keeps the event and lines and say so in CHANGED, or stop with REFUSED.",
-		fmt.Sprintf("If the lines cannot fit in %d seconds, make nothing and reply STATUS: TOO SHORT <seconds needed>.", job.Duration),
-		"End your reply with CHANGED: <what you changed and why> (only if you changed something), then exactly one line: STATUS: DONE (the joined file is exported), STATUS: INCOMPLETE <clips missing>, STATUS: TOO SHORT <seconds needed> or STATUS: REFUSED <why>.",
+		fmt.Sprintf("Long video: generate %d sequential clips (%s) progressing through the prompt without repeating scenes, keep recurring characters and settings consistent across clean cuts (do not chain from the previous clip's last frame), and join them in order into one %d s MP4%s.", n, clipTable(job.Duration), job.Duration, shape),
+		fmt.Sprintf("At most %d video generations are allowed per message; if clips remain at that limit, stop and I will ask you to continue in this chat.", museVideosPerMessage),
+		"End your reply with CHANGED: <note> (only if a blocked shot had to be adjusted), then one line: STATUS: DONE (joined MP4 exported), STATUS: INCOMPLETE <missing clips>, or STATUS: REFUSED <reason>.",
 	}
 }
 
@@ -79,7 +67,7 @@ func clipTable(seconds int) string {
 
 // continueMessage is sent into a long video's chat when Muse stopped with
 // clips missing: same project, same plan, only the missing clips.
-const continueMessage = "Continue the same video in this chat with the same plan, anchors and valid clips. Make only the missing or defective clips, then join and check the whole video. End with CHANGED if applicable and exactly one STATUS line as before; never DONE for a partial result."
+const continueMessage = "Continue the same video in this chat: generate only the missing clips, join all clips in order into the complete MP4, and end with CHANGED if applicable and one STATUS line (STATUS: DONE or STATUS: INCOMPLETE <missing clips>)."
 
 // longStatus is how Muse said a long video ended, read from the last lines
 // of its reply.
@@ -101,8 +89,8 @@ const (
 )
 
 var (
-	statusRe  = regexp.MustCompile(`(?im)^\W*STATUS\W*:\s*(DONE|INCOMPLETE|REFUSED|TOO\s+SHORT)\b[\s:.\-–—*_]*(.*?)\W*$`)
-	changedRe = regexp.MustCompile(`(?im)^\W*CHANGED\W*:\s*(.+?)\s*$`)
+	statusRe  = regexp.MustCompile(`(?im)^[\s\p{P}*_]*STATUS[\s\p{P}*_]*:\s*(DONE|INCOMPLETE|REFUSED|TOO\s+SHORT)\b[\s:.\-–—*_]*(.*?)[\s\p{P}*_]*$`)
+	changedRe = regexp.MustCompile(`(?im)^[\s\p{P}*_]*CHANGED[\s\p{P}*_]*:\s*(.+?)\s*$`)
 )
 
 // parseLongStatus reads the last status line (and CHANGED line) of a reply.
@@ -113,9 +101,22 @@ func parseLongStatus(text string) longStatus {
 		st.State, st.Detail = strings.Join(strings.Fields(strings.ToUpper(last[1])), " "), strings.TrimSpace(last[2])
 	}
 	if m := changedRe.FindAllStringSubmatch(text, -1); len(m) > 0 {
-		st.Changed = strings.TrimRight(strings.TrimSpace(m[len(m)-1][1]), ";.")
+		changed := strings.TrimRight(strings.TrimSpace(m[len(m)-1][1]), ";.")
+		if !isEmptyChangedValue(changed) {
+			st.Changed = changed
+		}
 	}
 	return st
+}
+
+func isEmptyChangedValue(s string) bool {
+	clean := strings.TrimSpace(strings.TrimRight(s, ";."))
+	return clean == "" ||
+		strings.EqualFold(clean, "none") ||
+		strings.EqualFold(clean, "n/a") ||
+		clean == "-" ||
+		strings.EqualFold(clean, "không") ||
+		strings.EqualFold(clean, "không có")
 }
 
 // repliesAfter is the whole text of the chat's answers after the first seen

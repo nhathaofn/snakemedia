@@ -81,6 +81,9 @@ type MuseConfig struct {
 	// batch form); empty uses the app's default folder (paths.MuseOutputDir).
 	// Single jobs are not saved; their files are downloaded by hand.
 	OutputDir string `json:"outputDir"`
+	// AssetVaultDir is the managed Muse Asset Vault directory chosen by the user;
+	// empty uses the app's default AppData location (paths.MuseAssetsDir).
+	AssetVaultDir string `json:"assetVaultDir,omitempty"`
 	// SetupMessage is sent in a chat of its own on every Muse account once it
 	// is signed in. Failures are noted without undoing sign-in.
 	// Once Muse accepts it, it is not sent again; empty sends nothing.
@@ -103,15 +106,31 @@ type MuseConfig struct {
 // MaxMuseSetupMessage caps the setup message, in characters.
 const MaxMuseSetupMessage = 8000
 
-// defaultMuseSetupMessage asks Muse to treat every generation request on its
-// own, so nothing from earlier outputs leaks into a new one.
-const defaultMuseSetupMessage = `Please save the following rule to this account's long-term / permanent memory and apply it across the whole account, in every conversation and every future generation, until I cancel or change it myself:
+// defaultMuseSetupMessage is empty by default so Muse's agent is not constrained
+// by account-wide memory rules unless the user explicitly configures one.
+const defaultMuseSetupMessage = ""
+
+// legacyMuseSetupMessages are the former built-in default setup messages.
+// Existing config files still holding one of them are cleared on load so
+// accounts are no longer seeded with legacy global rules automatically.
+var legacyMuseSetupMessages = []string{
+	`Please save the following rule to this account's long-term / permanent memory and apply it across the whole account, in every conversation and every future generation, until I cancel or change it myself:
+
+GLOBAL RULE: Every request I make to create an image, a video or any other new output is a completely independent request. Never use, reference or infer anything from any output created earlier on your own, including subject, characters, style, aspect ratio, duration, resolution and old files, even when my generation prompt does not mention this rule. Use only the parameters in the current request. Reuse an earlier output only when I explicitly say in that request that I want to continue, edit or reuse it.
+
+After saving it, please confirm: where you saved it, what its scope is, and whether I need to repeat this rule in later generations.`,
+	`Please save the following rule to this account's long-term / permanent memory and apply it across the whole account, in every conversation and every future generation, until I cancel or change it myself:
 
 GLOBAL RULE: Every request I make to create an image, a video or any other new output is a completely independent request. Never use, reference or infer anything from any output created earlier on your own, including subject, characters, style, aspect ratio, duration, resolution and old files, even when my generation prompt does not mention this rule. Use only the parameters in the current request. Reuse an earlier output only when I explicitly say in that request that I want to continue, edit or reuse it.
 
 Apply each request's reference roles and locks only to their assigned subjects and attributes. Preserve its exact dialogue, language and requested style. Do not force photorealism or rapid pacing when they are not requested.
 
-Please confirm whether you can actually save this rule across conversations and its scope. If permanent memory is unavailable, say so explicitly; do not claim it was saved. Each generation request will also carry its own rules.`
+Please confirm whether you can actually save this rule across conversations and its scope. If permanent memory is unavailable, say so explicitly; do not claim it was saved. Each generation request will also carry its own rules.`,
+}
+
+func isLegacyMuseSetupMessage(msg string) bool {
+	return isOneOf(msg, legacyMuseSetupMessages...)
+}
 
 // defaultMuseCleanupMessage asks Muse to delete every other chat of the
 // account without asking first.

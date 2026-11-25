@@ -23,6 +23,8 @@ import (
 const (
 	// Route is the URL prefix the asset server uses for stored media.
 	Route = "/flow-media/"
+	// VaultRoute is the URL prefix the asset server uses for the managed Muse Asset Vault.
+	VaultRoute = "/muse-vault/"
 	// maxSaveAttempts bounds the numbered names tried before giving up on a folder.
 	maxSaveAttempts = 1000
 )
@@ -77,6 +79,10 @@ type Store struct {
 	dynamicRoots []func() []string
 	// formats are the saved image formats by stored-name prefix (ConvertImages).
 	formats map[string]func() string
+	// vaultDir resolves the active Muse Asset Vault directory; vaultThumbDir keeps
+	// thumbnails in AppData instead of polluting the user-visible vault folder.
+	vaultDir      func() string
+	vaultThumbDir string
 }
 
 // NewStore keeps media in dir, created on first use.
@@ -104,6 +110,61 @@ func (s *Store) Put(id, contentType, fallbackExt string, data []byte) (string, e
 		return "", err
 	}
 	return Route + name, nil
+}
+
+// SetVaultDir configures the directory resolver and thumbnail cache folder for
+// serving managed Muse Asset Vault files under VaultRoute.
+func (s *Store) SetVaultDir(dirFn func() string, thumbCacheDir string) {
+	s.mu.Lock()
+	s.vaultDir = dirFn
+	s.vaultThumbDir = thumbCacheDir
+	s.mu.Unlock()
+}
+
+// VaultURL returns the asset-server URL for a relative path inside the Vault.
+func VaultURL(relPath string) string {
+	slash := strings.TrimPrefix(filepath.ToSlash(relPath), "/")
+	return VaultRoute + slash
+}
+
+// VaultPath resolves a VaultRoute URL to a file inside the active Asset Vault,
+// rejecting path traversal, symlinks outside the vault, and non-regular paths.
+func (s *Store) VaultPath(localURL string) (string, error) {
+	rel := strings.TrimPrefix(localURL, VaultRoute)
+	if rel == localURL || rel == "" || strings.ContainsRune(rel, 0) || strings.Contains(rel, `\`) || strings.Contains(rel, ":") {
+		return "", fmt.Errorf("Tệp %q không thuộc kho tư liệu.", localURL)
+	}
+	parts := strings.Split(rel, "/")
+	for _, p := range parts {
+		if p == "" || p == "." || p == ".." {
+			return "", fmt.Errorf("Tệp %q không thuộc kho tư liệu.", localURL)
+		}
+	}
+	s.mu.Lock()
+	dirFn := s.vaultDir
+	s.mu.Unlock()
+	if dirFn == nil {
+		return "", fmt.Errorf("Kho tư liệu chưa được khởi tạo.")
+	}
+	root := strings.TrimSpace(dirFn())
+	cleanRoot, err := cleanDir(root)
+	if err != nil {
+		return "", fmt.Errorf("Kho tư liệu chưa hợp lệ: %w", err)
+	}
+	candidate := filepath.Join(append([]string{cleanRoot}, parts...)...)
+	cleanTarget, err := cleanDir(candidate)
+	if err != nil || !inside(cleanRoot, cleanTarget) || cleanTarget == cleanRoot {
+		return "", fmt.Errorf("Tệp %q không thuộc kho tư liệu.", localURL)
+	}
+	return cleanTarget, nil
+}
+
+// OpenPath resolves either a stored /flow-media/ URL or a /muse-vault/ URL to a disk path.
+func (s *Store) OpenPath(localURL string) (string, error) {
+	if strings.HasPrefix(localURL, VaultRoute) {
+		return s.VaultPath(localURL)
+	}
+	return s.Path(localURL)
 }
 
 // Path returns the stored file behind a local URL, or an error for anything
@@ -155,6 +216,7 @@ func (s *Store) Save(localURL string, chooseDir func(defaultDir string) (string,
 	if err != nil {
 		return models.ErrorResponse[SaveResult](err.Error(), models.CodeInternal)
 	}
+	s.AllowRoot(dir)
 	s.mu.Lock()
 	s.saveDir = dir
 	s.mu.Unlock()
@@ -171,7 +233,7 @@ func (s *Store) SaveTo(localURL, dir, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if name == "" || name == "." || name == ".." || name != filepath.Base(name) {
+	if !validSaveFileName(name) {
 		return "", fmt.Errorf("Tên tệp %q không hợp lệ.", name)
 	}
 	if dir, err = s.CheckDir(dir); err != nil {
@@ -181,6 +243,21 @@ func (s *Store) SaveTo(localURL, dir, name string) (string, error) {
 		return "", fmt.Errorf("Không tạo được thư mục %q: %w", dir, err)
 	}
 	return s.saveFile(dir, name, src)
+}
+
+func validSaveFileName(name string) bool {
+	if name == "" || name == "." || name == ".." || name != filepath.Base(name) {
+		return false
+	}
+	if strings.ContainsAny(name, "<>:\"/\\|?*") {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // ImportVideo copies the video file chooseFile returns into the media folder,
@@ -230,15 +307,20 @@ func (s *Store) ImportVideo(accepted []string, chooseFile func() (string, error)
 func (s *Store) Middleware(next http.Handler) http.Handler {
 	files := http.StripPrefix(Route, http.FileServer(http.Dir(s.dir)))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, VaultRoute) {
+			s.serveVault(w, r)
+			return
+		}
 		if !strings.HasPrefix(r.URL.Path, Route) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if strings.HasSuffix(r.URL.Path, "/") {
+		rel := strings.TrimPrefix(r.URL.Path, Route)
+		if rel == "" || strings.HasSuffix(r.URL.Path, "/") || hasHiddenSegment(rel) {
 			http.NotFound(w, r)
 			return
 		}
-		if r.URL.Query().Has(ThumbQuery) && s.serveThumb(w, r, strings.TrimPrefix(r.URL.Path, Route)) {
+		if r.URL.Query().Has(ThumbQuery) && s.serveThumb(w, r, rel) {
 			return
 		}
 		if contentType, ok := contentTypes[strings.ToLower(filepath.Ext(r.URL.Path))]; ok {
@@ -246,6 +328,41 @@ func (s *Store) Middleware(next http.Handler) http.Handler {
 		}
 		files.ServeHTTP(w, r)
 	})
+}
+
+func (s *Store) serveVault(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.URL.Path, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	fullPath, err := s.VaultPath(r.URL.Path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !imageExts[strings.ToLower(filepath.Ext(fullPath))] {
+		http.NotFound(w, r)
+		return
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil || !info.Mode().IsRegular() {
+		http.NotFound(w, r)
+		return
+	}
+	if r.URL.Query().Has(ThumbQuery) && s.serveVaultThumb(w, r, strings.TrimPrefix(r.URL.Path, VaultRoute), fullPath, info) {
+		return
+	}
+	w.Header().Set("Cache-Control", "no-cache")
+	http.ServeFile(w, r, fullPath)
+}
+
+func hasHiddenSegment(rel string) bool {
+	for _, seg := range strings.FieldsFunc(rel, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if strings.HasPrefix(seg, ".") {
+			return true
+		}
+	}
+	return false
 }
 
 func fileBase(id string) string {

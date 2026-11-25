@@ -2,6 +2,7 @@ package muse
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -94,15 +95,18 @@ func (s *Site) CheckVideo(ctx context.Context, b *browser.Browser, rec accounts.
 
 	prompt := videoCheckPrompt()
 	sendTimeout := max(time.Duration(cfg.SendTimeoutSeconds)*time.Second, 2*time.Minute)
-	sendCtx, cancelSend := context.WithTimeout(ctx, sendTimeout)
-	defer cancelSend()
-	res, err := page.Send(sendCtx, prompt, nil)
+	sendAttempt := func() (SendResult, error) {
+		sendCtx, cancelSend := context.WithTimeout(ctx, sendTimeout)
+		defer cancelSend()
+		return page.Send(sendCtx, prompt, nil)
+	}
+	res, err := sendAttempt()
 	for retry := 0; err == nil && strings.HasPrefix(res.Reason, "not_ready") && retry < 2; retry++ {
 		if s.sleepFn(ctx, 2*time.Second) != nil {
 			return insp, ctx.Err()
 		}
 		_ = s.waitVideoTabReady(ctx, page, 15*time.Second)
-		res, err = page.Send(sendCtx, prompt, nil)
+		res, err = sendAttempt()
 	}
 	if err != nil {
 		if b != nil && b.Port > 0 {
@@ -145,10 +149,8 @@ func (s *Site) CheckVideo(ctx context.Context, b *browser.Browser, rec accounts.
 		}
 	}
 	if sid == "" {
-		insp.Fatal = "Muse không trả về mã phiên khi kiểm tra tạo video."
-		insp.DisableAccount = true
 		insp.Data, insp.Usage = data, accountUsage(data)
-		return insp, nil
+		return insp, errors.New("Muse không trả về mã phiên khi kiểm tra tạo video; hãy thử lại.")
 	}
 
 	limit := time.Duration(cfg.VideoTimeoutMinutes) * time.Minute
@@ -157,10 +159,8 @@ func (s *Site) CheckVideo(ctx context.Context, b *browser.Browser, rec accounts.
 	}
 	ended, replies, pollErr := s.waitVideoCheck(ctx, page, sid, limit, cfg.PollErrorLimit)
 	if pollErr != nil {
-		insp.Fatal = "Kiểm tra tạo video chưa hoàn tất: " + pollErr.Error()
-		insp.DisableAccount = true
 		insp.Data, insp.Usage = data, accountUsage(data)
-		return insp, nil
+		return insp, fmt.Errorf("Kiểm tra tạo video chưa hoàn tất (thử lại): %w", pollErr)
 	}
 
 	wanted, _ := wantedMedia(replies, MuseJobVideo)

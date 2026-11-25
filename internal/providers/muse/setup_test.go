@@ -3,7 +3,6 @@ package muse
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -13,15 +12,19 @@ import (
 
 func setupConfig() config.MuseConfig {
 	cfg := config.DefaultMuseConfig()
+	cfg.SetupMessage = "Custom setup note"
 	cfg.PollIntervalMS = 1000
 	return cfg
 }
 
 func noSleep(context.Context, time.Duration) error { return nil }
 
-// The setup message goes out once in its own chat (no attachments) and Muse
-// replying is what counts; the reply is kept.
+// DefaultMuseConfig leaves SetupMessage empty so no setup chat is sent unless
+// configured; when configured, it goes out once in its own chat and keeps the reply.
 func TestSendSetupWaitsForMuseReply(t *testing.T) {
+	if reply, sent, err := sendSetup(context.Background(), &fakePage{}, config.DefaultMuseConfig(), noSleep, time.Now); err != nil || sent || reply != "" {
+		t.Fatalf("default empty setup sent: reply=%q sent=%v err=%v", reply, sent, err)
+	}
 	page := &fakePage{
 		sendRes:  SendResult{OK: true, SessionID: "s1"},
 		statuses: []string{"running", "completed"},
@@ -31,7 +34,7 @@ func TestSendSetupWaitsForMuseReply(t *testing.T) {
 	if err != nil || !sent || reply != "Saved to memory." {
 		t.Fatalf("reply %q, sent %v, err %v", reply, sent, err)
 	}
-	if len(page.sends) != 1 || !strings.HasPrefix(page.sends[0], "Please save the following rule") || page.attachments[0] != nil {
+	if len(page.sends) != 1 || page.sends[0] != "Custom setup note" || page.attachments[0] != nil {
 		t.Fatalf("sends %q %v", page.sends, page.attachments)
 	}
 }

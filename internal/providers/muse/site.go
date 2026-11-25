@@ -244,7 +244,19 @@ func (s *Site) Inspect(ctx context.Context, b *browser.Browser, rec accounts.Rec
 				Note:               "Không tạo được video (đã tắt kiểm tra video, chỉ tạo ảnh): " + detail,
 			}, nil
 		case restrictDailyVideo24h:
-			until := s.nowFn().Add(24 * time.Hour)
+			if rec.SkipVideoCheck {
+				// Account is already configured as image-only: keep it active for images.
+				if quotaResumes(data, quota) || (quota != nil && !quota.weeklyOut() && data.RestReason == restDailyVideo) {
+					data.RestReason = ""
+					return accounts.Inspection{SignedIn: true, Usage: accountUsage(data), Data: data, Resume: true}, nil
+				}
+				return accounts.Inspection{SignedIn: true, Usage: accountUsage(data), Data: data}, nil
+			}
+			now := s.nowFn()
+			until := now.Add(24 * time.Hour)
+			if parsed, err := time.Parse(time.RFC3339, rec.PausedUntil); err == nil && parsed.After(now) {
+				until = parsed
+			}
 			data.RestReason = restDailyVideo
 			return accounts.Inspection{
 				SignedIn:       true,
@@ -257,7 +269,15 @@ func (s *Site) Inspect(ctx context.Context, b *browser.Browser, rec accounts.Rec
 			}, nil
 		}
 	}
+	now := s.nowFn()
 	resume := quotaResumes(data, quota)
+	if !resume && quota != nil && !quota.weeklyOut() && data.RestReason != restLimit {
+		parsedUntil, pauseErr := time.Parse(time.RFC3339, rec.PausedUntil)
+		if (data.RestReason == restDailyVideo && rec.SkipVideoCheck) ||
+			(data.RestReason == restDailyVideo && pauseErr == nil && !now.Before(parsedUntil)) {
+			resume = true
+		}
+	}
 	if resume {
 		data.RestReason = ""
 	}

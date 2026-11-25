@@ -143,10 +143,23 @@ func (s *Service) install(ctx context.Context, spec Spec, src Source) error {
 		return err
 	}
 	target := s.toolDir(spec.ID)
-	if err := os.RemoveAll(target); err != nil {
-		return fmt.Errorf("Không thay được bản %s cũ (có thể đang được dùng): %w", spec.Name, err)
+	backup := ""
+	if _, statErr := os.Stat(target); statErr == nil {
+		backup = filepath.Join(s.dir, fmt.Sprintf(".backup-%s-%d", spec.ID, time.Now().UnixNano()))
+		if err := os.Rename(target, backup); err != nil {
+			return fmt.Errorf("Không thay được bản %s cũ (có thể đang được dùng): %w", spec.Name, err)
+		}
 	}
-	return os.Rename(stage, target)
+	if err := os.Rename(stage, target); err != nil {
+		if backup != "" {
+			_ = os.Rename(backup, target)
+		}
+		return fmt.Errorf("Không cài được bản %s mới: %w", spec.Name, err)
+	}
+	if backup != "" {
+		_ = os.RemoveAll(backup)
+	}
+	return nil
 }
 
 func (s *Service) get(ctx context.Context, url string) (*http.Response, error) {

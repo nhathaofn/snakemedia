@@ -1,11 +1,8 @@
-import { thumbUrl } from '../../../services';
 import { useMemo, useRef, useState } from 'react';
 import {
   CheckSquare,
-  FileText,
+  FolderOpen,
   FolderPlus,
-  ImagePlus,
-  Pencil,
   Plus,
   Search,
   Square,
@@ -13,30 +10,34 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import '../../../components/batch/BatchForm.css';
+import '../../../components/studio/Studio.css';
 import '../shared/Muse.css';
 import './MuseAssetsPage.css';
-import { Button, Icon, IconAction, Modal } from '../../../components/ui';
+import { Button, Icon, confirmAction } from '../../../components/ui';
 import { api, unwrap } from '../../../services';
 import { useAppStore } from '../../../stores';
-import { MuseAsset, MusePromptTemplate, MuseRefRole } from '../../../types';
-import { useMuseStore } from '../shared/museStore';
+import { MuseAsset, MuseAssetType, MuseRefRole } from '../../../types';
 import { useMuseStudio } from '../shared/StudioExtras';
-import { roleOrder, roles } from './assetRoles';
+import { AssetCard } from './AssetCard';
+import { AssetDialog } from './AssetDialog';
+import { ASSET_TYPES, defaultTypeForRole, roleOrder, roles } from './assetRoles';
 import { BatchImportAssetsDialog } from './BatchImportAssetsDialog';
+import { TemplateSection } from './TemplateSection';
 
-const emptyAsset = (): MuseAsset =>
+const emptyAsset = (defaultProject = ''): MuseAsset =>
   MuseAsset.createFrom({
     id: '',
+    project: defaultProject,
+    type: MuseAssetType.Char,
     tag: '',
     name: '',
     role: MuseRefRole.Character,
     lock: '',
     images: [],
+    items: [],
     createdAt: '',
   });
-
-const emptyTemplate = (): MusePromptTemplate =>
-  MusePromptTemplate.createFrom({ id: '', name: '', text: '', createdAt: '' });
 
 /**
  * Tư liệu: characters, products, settings and styles kept by the app. A prompt
@@ -48,13 +49,13 @@ export function MuseAssetsPage() {
   const addToast = useAppStore((s) => s.addToast);
   const [editing, setEditing] = useState<MuseAsset | null>(null);
   const [batchOpen, setBatchOpen] = useState(false);
-  const [template, setTemplate] = useState<MusePromptTemplate | null>(null);
   const [search, setSearch] = useState('');
+  const [projectFilter, setProjectFilter] = useState<'all' | '_chung' | string>('all');
+  const [typeFilter, setTypeFilter] = useState<'all' | MuseAssetType>('all');
   const [roleFilter, setRoleFilter] = useState<'all' | MuseRefRole>('all');
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [bulkRole, setBulkRole] = useState<MuseRefRole>(MuseRefRole.Character);
   const lastClickedId = useRef<string | null>(null);
-  const shiftHeld = useRef(false);
 
   /** Runs a change, reloads the library, and reports whether it worked. */
   const act = async (action: () => Promise<void>) => {
@@ -68,6 +69,14 @@ export function MuseAssetsPage() {
     }
   };
 
+  const projects = useMemo(
+    () =>
+      Array.from(
+        new Set(assets.map((a) => (a.project ?? '').trim()).filter((p) => p !== '')),
+      ).sort(),
+    [assets],
+  );
+
   const roleCounts = useMemo(() => {
     const counts = new Map<MuseRefRole, number>();
     for (const a of assets) {
@@ -79,15 +88,23 @@ export function MuseAssetsPage() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase().replace(/^@/, '');
     return assets.filter((a) => {
+      const proj = (a.project ?? '').trim();
+      if (projectFilter === '_chung' && proj !== '') return false;
+      if (projectFilter !== 'all' && projectFilter !== '_chung' && proj !== projectFilter) {
+        return false;
+      }
+      const effType = a.type || defaultTypeForRole(a.role);
+      if (typeFilter !== 'all' && effType !== typeFilter) return false;
       if (roleFilter !== 'all' && a.role !== roleFilter) return false;
       if (!q) return true;
       return (
         a.tag.toLowerCase().includes(q) ||
         a.name.toLowerCase().includes(q) ||
+        proj.toLowerCase().includes(q) ||
         (a.lock ?? '').toLowerCase().includes(q)
       );
     });
-  }, [assets, roleFilter, search]);
+  }, [assets, projectFilter, typeFilter, roleFilter, search]);
 
   const liveSelectedIds = useMemo(() => {
     const existing = new Set(assets.map((a) => a.id));
@@ -135,17 +152,41 @@ export function MuseAssetsPage() {
 
   const removeSelected = () => {
     if (liveSelectedIds.length === 0) return;
-    if (
-      !window.confirm(
-        `Xoá ${liveSelectedIds.length} tư liệu đã chọn? Ảnh không còn tác vụ nào dùng sẽ được xoá khỏi máy ngay.`,
-      )
-    ) {
-      return;
-    }
     void act(async () => {
+      if (
+        !(await confirmAction({
+          title: 'Xoá tư liệu đã chọn?',
+          message: `Xoá ${liveSelectedIds.length} tư liệu đã chọn? Ảnh không còn tác vụ nào dùng sẽ được xoá khỏi máy ngay.`,
+          confirmLabel: 'Xoá',
+          danger: true,
+        }))
+      ) {
+        return;
+      }
       const n = unwrap(await api.removeMuseAssets(liveSelectedIds));
       setSelectedIds(new Set());
       addToast({ type: 'success', message: `Đã xoá ${n} tư liệu.` });
+    });
+  };
+
+  const removeOne = (asset: MuseAsset) => {
+    void act(async () => {
+      if (
+        !(await confirmAction({
+          title: `Xoá @${asset.tag}?`,
+          message: `Xoá @${asset.tag}? Ảnh không còn tác vụ nào dùng sẽ được xoá khỏi Kho ngay.`,
+          confirmLabel: 'Xoá',
+          danger: true,
+        }))
+      )
+        return;
+      unwrap(await api.removeMuseAssets([asset.id]));
+      setSelectedIds((prev) => {
+        if (!prev.has(asset.id)) return prev;
+        const next = new Set(prev);
+        next.delete(asset.id);
+        return next;
+      });
     });
   };
 
@@ -164,18 +205,47 @@ export function MuseAssetsPage() {
     <div className="page-shell muse-page">
       <header className="muse-header">
         <div className="muse-assets-heading">
-          <h1 className="muse-title">Tư liệu Muse</h1>
+          <div className="muse-assets-title-row">
+            <h1 className="muse-title">Kho Tư liệu Muse</h1>
+            <span className="muse-assets-count">
+              {assets.length} tư liệu · {templates.length} mẫu
+            </span>
+          </div>
           <p className="muse-assets-lead">
-            Gọi trong prompt bằng <code>@tag</code> hoặc đúng tên. Ảnh được gửi kèm vai trò và chi
-            tiết khoá để nhân vật, sản phẩm giữ đồng nhất.
+            Gọi trong prompt bằng <code>@tag</code> hoặc <code>@tag_góc_trạng_thái</code> (mặc định
+            lấy ảnh chính). File gốc lưu nguyên vẹn trong Kho và tự đổi tên theo chuẩn.
           </p>
         </div>
         <div className="muse-assets-header-actions">
+          <Button
+            variant="ghost"
+            onClick={() =>
+              void api
+                .openMuseAssetVaultFolder()
+                .then((res) => {
+                  if (!res.success)
+                    addToast({ type: 'error', message: res.error || 'Lỗi mở thư mục' });
+                })
+                .catch(() => {})
+            }
+          >
+            <Icon icon={FolderOpen} />
+            <span>Mở kho ảnh</span>
+          </Button>
           <Button variant="secondary" onClick={() => setBatchOpen(true)}>
             <Icon icon={FolderPlus} />
-            <span>Thêm nhanh từ thư mục</span>
+            <span>Nhập hàng loạt</span>
           </Button>
-          <Button variant="primary" onClick={() => setEditing(emptyAsset())}>
+          <Button
+            variant="primary"
+            onClick={() =>
+              setEditing(
+                emptyAsset(
+                  projectFilter !== 'all' && projectFilter !== '_chung' ? projectFilter : '',
+                ),
+              )
+            }
+          >
             <Icon icon={Plus} />
             <span>Thêm tư liệu</span>
           </Button>
@@ -215,13 +285,16 @@ export function MuseAssetsPage() {
                 variant="secondary"
                 size="sm"
                 onClick={() => {
-                  if (
-                    !window.confirm(
-                      `Xoá tất cả ${assets.length} tư liệu? Ảnh không còn tác vụ nào dùng sẽ được xoá khỏi máy ngay.`,
-                    )
-                  )
-                    return;
                   void act(async () => {
+                    if (
+                      !(await confirmAction({
+                        title: 'Xoá tất cả tư liệu?',
+                        message: `Xoá tất cả ${assets.length} tư liệu? Ảnh không còn tác vụ nào dùng sẽ được xoá khỏi máy ngay.`,
+                        confirmLabel: 'Xoá tất cả',
+                        danger: true,
+                      }))
+                    )
+                      return;
                     const n = unwrap(await api.removeMuseAssets(assets.map((a) => a.id)));
                     setSelectedIds(new Set());
                     addToast({ type: 'success', message: `Đã xoá ${n} tư liệu.` });
@@ -236,40 +309,83 @@ export function MuseAssetsPage() {
         </div>
 
         {assets.length > 0 && (
-          <div className="muse-assets-toolbar">
-            <div className="muse-assets-search">
-              <Icon icon={Search} size="sm" />
-              <input
-                type="text"
-                value={search}
-                placeholder="Tìm theo @tag, tên hoặc prompt khoá…"
-                aria-label="Tìm kiếm tư liệu"
-                onChange={(e) => setSearch(e.target.value)}
-              />
-              {search && (
+          <div className="muse-assets-controls">
+            {projects.length > 0 && (
+              <div className="muse-vault-project-tabs" role="tablist" aria-label="Lọc theo dự án">
                 <button
                   type="button"
-                  className="muse-assets-search-clear"
-                  aria-label="Xoá tìm kiếm"
-                  onClick={() => setSearch('')}
+                  className={`muse-vault-tab${projectFilter === 'all' ? ' is-on' : ''}`}
+                  onClick={() => setProjectFilter('all')}
                 >
-                  <Icon icon={X} size="sm" />
+                  Tất cả ({assets.length})
                 </button>
-              )}
+                <button
+                  type="button"
+                  className={`muse-vault-tab${projectFilter === '_chung' ? ' is-on' : ''}`}
+                  onClick={() => setProjectFilter('_chung')}
+                >
+                  _chung ({assets.filter((a) => !(a.project ?? '').trim()).length})
+                </button>
+                {projects.map((proj) => (
+                  <button
+                    key={proj}
+                    type="button"
+                    className={`muse-vault-tab${projectFilter === proj ? ' is-on' : ''}`}
+                    onClick={() => setProjectFilter(proj)}
+                  >
+                    {proj} ({assets.filter((a) => (a.project ?? '').trim() === proj).length})
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="muse-assets-toolbar">
+              <div className="muse-assets-search">
+                <Icon icon={Search} size="sm" />
+                <input
+                  type="text"
+                  value={search}
+                  placeholder="Tìm theo dự án, @tag, tên hoặc prompt khoá…"
+                  aria-label="Tìm kiếm tư liệu"
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+                {search && (
+                  <button
+                    type="button"
+                    className="muse-assets-search-clear"
+                    aria-label="Xoá tìm kiếm"
+                    onClick={() => setSearch('')}
+                  >
+                    <Icon icon={X} size="sm" />
+                  </button>
+                )}
+              </div>
+              <select
+                className="batch-input batch-select muse-assets-type-filter"
+                aria-label="Lọc theo loại"
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value as 'all' | MuseAssetType)}
+              >
+                <option value="all">Tất cả loại</option>
+                {ASSET_TYPES.map((t) => (
+                  <option key={t.value} value={t.value}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="batch-input batch-select muse-assets-role-filter"
+                aria-label="Lọc theo vai trò"
+                value={roleFilter}
+                onChange={(e) => setRoleFilter(e.target.value as 'all' | MuseRefRole)}
+              >
+                <option value="all">Tất cả vai trò ({assets.length})</option>
+                {roleOrder.map((r) => (
+                  <option key={r} value={r}>
+                    {roles[r].label} ({roleCounts.get(r) ?? 0})
+                  </option>
+                ))}
+              </select>
             </div>
-            <select
-              className="batch-input batch-select muse-assets-role-filter"
-              aria-label="Lọc theo vai trò"
-              value={roleFilter}
-              onChange={(e) => setRoleFilter(e.target.value as 'all' | MuseRefRole)}
-            >
-              <option value="all">Tất cả vai trò ({assets.length})</option>
-              {roleOrder.map((r) => (
-                <option key={r} value={r}>
-                  {roles[r].label} ({roleCounts.get(r) ?? 0})
-                </option>
-              ))}
-            </select>
           </div>
         )}
 
@@ -307,173 +423,63 @@ export function MuseAssetsPage() {
         )}
 
         {assets.length === 0 ? (
-          <EmptyState
-            icon={Users}
-            title="Chưa có tư liệu"
-            text="Thêm từng tư liệu hoặc dùng Thêm nhanh từ thư mục để nhập hàng loạt ảnh và 3 file .txt."
-            action={
-              <div className="muse-assets-header-actions">
-                <Button variant="secondary" onClick={() => setBatchOpen(true)}>
-                  <Icon icon={FolderPlus} />
-                  <span>Thêm nhanh từ thư mục</span>
-                </Button>
-                <Button variant="primary" onClick={() => setEditing(emptyAsset())}>
-                  <Icon icon={Plus} />
-                  <span>Thêm tư liệu đầu tiên</span>
-                </Button>
-              </div>
-            }
-          />
-        ) : filtered.length === 0 ? (
-          <EmptyState
-            icon={Search}
-            title="Không thấy tư liệu phù hợp"
-            text="Thử xoá từ khoá tìm kiếm hoặc đổi bộ lọc vai trò."
-            action={
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setSearch('');
-                  setRoleFilter('all');
-                }}
-              >
-                Hiện tất cả tư liệu
+          <div className="muse-assets-empty">
+            <Icon icon={Users} size="lg" />
+            <strong>Chưa có tư liệu</strong>
+            <span>
+              Thêm từng tư liệu hoặc dùng Thêm nhanh từ thư mục để nhập hàng loạt ảnh và 3 file
+              .txt.
+            </span>
+            <div className="muse-assets-header-actions">
+              <Button variant="secondary" onClick={() => setBatchOpen(true)}>
+                <Icon icon={FolderPlus} />
+                <span>Thêm nhanh từ thư mục</span>
               </Button>
-            }
-          />
+              <Button variant="primary" onClick={() => setEditing(emptyAsset())}>
+                <Icon icon={Plus} />
+                <span>Thêm tư liệu đầu tiên</span>
+              </Button>
+            </div>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="muse-assets-empty">
+            <Icon icon={Search} size="lg" />
+            <strong>Không thấy tư liệu phù hợp</strong>
+            <span>Thử xoá từ khoá tìm kiếm hoặc đổi bộ lọc dự án / loại / vai trò.</span>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setSearch('');
+                setProjectFilter('all');
+                setTypeFilter('all');
+                setRoleFilter('all');
+              }}
+            >
+              Hiện tất cả tư liệu
+            </Button>
+          </div>
         ) : (
           <div className="muse-assets-grid">
-            {filtered.map((a) => {
-              const isSelected = selectedIds.has(a.id);
-              return (
-                <article
-                  key={a.id}
-                  className={`muse-asset-card${isSelected ? ' is-selected' : ''}`}
-                >
-                  <div
-                    className={`muse-asset-cover is-${Math.min(a.images.length, 3)}`}
-                    onClick={(e) => {
-                      if (liveSelectedIds.length > 0 || e.shiftKey || e.ctrlKey || e.metaKey) {
-                        toggleSelect(a.id, e.shiftKey);
-                      }
-                    }}
-                  >
-                    {a.images.map((img) => (
-                      <img
-                        key={img}
-                        src={thumbUrl(img)}
-                        alt={a.tag}
-                        loading="lazy"
-                        decoding="async"
-                      />
-                    ))}
-                    <span className={`muse-role-badge is-${a.role || 'none'}`}>
-                      {roles[a.role].label}
-                    </span>
-                    <label
-                      className={`muse-asset-check${isSelected ? ' is-on' : ''}`}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        aria-label={`Chọn @${a.tag}`}
-                        onMouseDown={(e) => {
-                          shiftHeld.current = e.shiftKey;
-                        }}
-                        onKeyDown={(e) => {
-                          shiftHeld.current = e.shiftKey;
-                        }}
-                        onChange={() => {
-                          const shift = shiftHeld.current;
-                          shiftHeld.current = false;
-                          toggleSelect(a.id, shift);
-                        }}
-                      />
-                    </label>
-                  </div>
-                  <div className="muse-asset-body">
-                    <div className="muse-asset-name">
-                      <strong>@{a.tag}</strong>
-                      {a.name && <span>{a.name}</span>}
-                    </div>
-                    {a.lock && (
-                      <p className="muse-asset-lock" title={a.lock}>
-                        Khoá: {a.lock}
-                      </p>
-                    )}
-                  </div>
-                  <footer className="muse-asset-footer">
-                    <IconAction icon={Pencil} label="Sửa" onClick={() => setEditing(a)} />
-                    <IconAction
-                      icon={Trash2}
-                      label="Xoá"
-                      onClick={() => {
-                        if (
-                          !window.confirm(
-                            `Xoá @${a.tag}? Ảnh không còn tác vụ nào dùng sẽ được xoá khỏi máy ngay.`,
-                          )
-                        )
-                          return;
-                        void act(async () => {
-                          unwrap(await api.removeMuseAssets([a.id]));
-                          setSelectedIds((prev) => {
-                            if (!prev.has(a.id)) return prev;
-                            const next = new Set(prev);
-                            next.delete(a.id);
-                            return next;
-                          });
-                        });
-                      }}
-                    />
-                  </footer>
-                </article>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      <section className="muse-assets-section">
-        <div className="muse-header">
-          <h2 className="muse-assets-section-title">
-            Mẫu prompt <span className="muse-assets-count">{templates.length}</span>
-          </h2>
-          <Button size="sm" onClick={() => setTemplate(emptyTemplate())}>
-            <Icon icon={Plus} size="sm" />
-            <span>Thêm mẫu</span>
-          </Button>
-        </div>
-        {templates.length === 0 ? (
-          <EmptyState
-            icon={FileText}
-            title="Chưa có mẫu prompt"
-            text="Lưu những prompt hay dùng để chèn nhanh ở màn Đơn hoặc chép vào Hàng loạt."
-          />
-        ) : (
-          <div className="muse-templates-grid">
-            {templates.map((t) => (
-              <article key={t.id} className="muse-template-card">
-                <div className="muse-template-head">
-                  <strong>{t.name}</strong>
-                  <div className="muse-template-actions">
-                    <IconAction icon={Pencil} label="Sửa" onClick={() => setTemplate(t)} />
-                    <IconAction
-                      icon={Trash2}
-                      label="Xoá"
-                      onClick={() => {
-                        if (!window.confirm(`Xoá mẫu "${t.name}"?`)) return;
-                        void act(async () => void unwrap(await api.removeMuseTemplate(t.id)));
-                      }}
-                    />
-                  </div>
-                </div>
-                <p className="muse-template-text">{t.text}</p>
-              </article>
+            {filtered.map((a) => (
+              <AssetCard
+                key={a.id}
+                asset={a}
+                selected={selectedIds.has(a.id)}
+                hasSelection={liveSelectedIds.length > 0}
+                onToggleSelect={toggleSelect}
+                onEdit={setEditing}
+                onDelete={removeOne}
+              />
             ))}
           </div>
         )}
       </section>
+
+      <TemplateSection
+        templates={templates}
+        onSave={(t) => act(async () => void unwrap(await api.saveMuseTemplate(t)))}
+        onRemove={(id) => act(async () => void unwrap(await api.removeMuseTemplate(id)))}
+      />
 
       {batchOpen && (
         <BatchImportAssetsDialog
@@ -495,207 +501,6 @@ export function MuseAssetsPage() {
           }
         />
       )}
-      {template && (
-        <TemplateDialog
-          template={template}
-          onClose={() => setTemplate(null)}
-          onSave={(t) =>
-            act(async () => {
-              unwrap(await api.saveMuseTemplate(MusePromptTemplate.createFrom(t)));
-              setTemplate(null);
-            })
-          }
-        />
-      )}
     </div>
-  );
-}
-
-function EmptyState({
-  icon,
-  title,
-  text,
-  action,
-}: {
-  icon: typeof Users;
-  title: string;
-  text: string;
-  action?: React.ReactNode;
-}) {
-  return (
-    <div className="muse-assets-empty">
-      <Icon icon={icon} size="lg" />
-      <strong>{title}</strong>
-      <span>{text}</span>
-      {action}
-    </div>
-  );
-}
-
-/** Add or edit one asset: images, tag, name, role and lock. */
-function AssetDialog({
-  asset,
-  onSave,
-  onClose,
-}: {
-  asset: MuseAsset;
-  onSave: (asset: MuseAsset) => Promise<boolean>;
-  onClose: () => void;
-}) {
-  const [draft, setDraft] = useState(asset);
-  const addToast = useAppStore((s) => s.addToast);
-  const maxImages = useMuseStore((s) => s.options?.maxAssetImages ?? 0);
-  const pick = async () => {
-    try {
-      const picked = unwrap(await api.pickMuseAssetImages());
-      setDraft({
-        ...draft,
-        images: [...draft.images, ...picked.map((p) => p.localUrl)].slice(0, maxImages),
-      });
-    } catch (cause) {
-      addToast({ type: 'error', message: cause instanceof Error ? cause.message : String(cause) });
-    }
-  };
-  return (
-    <Modal
-      title={asset.id ? `Sửa @${asset.tag}` : 'Thêm tư liệu'}
-      subtitle={`1–${maxImages || 1} ảnh của cùng một nhân vật hoặc sản phẩm, nhiều góc nhìn`}
-      className="muse-asset-dialog"
-      onClose={onClose}
-      footer={
-        <div className="muse-dialog-actions">
-          <Button onClick={onClose}>Huỷ</Button>
-          <Button variant="primary" onClick={() => void onSave(MuseAsset.createFrom(draft))}>
-            Lưu tư liệu
-          </Button>
-        </div>
-      }
-    >
-      <div className="muse-asset-form">
-        <div className="muse-asset-images">
-          {draft.images.map((img) => (
-            <div key={img} className="muse-asset-image">
-              <img src={img} alt="" decoding="async" />
-              <button
-                type="button"
-                className="muse-thumb-remove"
-                aria-label="Bỏ ảnh"
-                onClick={() =>
-                  setDraft({ ...draft, images: draft.images.filter((x) => x !== img) })
-                }
-              >
-                <Icon icon={X} size="sm" />
-              </button>
-            </div>
-          ))}
-          {draft.images.length < maxImages && (
-            <button type="button" className="muse-asset-image is-add" onClick={() => void pick()}>
-              <Icon icon={ImagePlus} size="lg" />
-              <span>Thêm ảnh</span>
-            </button>
-          )}
-        </div>
-        <div className="muse-form-row">
-          <label className="studio-field-group">
-            <span className="studio-field-label">Tag</span>
-            <div className="muse-tag-input">
-              <span>@</span>
-              <input
-                className="batch-input"
-                value={draft.tag}
-                placeholder="lan, hop-qua"
-                onChange={(e) => setDraft({ ...draft, tag: e.target.value })}
-              />
-            </div>
-          </label>
-          <label className="studio-field-group">
-            <span className="studio-field-label">Tên (tuỳ chọn)</span>
-            <input
-              className="batch-input"
-              value={draft.name}
-              placeholder="Lan"
-              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-            />
-          </label>
-        </div>
-        <fieldset className="studio-field-group muse-role-picker">
-          <legend className="studio-field-label">Vai trò</legend>
-          <div className="muse-role-options">
-            {roleOrder.map((r) => (
-              <label
-                key={r}
-                className={`muse-role-option${draft.role === r ? ' is-on' : ''}${r === MuseRefRole.None ? ' is-wide' : ''}`}
-              >
-                <input
-                  type="radio"
-                  name="muse-role"
-                  checked={draft.role === r}
-                  onChange={() => setDraft({ ...draft, role: r })}
-                />
-                <strong>{roles[r].label}</strong>
-                <span>{roles[r].detail}</span>
-              </label>
-            ))}
-          </div>
-        </fieldset>
-        <label className="studio-field-group">
-          <span className="studio-field-label">Khoá (chi tiết phải giữ y hệt)</span>
-          <textarea
-            className="batch-input"
-            rows={2}
-            placeholder="nốt ruồi má trái, áo khoác đỏ logo ABC, chữ trên hộp"
-            value={draft.lock ?? ''}
-            onChange={(e) => setDraft({ ...draft, lock: e.target.value })}
-          />
-        </label>
-      </div>
-    </Modal>
-  );
-}
-
-/** Add or edit one saved prompt. */
-function TemplateDialog({
-  template,
-  onSave,
-  onClose,
-}: {
-  template: MusePromptTemplate;
-  onSave: (template: MusePromptTemplate) => Promise<boolean>;
-  onClose: () => void;
-}) {
-  const [draft, setDraft] = useState(template);
-  return (
-    <Modal
-      title={template.id ? 'Sửa mẫu prompt' : 'Thêm mẫu prompt'}
-      onClose={onClose}
-      footer={
-        <div className="muse-dialog-actions">
-          <Button onClick={onClose}>Huỷ</Button>
-          <Button variant="primary" onClick={() => void onSave(draft)}>
-            Lưu mẫu
-          </Button>
-        </div>
-      }
-    >
-      <div className="muse-asset-form">
-        <label className="studio-field-group">
-          <span className="studio-field-label">Tên mẫu</span>
-          <input
-            className="batch-input"
-            value={draft.name}
-            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-          />
-        </label>
-        <label className="studio-field-group">
-          <span className="studio-field-label">Nội dung (có thể chứa @tag)</span>
-          <textarea
-            className="batch-input"
-            rows={8}
-            value={draft.text}
-            onChange={(e) => setDraft({ ...draft, text: e.target.value })}
-          />
-        </label>
-      </div>
-    </Modal>
   );
 }

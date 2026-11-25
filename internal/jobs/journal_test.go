@@ -248,3 +248,124 @@ func TestSaveBatchAddsAndUpdatesAtomically(t *testing.T) {
 		t.Fatalf("b after reload: %+v", b)
 	}
 }
+
+func TestListActiveTracksTransitionsAndOrder(t *testing.T) {
+	j, _ := open(t, 10)
+	if len(j.ListActive()) != 0 {
+		t.Fatal("empty journal should have no active records")
+	}
+	if err := j.Add(rec{ID: "a"}, rec{ID: "b", Done: true}, rec{ID: "c"}, rec{ID: "d"}); err != nil {
+		t.Fatal(err)
+	}
+	got := j.ListActive()
+	if len(got) != 3 || got[0].ID != "a" || got[1].ID != "c" || got[2].ID != "d" {
+		t.Fatalf("initial active = %+v, want [a c d]", got)
+	}
+	if _, err := j.Update("c", func(r *rec) { r.Done = true }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := j.UpdateMany([]string{"a", "b"}, func(r *rec) bool {
+		r.Done = !r.Done
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// b became active again, d stayed active, a and c are now finished.
+	got = j.ListActive()
+	if len(got) != 2 || got[0].ID != "b" || got[1].ID != "d" {
+		t.Fatalf("after transitions = %+v, want [b d]", got)
+	}
+	if err := j.Remove("b"); err != nil {
+		t.Fatal(err)
+	}
+	got = j.ListActive()
+	if len(got) != 1 || got[0].ID != "d" {
+		t.Fatalf("after remove = %+v, want [d]", got)
+	}
+}
+
+func TestJournalNewerFormatAndDiskErrorNeverPolluteRAM(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "jobs.json")
+	j := New(path, Options[rec]{})
+	if err := j.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Add(rec{ID: "a", Step: "v1"}); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate disk failure via directory blocker on another journal path.
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	blockedPath := filepath.Join(blocker, "jobs.json")
+	jb := New(blockedPath, Options[rec]{})
+	if _, err := jb.AddTrimming(rec{ID: "ghost"}); err == nil {
+		t.Fatal("expected AddTrimming to fail on blocked path")
+	}
+	if got := jb.List(); len(got) != 0 {
+		t.Fatalf("RAM polluted after failed AddTrimming: %+v", got)
+	}
+	if got := jb.ListActive(); len(got) != 0 {
+		t.Fatalf("active polluted after failed AddTrimming: %+v", got)
+	}
+
+	// Simulate write failure on existing loaded journal by swapping j.path behind blocker.
+	j.mu.Lock()
+	j.path = blockedPath
+	j.mu.Unlock()
+	if _, err := j.Update("a", func(r *rec) { r.Done = true; r.Step = "v2-dirty" }); err == nil {
+		t.Fatal("expected Update to fail")
+	}
+	gotA, ok := j.Get("a")
+	if !ok || gotA.Done || gotA.Step != "v1" || len(j.ListActive()) != 1 {
+		t.Fatalf("Update failed but mutated RAM: %+v active=%v", gotA, j.ListActive())
+	}
+	if err := j.Remove("a"); err == nil {
+		t.Fatal("expected Remove to fail")
+	}
+	if gotA, ok := j.Get("a"); !ok || len(j.List()) != 1 || len(j.ListActive()) != 1 {
+		t.Fatalf("Remove failed but mutated RAM: ok=%v got=%+v", ok, gotA)
+	}
+	if _, err := j.UpdateMany([]string{"a"}, func(r *rec) bool { r.Step = "dirty"; return true }); err == nil {
+		t.Fatal("expected UpdateMany to fail")
+	}
+	if gotA, _ := j.Get("a"); gotA.Step != "v1" {
+		t.Fatalf("UpdateMany failed but mutated RAM: %+v", gotA)
+	}
+	if _, err := j.RemoveWhereIDs(func(r rec) bool { return r.ID == "a" }); err == nil {
+		t.Fatal("expected RemoveWhereIDs to fail")
+	}
+	if _, ok := j.Get("a"); !ok || len(j.ListActive()) != 1 {
+		t.Fatalf("RemoveWhereIDs failed but dropped RAM record")
+	}
+
+	// Newer-format blocked journal must reject every mutation without altering RAM.
+	j.mu.Lock()
+	j.blocked = ErrNewerFormat
+	j.mu.Unlock()
+	for name, err := range map[string]error{
+		"Add": func() error { return j.Add(rec{ID: "ghost-2"}) }(),
+		"Update": func() error {
+			_, e := j.Update("a", func(r *rec) { r.Step = "blocked" })
+			return e
+		}(),
+		"UpdateMany": func() error {
+			_, e := j.UpdateMany([]string{"a"}, func(r *rec) bool { r.Step = "blocked"; return true })
+			return e
+		}(),
+		"Remove": j.Remove("a"),
+		"RemoveWhereIDs": func() error {
+			_, e := j.RemoveWhereIDs(func(rec) bool { return true })
+			return e
+		}(),
+	} {
+		if !errors.Is(err, ErrNewerFormat) {
+			t.Fatalf("%s = %v, want ErrNewerFormat", name, err)
+		}
+	}
+	if got := j.List(); len(got) != 1 || got[0].Step != "v1" {
+		t.Fatalf("newer-format mutations touched RAM: %+v", got)
+	}
+}

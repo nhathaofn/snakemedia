@@ -55,6 +55,15 @@ func (s *store) recordPath(id string) (string, error) {
 	return filepath.Join(s.recordDir(), id+".dat"), nil
 }
 
+type recordReadError struct {
+	id   string
+	path string
+	err  error
+}
+
+func (e *recordReadError) Error() string { return fmt.Sprintf("tài khoản %s: %v", e.id, e.err) }
+func (e *recordReadError) Unwrap() error { return e.err }
+
 func (s *store) loadLocked() error {
 	if s.err != nil || s.loaded {
 		return s.err
@@ -79,6 +88,26 @@ func (s *store) loadLocked() error {
 		err = errors.New("missing header")
 	}
 	if err != nil {
+		var recErr *recordReadError
+		if errors.As(err, &recErr) {
+			// A corrupt or missing individual record file must never quarantine the
+			// healthy accounts.dat index: isolate only the unreadable record file
+			// when it exists locally on this user's machine.
+			switch {
+			case errors.Is(err, os.ErrNotExist):
+				s.err = fmt.Errorf("Thiếu tệp %v.", recErr)
+			case errors.Is(err, secure.ErrOtherUser):
+				s.err = fmt.Errorf("Không đọc được %v. %s (%w)", recErr, secure.ForeignDataHelp, err)
+			default:
+				backup := fmt.Sprintf("%s.corrupt-%s", recErr.path, time.Now().Format("20060102-150405"))
+				if moveErr := os.Rename(recErr.path, backup); moveErr != nil {
+					s.err = fmt.Errorf("Dữ liệu %v hỏng và không cách ly được: %w", recErr, moveErr)
+				} else {
+					s.err = fmt.Errorf("Dữ liệu %v hỏng đã được giữ tại %s (chỉ mục tài khoản vẫn giữ nguyên). Khôi phục dữ liệu trước khi tiếp tục.", recErr, backup)
+				}
+			}
+			return s.err
+		}
 		backup := fmt.Sprintf("%s.corrupt-%s", s.path, time.Now().Format("20060102-150405"))
 		if moveErr := os.Rename(s.path, backup); moveErr != nil {
 			s.err = fmt.Errorf("Dữ liệu tài khoản hỏng và không cách ly được: %w", moveErr)
@@ -126,7 +155,7 @@ func (s *store) readSplit(index []byte) ([]Record, error) {
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("tài khoản %s: %w", id, err)
+			return nil, &recordReadError{id: id, path: path, err: err}
 		}
 		var rec Record
 		if !bytes.HasPrefix(data, []byte(storeHeader)) {
@@ -138,7 +167,7 @@ func (s *store) readSplit(index []byte) ([]Record, error) {
 			err = errors.New("record does not match its file")
 		}
 		if err != nil {
-			return nil, fmt.Errorf("tài khoản %s: %w", id, err)
+			return nil, &recordReadError{id: id, path: path, err: err}
 		}
 		records = append(records, rec)
 	}

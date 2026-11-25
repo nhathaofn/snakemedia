@@ -509,8 +509,8 @@ func TestStateDrivenRefreshRunsOnceOnSignedOutAndSkipsFreshAccount(t *testing.T)
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		p.mu.Lock()
-		busy := p.stateRefreshBusy[signedOut.ID]
-		_, seen := p.stateRefreshSeen[signedOut.ID]
+		busy := p.acct.stateRefreshBusy[signedOut.ID]
+		_, seen := p.acct.stateRefreshSeen[signedOut.ID]
 		p.mu.Unlock()
 		if seen && !busy && openCalls.Load() > 0 {
 			break

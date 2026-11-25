@@ -50,6 +50,12 @@ export interface BatchFormProps {
   promptMode?: PromptMode;
   /** Prompts already waiting in the queue: the same text is not added twice. */
   pending: readonly string[];
+  /** Controlled prompt box text (falls back to internal state when omitted). */
+  value?: string;
+  /** Called with updated text when used as a controlled input. */
+  onChange?: (next: string) => void;
+  /** Provider-specific compact actions rendered alongside the .txt import button. */
+  renderPromptActions?: (prompts: string[]) => ReactNode;
   /**
    * Adds the prompts to the queue on hold (the screen's "Chạy" starts them).
    * Resolve true when they were added, so the prompt box clears.
@@ -73,9 +79,18 @@ export function BatchForm({
   blockedReason,
   promptMode,
   pending,
+  value,
+  onChange,
+  renderPromptActions,
   onAdd,
 }: BatchFormProps) {
-  const [text, setText] = useState('');
+  const [localText, setLocalText] = useState('');
+  const isControlled = value !== undefined;
+  const text = isControlled ? value : localText;
+  const setText = (next: string) => {
+    if (isControlled) onChange?.(next);
+    else setLocalText(next);
+  };
   const [adding, setAdding] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -84,6 +99,8 @@ export function BatchForm({
   const fileRef = useRef<HTMLInputElement>(null);
   const boxRef = useRef<HTMLTextAreaElement>(null);
   const prompts = splitPromptList(text, mode);
+  const extraActions = renderPromptActions?.(prompts);
+  const hasExtraActions = Boolean(extraActions);
 
   // Adds list (from the box when fromBox) once; a second Enter while the first
   // is being added does nothing.
@@ -157,7 +174,7 @@ export function BatchForm({
         </label>
       )}
       <div className="batch-group">
-        <div className="batch-meta">
+        <div className={`batch-meta${hasExtraActions ? ' has-extra' : ''}`}>
           <label className="batch-field" htmlFor={`${id}-prompts`}>
             <span>Prompt</span>
             <span className="batch-count">{prompts.length} prompt</span>
@@ -173,17 +190,20 @@ export function BatchForm({
               void importFile(file);
             }}
           />
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            disabled={adding || !!blockedReason}
-            title="Thêm các prompt trong tệp vào hàng chờ"
-            onClick={() => fileRef.current?.click()}
-          >
-            <Icon icon={FileUp} size="sm" />
-            <span>Nhập từ tệp .txt</span>
-          </Button>
+          <div className="batch-meta-actions">
+            {extraActions}
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={adding || !!blockedReason}
+              title="Thêm các prompt trong tệp vào hàng chờ"
+              onClick={() => fileRef.current?.click()}
+            >
+              <Icon icon={FileUp} size="sm" />
+              <span>Nhập từ tệp .txt</span>
+            </Button>
+          </div>
         </div>
         <textarea
           ref={boxRef}

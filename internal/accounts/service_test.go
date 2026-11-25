@@ -708,3 +708,63 @@ func TestWaitSignedInSharesInspectScopeAcrossPolls(t *testing.T) {
 		}
 	})
 }
+
+func TestOpenSerializesPerAccountAndQuietRenewPreservesLiveProxyAndCookieTTL(t *testing.T) {
+	// I-8: Concurrent open calls on the same account serialize route/ensureTab initialization.
+	s, _, base := testService(t, Inspection{SignedIn: true})
+	seed(t, s, Record{Account: Account{ID: "conc", Proxy: proxy.None}})
+	rec, _ := s.Record("conc")
+
+	var active, maxActive, ensureCalls int
+	var mu sync.Mutex
+	s.ensureTab = func(context.Context, int, config.AccountConfig, browser.Site) error {
+		mu.Lock()
+		active++
+		if active > maxActive {
+			maxActive = active
+		}
+		ensureCalls++
+		mu.Unlock()
+		time.Sleep(15 * time.Millisecond)
+		mu.Lock()
+		active--
+		mu.Unlock()
+		return nil
+	}
+
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := s.open(context.Background(), rec, base, false); err != nil {
+				t.Errorf("open error: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if maxActive != 1 || ensureCalls != 4 {
+		t.Fatalf("concurrent open maxActive=%d ensureCalls=%d, want 1 and 4", maxActive, ensureCalls)
+	}
+
+	// I-9a: Unchanged session cookies (Expires=0) keep existing synthetic expiry and CookieVersion.
+	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	existing := browser.PersistSessionCookies([]browser.Cookie{{Name: "sid", Domain: "muse.ai", Path: "/", Value: "tok"}}, now, browser.DefaultSessionCookieTTL)
+	merged := preserveSessionCookieExpiry(existing, []browser.Cookie{{Name: "sid", Domain: "muse.ai", Path: "/", Value: "tok"}}, now.Add(time.Hour))
+	rePersisted := browser.PersistSessionCookies(merged, now.Add(time.Hour), browser.DefaultSessionCookieTTL)
+	if !cookiesEqual(existing, rePersisted) || !cookiesExpiryEqual(existing, rePersisted) {
+		t.Fatalf("session cookie expiry shifted unnecessarily: before=%+v after=%+v", existing, rePersisted)
+	}
+
+	// I-9b: route() keeps ProxyStatus="live" when static proxy line is unchanged.
+	s2, _, _ := testService(t, Inspection{SignedIn: true})
+	seed(t, s2, Record{Account: Account{ID: "p-live", Proxy: "1.2.3.4:8080", ProxyStatus: string(proxy.StatusLive)}})
+	rLive, _ := s2.Record("p-live")
+	if _, err := s2.route(context.Background(), rLive); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := s2.Record("p-live")
+	if after.ProxyStatus != string(proxy.StatusLive) {
+		t.Fatalf("route() wiped ProxyStatus=%q, want %q", after.ProxyStatus, proxy.StatusLive)
+	}
+}

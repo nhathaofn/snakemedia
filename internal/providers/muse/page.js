@@ -376,6 +376,39 @@ function pageMain(CHUNK) {
     });
     return p;
   };
+  // Serialize composer send/route transitions on a shared tab so concurrent
+  // threads (Send / SendTo) never interleave Next.js thread navigation or
+  // read stale cachedChat context mid-transition.
+  let sendTail = Promise.resolve();
+  let routeBusy = 0;
+  const routeWaiters = [];
+  const notifyRouteIdle = () => {
+    if (routeBusy === 0 && routeWaiters.length > 0) {
+      const list = routeWaiters.splice(0, routeWaiters.length);
+      for (const resolve of list) resolve();
+    }
+  };
+  const withSendLock = (fn) => {
+    const run = sendTail.then(fn, fn);
+    sendTail = run.catch(() => {});
+    return run;
+  };
+  const waitRouteSettled = async (ms = 2000) => {
+    if (routeBusy === 0) return;
+    await new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        resolve();
+      };
+      const timer = setTimeout(finish, ms);
+      routeWaiters.push(() => {
+        clearTimeout(timer);
+        finish();
+      });
+    });
+  };
   const files = new Map();
   let fileSeq = 0;
   const b64 = (u8) => {
@@ -594,6 +627,9 @@ function pageMain(CHUNK) {
         );
         const raw = await r.json().catch(() => null);
         const j = raw && typeof raw === "object" ? raw : {};
+        if (r.status === 200 && routeBusy > 0 && !chat()) {
+          await waitRouteSettled(Math.min(ms, 2000));
+        }
         const c = Boolean(chat());
         const notice =
           !c && typeof document !== "undefined" && document.body
@@ -635,72 +671,86 @@ function pageMain(CHUNK) {
     },
     // thread = an existing chat's sessionId: send into that chat; empty = a new thread.
     async send(text, atts, thread) {
-      ensureVisible();
-      // The page may be rebuilding (the user opened another chat): wait up to 20s for the client.
-      let c = chat();
-      for (let k = 0; !c && k < 20; k++) {
-        await new Promise((r) => setTimeout(r, 1000));
-        c = chat();
-      }
-      if (!c) {
-        const diag = chatDiag();
-        const path =
+      return withSendLock(async () => {
+        ensureVisible();
+        // The page may be rebuilding (the user opened another chat): wait up to 20s for the client.
+        let c = chat();
+        for (let k = 0; !c && k < 20; k++) {
+          await new Promise((r) => setTimeout(r, 1000));
+          c = chat();
+        }
+        if (!c) {
+          const diag = chatDiag();
+          const path =
+            typeof location !== "undefined" ? String(location.pathname || "") : "";
+          return {
+            ok: false,
+            sessionId: "",
+            reason: diag ? `not_ready (${path}; ${diag})` : `not_ready (${path})`,
+          };
+        }
+        const gwErr = await ensureGatewayReady();
+        if (gwErr) {
+          cachedChat = null;
+          return {
+            ok: false,
+            sessionId: "",
+            reason: `not_ready (gateway:${gwErr})`,
+          };
+        }
+        const beforePath =
           typeof location !== "undefined" ? String(location.pathname || "") : "";
+        let r;
+        routeBusy++;
+        try {
+          r = await c.sendMessage(
+            text,
+            atts,
+            thread
+              ? {
+                  targetRoute: { kind: "thread", sessionId: thread },
+                  waitForReadiness: true,
+                }
+              : { createNewThread: true, waitForReadiness: true },
+          );
+        } catch (err) {
+          cachedChat = null;
+          throw err;
+        } finally {
+          routeBusy--;
+          notifyRouteIdle();
+        }
+        const afterPath =
+          typeof location !== "undefined" ? String(location.pathname || "") : "";
+        if (
+          thread ||
+          afterPath !== beforePath ||
+          (!r?.ok && String(r?.reason || "").startsWith("not_ready"))
+        ) {
+          cachedChat = null;
+        }
         return {
-          ok: false,
-          sessionId: "",
-          reason: diag ? `not_ready (${path}; ${diag})` : `not_ready (${path})`,
+          ok: Boolean(r?.ok),
+          sessionId: r?.sessionId || (r?.ok ? thread : ""),
+          reason: String(r?.reason || r?.error || ""),
+          // Muse returns both reason: "send_failed" and an Error. Keep the
+          // latter's useful fields: choosing reason || error hid the cause.
+          diagnostics: r?.error
+            ? Object.fromEntries(
+                ["name", "message", "code", "kind", "deliveryState", "requestTimedOut"]
+                  .filter((k) => ["string", "number", "boolean"].includes(typeof r.error[k]))
+                  .map((k) => {
+                    let v = r.error[k];
+                    if (typeof v === "string") {
+                      if (text) v = v.split(text).join("[prompt]");
+                      v = v.replace(/[A-Za-z0-9+/=]{128,}/g, "[data]").slice(0, 1024);
+                    }
+                    return [k, v];
+                  }),
+              )
+            : null,
         };
-      }
-      const gwErr = await ensureGatewayReady();
-      if (gwErr) {
-        cachedChat = null;
-        return {
-          ok: false,
-          sessionId: "",
-          reason: `not_ready (gateway:${gwErr})`,
-        };
-      }
-      let r;
-      try {
-        r = await c.sendMessage(
-          text,
-          atts,
-          thread
-            ? {
-                targetRoute: { kind: "thread", sessionId: thread },
-                waitForReadiness: true,
-              }
-            : { createNewThread: true, waitForReadiness: true },
-        );
-      } catch (err) {
-        cachedChat = null;
-        throw err;
-      }
-      if (!r?.ok && String(r?.reason || "").startsWith("not_ready")) {
-        cachedChat = null;
-      }
-      return {
-        ok: Boolean(r?.ok),
-        sessionId: r?.sessionId || (r?.ok ? thread : ""),
-        reason: String(r?.reason || r?.error || ""),
-        // Muse returns both reason: "send_failed" and an Error. Keep the
-        // latter's useful fields: choosing reason || error hid the cause.
-        diagnostics: r?.error
-          ? Object.fromEntries(
-              ["name", "message", "code", "kind", "deliveryState", "requestTimedOut"]
-                .filter((k) => ["string", "number", "boolean"].includes(typeof r.error[k]))
-                .map((k) => {
-                  let v = r.error[k];
-                  if (typeof v === "string") {
-                    if (text) v = v.split(text).join("[prompt]");
-                    v = v.replace(/[A-Za-z0-9+/=]{128,}/g, "[data]").slice(0, 1024);
-                  }
-                  return [k, v];
-                }),
-            )
-          : null,
-      };
+      });
     },
     async status(sid) {
       const { sessions = [] } = await sessionList();

@@ -13,6 +13,8 @@ export interface MuseDraft {
   references: MuseReference[];
   ratio: string;
   duration: number;
+  /** Optional Asset Vault project scope for filtering fixed assets and resolving @tags. */
+  project: string;
   /** How a batch's own images go to its prompts; empty shares them. */
   refMode: MuseRefMode | '';
   /** Assets attached to every prompt (a fixed model or product). */
@@ -20,6 +22,8 @@ export interface MuseDraft {
   /** Storyboard frames drawn before each video (0: none), and whether the video waits for review. */
   boardFrames: number;
   boardReview: boolean;
+  /** Remembered batch output root directory across Đơn / Hàng loạt tab switches. */
+  outputDir: string;
 }
 
 const EMPTY: MuseDraft = {
@@ -28,10 +32,12 @@ const EMPTY: MuseDraft = {
   references: [],
   ratio: '',
   duration: 0,
+  project: '',
   refMode: '',
   assetIds: [],
   boardFrames: 0,
   boardReview: false,
+  outputDir: '',
 };
 
 const useDrafts = create<{
@@ -44,6 +50,11 @@ const useDrafts = create<{
       drafts: { ...state.drafts, [key]: { ...EMPTY, ...state.drafts[key], ...change } },
     })),
 }));
+
+/** Reads the latest draft synchronously from Zustand (avoiding stale closures after update()). */
+export function getMuseDraft(kind: MuseJobKind, mode: MuseJobMode): MuseDraft {
+  return useDrafts.getState().drafts[`${kind}:${mode}`] ?? EMPTY;
+}
 
 /**
  * The draft of one kind and mode, shared by its tools panel and workspace and

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 )
 
@@ -17,6 +19,14 @@ type BatchItem struct {
 	Open      bool
 }
 
+func normalizePathKey(dir string) string {
+	clean := filepath.Clean(dir)
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(clean)
+	}
+	return clean
+}
+
 // BatchFolder picks the folder under parent that prompts added on a batch
 // form are saved into, and the number of the first of them. Prompts added
 // while a batch into parent is still unfinished join it and continue its
@@ -25,18 +35,21 @@ type BatchItem struct {
 // numbered from 1. items are the queue's items of the same kind; the new
 // folder is created with its first file.
 func BatchFolder(parent, name string, now time.Time, items []BatchItem) (string, int) {
-	open, openedAt := "", ""
+	parent = filepath.Clean(parent)
+	parentKey := normalizePathKey(parent)
+	open, openKey, openedAt := "", "", ""
 	used := map[string]bool{}
 	for _, it := range items {
-		used[it.Dir] = true
-		if it.Open && filepath.Dir(it.Dir) == parent && it.CreatedAt >= openedAt {
-			open, openedAt = it.Dir, it.CreatedAt
+		dirKey := normalizePathKey(it.Dir)
+		used[dirKey] = true
+		if it.Open && normalizePathKey(filepath.Dir(it.Dir)) == parentKey && it.CreatedAt >= openedAt {
+			open, openKey, openedAt = filepath.Clean(it.Dir), dirKey, it.CreatedAt
 		}
 	}
 	if open != "" {
 		next := NextNumber(open)
 		for _, it := range items {
-			if it.Dir == open && it.Index >= next {
+			if normalizePathKey(it.Dir) == openKey && it.Index >= next {
 				next = it.Index + 1
 			}
 		}
@@ -45,7 +58,7 @@ func BatchFolder(parent, name string, now time.Time, items []BatchItem) (string,
 	base := fmt.Sprintf("%s-%s", name, now.Format("20060102-150405"))
 	dir := filepath.Join(parent, base)
 	for i := 2; ; i++ {
-		if _, err := os.Stat(dir); err != nil && !used[dir] {
+		if _, err := os.Stat(dir); err != nil && !used[normalizePathKey(dir)] {
 			return dir, 1
 		}
 		dir = filepath.Join(parent, fmt.Sprintf("%s-%d", base, i))

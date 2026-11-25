@@ -64,7 +64,10 @@ type chromePage struct {
 	// and loading another page waits for them and holds it alone, so a
 	// navigation never cuts another call short. Nil for a one-off page (an
 	// account check).
-	nav      *sync.RWMutex
+	nav *sync.RWMutex
+	// routeMu serializes route-mutating React/Next.js operations on the same
+	// shared tab (send / SendTo / Home / Login) in lock order routeMu -> nav.
+	routeMu  *sync.Mutex
 	targetID string
 	jobID    string
 	onClose  func(dirty bool)
@@ -87,7 +90,7 @@ func (p *chromePage) markDirty() {
 }
 
 // bindTab assigns this page to a tab target (shared or exclusive) and release hook.
-func (p *chromePage) bindTab(targetID, jobID string, nav *sync.RWMutex, onClose func(dirty bool)) {
+func (p *chromePage) bindTab(targetID, jobID string, nav *sync.RWMutex, routeMu *sync.Mutex, onClose func(dirty bool)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.targetID != targetID && !p.busy && p.conn != nil {
@@ -97,6 +100,7 @@ func (p *chromePage) bindTab(targetID, jobID string, nav *sync.RWMutex, onClose 
 	p.targetID = targetID
 	p.jobID = jobID
 	p.nav = nav
+	p.routeMu = routeMu
 	p.onClose = onClose
 }
 
@@ -250,7 +254,7 @@ func inspectAwayTab(ctx context.Context, port int, policy config.AccountConfig, 
 		return awayTabInfo{}, errTabMissing
 	}
 	if navigate {
-		if err := browser.Navigate(ctx, *target, port, musePage); err != nil {
+		if err := browser.NavigateWithPolicy(ctx, *target, port, musePage, policy); err != nil {
 			return awayTabInfo{}, err
 		}
 		targets, err = browser.Targets(ctx, port, policy)
@@ -422,7 +426,20 @@ func (p *chromePage) requestTimeout() time.Duration {
 	return t
 }
 
+func (p *chromePage) lockRoute() func() {
+	p.mu.Lock()
+	rm := p.routeMu
+	p.mu.Unlock()
+	if rm == nil {
+		return func() {}
+	}
+	rm.Lock()
+	return rm.Unlock
+}
+
 func (p *chromePage) Login(ctx context.Context) (LoginState, error) {
+	unlockRoute := p.lockRoute()
+	defer unlockRoute()
 	var state LoginState
 	timeout := p.requestTimeout()
 	fetchMS := max(timeout.Milliseconds()*4/5, 1000)
@@ -444,6 +461,8 @@ func (p *chromePage) SendTo(ctx context.Context, sessionID, text string) (SendRe
 
 // send posts text, in a new chat when sessionID is empty, retrying once from
 // Muse's home page when the page had no chat client (nothing was sent then).
+// Holds routeMu across the whole attempt so concurrent shared-tab callers never
+// interleave Next.js thread transitions (Send vs SendTo vs Home vs Login).
 func (p *chromePage) send(ctx context.Context, text string, atts []Attachment, sessionID string) (SendResult, error) {
 	var r SendResult
 	defer func() {
@@ -456,6 +475,8 @@ func (p *chromePage) send(ctx context.Context, text string, atts []Attachment, s
 		}
 		logger.Get().Warn("muse client send refused", "reason", r.Reason, "attachments", len(atts), "base64Bytes", encodedBytes, "existingChat", sessionID != "", "diagnostics", r.Diagnostics)
 	}()
+	unlockRoute := p.lockRoute()
+	defer unlockRoute()
 	if err := p.invoke(ctx, p.sendTimeout, "send", &r, text, atts, sessionID); err != nil {
 		p.markDirty()
 		return r, err
@@ -463,9 +484,9 @@ func (p *chromePage) send(ctx context.Context, text string, atts []Attachment, s
 	if !strings.HasPrefix(r.Reason, "not_ready") {
 		return r, nil
 	}
-	if err := p.Home(ctx); err != nil {
+	if err := p.homeNav(ctx); err != nil {
 		p.markDirty()
-		return r, nil
+		return r, err
 	}
 	err := p.invoke(ctx, p.sendTimeout, "send", &r, text, atts, sessionID)
 	if err != nil || (!r.OK && strings.HasPrefix(r.Reason, "not_ready")) {
@@ -474,8 +495,14 @@ func (p *chromePage) send(ctx context.Context, text string, atts []Attachment, s
 	return r, err
 }
 
-// Home loads Muse's home page once no other call is using the tab.
+// Home loads Muse's home page once no other route operation or call is using the tab.
 func (p *chromePage) Home(ctx context.Context) error {
+	unlockRoute := p.lockRoute()
+	defer unlockRoute()
+	return p.homeNav(ctx)
+}
+
+func (p *chromePage) homeNav(ctx context.Context) error {
 	if nav := p.navLock(); nav != nil {
 		nav.Lock()
 		defer nav.Unlock()

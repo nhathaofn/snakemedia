@@ -556,3 +556,63 @@ func TestSendEvalErrorConfirmedNotSentFailsAfterMaxAttempts(t *testing.T) {
 		t.Fatalf("after 2nd eval error: job = %+v", got)
 	}
 }
+
+func TestSendContinueRestrictionClassifiesAndKeepsLongChat(t *testing.T) {
+	t.Run("24h daily limit on continue #1 pauses account and holds job on same SessionID", func(t *testing.T) {
+		page := &fakePage{
+			loggedIn: true,
+			sendRes:  SendResult{OK: true, SessionID: "s-long-1"},
+			quota:    &MuseQuota{PercentUsed: 15},
+			events:   []AssistantEvent{{Text: "Clips 1-3 ready.\nSTATUS: INCOMPLETE clips 4-6"}},
+			sendToRes: SendResult{
+				OK:          false,
+				Reason:      "limit_reached",
+				Diagnostics: &SendDiagnostics{Message: "You have reached your daily video generation limit. Try again in 24 hours."},
+			},
+		}
+		p := testProvider(t, page)
+		acc := addSignedIn(t, p, "A")
+		otherAcc := addSignedIn(t, p, "B")
+		job := submitLong(t, p, 60)
+
+		p.runOne(context.Background(), job.ID, acc.ID)
+
+		got := mustJob(t, p, job.ID)
+		if got.Status != MuseJobProcessing || got.SessionID != "s-long-1" || got.AccountID != acc.ID || got.NextCheckAt == "" {
+			t.Fatalf("expected long video to hold and stay on s-long-1/%s, got %+v (otherAcc=%s)", acc.ID, got, otherAcc.ID)
+		}
+		gotAcc, _ := p.accounts.Record(acc.ID)
+		if gotAcc.Enabled || !gotAcc.AutoResume || gotAcc.PausedUntil == "" {
+			t.Fatalf("expected account auto-disabled for 24h limit, got %+v", gotAcc.Account)
+		}
+	})
+
+	t.Run("video ban on continue #1 fails on same SessionID without requeuing to another account", func(t *testing.T) {
+		page := &fakePage{
+			loggedIn: true,
+			sendRes:  SendResult{OK: true, SessionID: "s-long-2"},
+			quota:    &MuseQuota{PercentUsed: 15},
+			events:   []AssistantEvent{{Text: "Clips 1-3 ready.\nSTATUS: INCOMPLETE clips 4-6"}},
+			sendToRes: SendResult{
+				OK:          false,
+				Reason:      "restricted",
+				Diagnostics: &SendDiagnostics{Message: "Video generation is disabled for your account."},
+			},
+		}
+		p := testProvider(t, page)
+		acc := addSignedIn(t, p, "A")
+		_ = addSignedIn(t, p, "B")
+		job := submitLong(t, p, 60)
+
+		p.runOne(context.Background(), job.ID, acc.ID)
+
+		got := mustJob(t, p, job.ID)
+		if got.Status != MuseJobFailed || got.SessionID != "s-long-2" || got.AccountID != acc.ID {
+			t.Fatalf("expected banned long video to fail on s-long-2 without leaving account, got %+v", got)
+		}
+		gotAcc, _ := p.accounts.Record(acc.ID)
+		if !gotAcc.SkipVideoCheck {
+			t.Fatalf("expected SkipVideoCheck disabled after video ban on continue, got %+v", gotAcc.Account)
+		}
+	})
+}

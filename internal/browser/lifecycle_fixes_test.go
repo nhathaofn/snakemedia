@@ -241,3 +241,57 @@ func TestPoolReapIdleInvokesOnClosingBeforeShutdown(t *testing.T) {
 		t.Fatalf("order = %v port = %d, want [closing shutdown] on port 45555", order, closedPort.Load())
 	}
 }
+
+func TestNavigateWithPolicyHonorsConfiguredTimeout(t *testing.T) {
+	// DevTools /json/version stalls longer than RequestTimeoutSeconds while Page.navigate succeeds.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(3 * time.Second):
+			_, _ = w.Write([]byte(`{"User-Agent":"Chrome/1.0"}`))
+		case <-r.Context().Done():
+		}
+	})
+	up := websocket.Upgrader{}
+	mux.HandleFunc("/devtools/page/1", func(w http.ResponseWriter, r *http.Request) {
+		c, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		for {
+			_, raw, err := c.ReadMessage()
+			if err != nil {
+				return
+			}
+			var msg struct {
+				ID int `json:"id"`
+			}
+			_ = json.Unmarshal(raw, &msg)
+			resp, _ := json.Marshal(map[string]any{"id": msg.ID, "result": map[string]any{}})
+			if err := c.WriteMessage(websocket.TextMessage, resp); err != nil {
+				return
+			}
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	port := srv.Listener.Addr().(*net.TCPAddr).Port
+
+	policy := config.DefaultAccountConfig()
+	policy.RequestTimeoutSeconds = 1
+	policy.BrowserStartupTimeoutSeconds = 3
+
+	start := time.Now()
+	err := NavigateWithPolicy(context.Background(), Target{
+		ID:                   "t1",
+		Type:                 "page",
+		WebSocketDebuggerURL: fmt.Sprintf("ws://127.0.0.1:%d/devtools/page/1", port),
+	}, port, Site{Home: "https://muse.ai/"}, policy)
+	if err != nil {
+		t.Fatalf("NavigateWithPolicy failed: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2500*time.Millisecond {
+		t.Fatalf("expected custom RequestTimeoutSeconds=1 to abort /json/version quickly, took %v", elapsed)
+	}
+}

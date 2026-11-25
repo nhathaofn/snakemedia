@@ -59,6 +59,7 @@ type Service struct {
 	ctx                    context.Context
 	emit                   func(events.Event, any)
 	routes                 map[string]proxy.Route // account ID -> route its running browser uses
+	openLocks              map[string]*sync.Mutex // serializes per-account open/route setup
 	watching               map[string]bool        // accounts with an open sign-in watcher
 	sessionRenewAttempt    map[string]time.Time   // account ID -> last quiet HTTP session renew attempt
 	listeners              []func()
@@ -93,6 +94,7 @@ func New(dir string, cfg *config.Manager, sites ...Site) *Service {
 		ctx:       context.Background(),
 		emit:      func(events.Event, any) {},
 		routes:    make(map[string]proxy.Route),
+		openLocks: make(map[string]*sync.Mutex),
 		watching:  make(map[string]bool),
 
 		notifyDelay: notifyDelay,
@@ -571,9 +573,26 @@ func (s *Service) lookup(id string) (Record, Site, error) {
 	return rec, site, nil
 }
 
+func (s *Service) openLock(id string) *sync.Mutex {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.openLocks == nil {
+		s.openLocks = make(map[string]*sync.Mutex)
+	}
+	om := s.openLocks[id]
+	if om == nil {
+		om = &sync.Mutex{}
+		s.openLocks[id] = om
+	}
+	return om
+}
+
 // open starts or reuses the account's browser on its proxy route, seeds
 // imported cookies once per import, and makes sure the site's tab is open.
 func (s *Service) open(ctx context.Context, rec Record, site Site, visible bool) (*browser.Browser, error) {
+	om := s.openLock(rec.ID)
+	om.Lock()
+	defer om.Unlock()
 	route, err := s.route(ctx, rec)
 	if err != nil {
 		return nil, err
@@ -701,6 +720,7 @@ func (s *Service) route(ctx context.Context, rec Record) (proxy.Route, error) {
 		return proxy.Route{}, err
 	}
 	s.Update(rec.ID, func(r *Record) {
+		prevLine := assignment(*r).Line()
 		if route.Auto != "" {
 			r.ProxyAuto = route.Auto
 		}
@@ -710,8 +730,12 @@ func (s *Service) route(ctx context.Context, rec Record) (proxy.Route, error) {
 		}
 		line := assignment(*r).Line()
 		r.ProxyInUse, r.ProxyRotating = proxy.Mask(line), rotating(line)
-		// Live only once a page has loaded through it (open).
-		r.ProxyStatus, r.ProxyIP = "", route.IP
+		// Preserve "live" when reusing the same healthy proxy route across a quiet check;
+		// only reset status when changing proxy line or clearing a previous dead status.
+		if line != prevLine || r.ProxyStatus == string(proxy.StatusDead) {
+			r.ProxyStatus = ""
+		}
+		r.ProxyIP = route.IP
 	})
 	return route, nil
 }
@@ -846,7 +870,7 @@ func (s *Service) runCheck(ctx context.Context, id string, probeVideo bool) (Rec
 	if err == nil && !insp.SignedIn && insp.Fatal == "" && len(rec.Cookies) > 0 {
 		if s.inject(ctx, b.Port, policy, browser.PersistSessionCookies(rec.Cookies, s.now(), browser.DefaultSessionCookieTTL)) == nil {
 			if tab, found, _ := browser.FindTab(ctx, b.Port, policy, site.Page().Owns); found {
-				_ = browser.Navigate(ctx, tab, b.Port, site.Page())
+				_ = browser.NavigateWithPolicy(ctx, tab, b.Port, site.Page(), policy)
 			}
 			insp, err = s.waitSignedIn(ctx, site, b, rec, timeout)
 		}

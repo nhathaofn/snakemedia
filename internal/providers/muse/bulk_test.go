@@ -118,7 +118,7 @@ func pageObjectsFull() string  { _, f := pageObjects(); return f }
 
 func TestCapabilityTypeHelpers(t *testing.T) {
 	var none *MuseCapabilities
-	if none.extensions() != nil || none.videoExtensions() != nil {
+	if none.extensions() != nil {
 		t.Fatal("nil capabilities list no extensions")
 	}
 	if _, ok := none.imageMime(".png"); ok {
@@ -131,7 +131,7 @@ func TestCapabilityTypeHelpers(t *testing.T) {
 	if m, ok := c.imageMime(".JPG"); !ok || m != "image/jpeg" {
 		t.Fatalf("mime %q %v", m, ok)
 	}
-	if _, ok := c.videoMime(".png"); ok {
-		t.Fatal("an image extension is no video")
+	if _, ok := c.imageMime(".mp4"); ok {
+		t.Fatal("a video extension is no image")
 	}
 }

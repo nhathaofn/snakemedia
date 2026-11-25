@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"SnakeMedia/internal/models"
 )
@@ -229,5 +230,75 @@ func TestRemoveDeletesStoredFileAndCachedThumbs(t *testing.T) {
 	}
 	if err := store.Remove(Route + "../evil.png"); err == nil {
 		t.Fatal("Remove accepted path traversal")
+	}
+}
+
+func TestP0SecurityAndBatchFolderFixes(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	srcURL, err := store.Put("img", "image/png", ".png", []byte("PNG"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// I-3: Save registers user-chosen folder via AllowRoot so CheckFile succeeds.
+	outDir := filepath.Join(t.TempDir(), "user-out")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	res := store.Save(srcURL, func(string) (string, error) { return outDir, nil })
+	if !res.Success || res.Data.Path == "" {
+		t.Fatalf("Save failed: %+v", res)
+	}
+	if _, err := store.CheckFile(res.Data.Path); err != nil {
+		t.Fatalf("CheckFile failed on just-saved path %q: %v", res.Data.Path, err)
+	}
+
+	// I-5a: Middleware blocks hidden .thumbs directory under /flow-media/.
+	leakThumb := filepath.Join(dir, thumbDir, "leak.txt")
+	if err := os.MkdirAll(filepath.Dir(leakThumb), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(leakThumb, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, Route+".thumbs/leak.txt", nil)
+	store.Middleware(http.NotFoundHandler()).ServeHTTP(rr, req)
+	if rr.Code == http.StatusOK {
+		t.Fatalf("Middleware served hidden thumb file with status %d", rr.Code)
+	}
+
+	// I-5b: Remove("img.png") must not delete thumbnail belonging to "img-2-100-1.jpg".
+	neighborThumb := filepath.Join(dir, thumbDir, "img-2-100-1.jpg")
+	if err := os.WriteFile(neighborThumb, []byte("thumb"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Remove(srcURL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(neighborThumb); err != nil {
+		t.Fatalf("Remove deleted neighbor thumb: %v", err)
+	}
+
+	// I-5c: SaveTo rejects Windows alternate data stream colon and illegal chars.
+	src2, err := store.Put("img2", "image/png", ".png", []byte("PNG2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveTo(src2, outDir, "foo:bar"); err == nil {
+		t.Fatal("SaveTo allowed colon/ADS in filename")
+	}
+	if _, err := store.SaveTo(src2, outDir, "bad\x01name"); err == nil {
+		t.Fatal("SaveTo allowed control character in filename")
+	}
+
+	// I-6: BatchFolder joins open batch despite trailing separator or Windows case differences.
+	parent := filepath.Join(t.TempDir(), "Outputs")
+	openDir := filepath.Join(parent, "snakemedia-muse-image-20261123-100000")
+	items := []BatchItem{{Dir: openDir, Index: 1, CreatedAt: "2026-11-23T10:00:00Z", Open: true}}
+	altParent := strings.ToUpper(parent) + string(filepath.Separator)
+	gotDir, gotIndex := BatchFolder(altParent, "snakemedia-muse-image", time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC), items)
+	if !strings.EqualFold(filepath.Clean(gotDir), filepath.Clean(openDir)) || gotIndex != 2 {
+		t.Fatalf("BatchFolder = (%q, %d), want (%q, 2)", gotDir, gotIndex, openDir)
 	}
 }

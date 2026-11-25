@@ -1,11 +1,12 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { AlertCircle, Copy, Download, Maximize2, RefreshCw } from 'lucide-react';
+import { AlertCircle, BookmarkPlus, Copy, Download, Maximize2, RefreshCw } from 'lucide-react';
 import { Icon, Modal } from '../../../../components/ui';
 import './FlowImageWorkspace.css';
 import { api } from '../../../../services/api';
 import { useAppStore } from '../../../../stores';
 import { FlowImageProjectMode, GenerateImageRequest } from '../../../../types';
+import { SaveToVaultDialog, type VaultImportSource } from '../../../muse/assets/SaveToVaultDialog';
 import {
   ConversationGallery,
   cssAspectRatio,
@@ -41,6 +42,7 @@ export const FlowImageWorkspace: React.FC = () => {
     api.generateImages(GenerateImageRequest.createFrom(request)),
   );
   const saveMedia = useSaveMedia();
+  const [vaultSources, setVaultSources] = useState<VaultImportSource[] | null>(null);
   const { prompt, referenceImages, items, turns, previewImage } = store;
 
   useRestoreJobs(useFlowImageStore, listPendingSingleImages, 'Đang đối soát job tạo ảnh');
@@ -150,6 +152,18 @@ export const FlowImageWorkspace: React.FC = () => {
                 >
                   <Icon icon={Download} size="sm" />
                 </button>
+                <button
+                  type="button"
+                  className="flow-card-action-btn"
+                  title="Lưu vào Kho Tư liệu Muse"
+                  disabled={!img.localUrl}
+                  onClick={() =>
+                    img.localUrl &&
+                    setVaultSources([{ localUrl: img.localUrl, suggestedPrompt: img.prompt }])
+                  }
+                >
+                  <Icon icon={BookmarkPlus} size="sm" />
+                </button>
               </div>
             </div>
           </div>
@@ -164,6 +178,10 @@ export const FlowImageWorkspace: React.FC = () => {
         generating={store.isGenerating}
         blockedReason={blockedReason}
       />
+
+      {vaultSources && (
+        <SaveToVaultDialog sources={vaultSources} onClose={() => setVaultSources(null)} />
+      )}
 
       {previewImage && (
         <Modal variant="lightbox" label="Ảnh phóng to" onClose={() => store.setPreviewImage(null)}>

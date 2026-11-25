@@ -72,3 +72,36 @@ func TestProbeMP4RejectsFilesWithoutVideoHeaders(t *testing.T) {
 		t.Fatal("a file without moov was accepted")
 	}
 }
+
+func TestProbeMP4HandlesSizeOneOverflowAndEOFMoov(t *testing.T) {
+	dir := t.TempDir()
+	// I-4a: 64-bit extended size exceeding math.MaxInt64 must error instead of seeking backwards in a loop.
+	overflow := make([]byte, 16)
+	binary.BigEndian.PutUint32(overflow[0:4], 1)
+	copy(overflow[4:8], "free")
+	binary.BigEndian.PutUint64(overflow[8:16], ^uint64(0)-10)
+	overflowFile := filepath.Join(dir, "overflow.mp4")
+	if err := os.WriteFile(overflowFile, overflow, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := probeMP4(overflowFile); err == nil {
+		t.Fatal("expected error for uint64 box size overflowing int64")
+	}
+
+	// I-4b: Trailing top-level moov box with size=0 ("extends to EOF") is valid in ISO BMFF.
+	valid := testMP4(640, 360, false)
+	// testMP4 produces ftyp + moov; rewrite moov's 32-bit size to 0 (to EOF).
+	ftypLen := int(binary.BigEndian.Uint32(valid[0:4]))
+	binary.BigEndian.PutUint32(valid[ftypLen:ftypLen+4], 0)
+	eofMoovFile := filepath.Join(dir, "eof-moov.mp4")
+	if err := os.WriteFile(eofMoovFile, valid, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := probeMP4(eofMoovFile)
+	if err != nil {
+		t.Fatalf("size=0 trailing moov failed: %v", err)
+	}
+	if meta.Width != 640 || meta.Height != 360 || meta.DurationSeconds != 4.5 {
+		t.Fatalf("got %+v", meta)
+	}
+}

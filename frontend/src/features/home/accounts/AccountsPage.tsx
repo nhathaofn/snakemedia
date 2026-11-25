@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Cookie, ListChecks, LogIn, Video } from 'lucide-react';
 import './AccountsPage.css';
-import { Button, Icon, SegmentedControl } from '../../../components/ui';
+import { Button, Icon, SegmentedControl, confirmAction } from '../../../components/ui';
 import { ACCOUNT_CHECK_CONCURRENCY } from '../../../constants';
 import { useAccountsLive, useNow } from '../../../hooks';
 import { api, unwrap } from '../../../services';
@@ -15,7 +15,6 @@ import type { AccountAction } from './AccountCard';
 import { AccountPanel } from './AccountPanel';
 import type { PanelMode } from './AccountPanel';
 import { proxyLines } from './AccountPanel';
-import { MuseApiCard } from './MuseApiCard';
 import { ProxyModal } from './ProxyModal';
 import { summarizeAccountCheck, summarizeBatchCheck, videoCheckTargets } from './checkSummary';
 import type { CheckOutcomeItem } from './checkSummary';
@@ -216,13 +215,17 @@ export const AccountsPage: React.FC = () => {
       case 'rename':
         return setPanel({ kind: 'rename', account });
       case 'remove':
-        if (
-          !window.confirm(
-            `Xoá "${account.name}" và toàn bộ dữ liệu Chrome của tài khoản này (cookie, cache, đăng nhập)? Tài khoản trên ${accountProviderLabels[account.provider]} không bị xoá.`,
-          )
-        )
-          return;
         return run(key, action, async () => {
+          if (
+            !(await confirmAction({
+              title: 'Xoá tài khoản?',
+              message: `Xoá "${account.name}" và toàn bộ dữ liệu Chrome của tài khoản này (cookie, cache, đăng nhập)? Tài khoản trên ${accountProviderLabels[account.provider]} không bị xoá.`,
+              confirmLabel: 'Xoá',
+              danger: true,
+            }))
+          ) {
+            return;
+          }
           unwrap(await api.removeAccount(account.id));
           useAccountsStore.setState((s) => ({
             accounts: s.accounts.filter((a) => a.id !== account.id),
@@ -306,10 +309,8 @@ export const AccountsPage: React.FC = () => {
       </div>
 
       <p className="accounts-hint">
-        {providerHints[provider]} <ReadyCount list={list} provider={provider} />
+        {providerHints[provider]} <ReadyCount list={list} />
       </p>
-
-      {provider === AccountProvider.Muse && <MuseApiCard />}
 
       {noProxies && list.some((a) => !a.proxy) && (
         <div className="accounts-proxy-hint">
@@ -365,23 +366,17 @@ export const AccountsPage: React.FC = () => {
 };
 
 function EmptyAccountsHint({ provider }: { provider: AccountProvider }) {
-  const useMuseApi = useAppStore((s) => s.config?.muse?.useApi);
   return (
     <div className="accounts-empty">
-      {provider === AccountProvider.Muse && useMuseApi
-        ? 'Chế độ API đang BẬT: Các tác vụ tạo ảnh & video Muse sẽ chạy trực tiếp qua muse2api (không bắt buộc tài khoản Chrome).'
-        : `Chưa có tài khoản ${accountProviderLabels[provider]}. Đăng nhập bằng Chrome hoặc dán cookie để bắt đầu.`}
+      Chưa có tài khoản {accountProviderLabels[provider]}. Đăng nhập bằng Chrome hoặc dán cookie để
+      bắt đầu.
     </div>
   );
 }
 
 /** "Sẵn sàng: n/m." for the hint. It reads the clock itself (rests end over time). */
-function ReadyCount({ list, provider }: { list: readonly Account[]; provider: AccountProvider }) {
+function ReadyCount({ list }: { list: readonly Account[] }) {
   const now = useNow();
-  const useApi = useAppStore((s) => s.config?.muse?.useApi);
-  if (provider === AccountProvider.Muse && useApi) {
-    return <>· API đang bật (sẵn sàng qua muse2api).</>;
-  }
   if (list.length === 0) return null;
   const ready = list.filter((a) => accountReady(a, now)).length;
   return <>{`Sẵn sàng: ${ready}/${list.length}.`}</>;

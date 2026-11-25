@@ -98,11 +98,11 @@ func TestOpaqueSkipsCopyOnlyWhenOpaque(t *testing.T) {
 			img.Set(x, y, color.NRGBA{R: 10, G: 20, B: 30, A: 255})
 		}
 	}
-	if opaque(img) != image.Image(img) {
+	if Opaque(img) != image.Image(img) {
 		t.Fatal("opaque image copied")
 	}
 	img.Set(0, 0, color.NRGBA{A: 0})
-	out := opaque(img)
+	out := Opaque(img)
 	if out == image.Image(img) {
 		t.Fatal("transparent image not flattened")
 	}

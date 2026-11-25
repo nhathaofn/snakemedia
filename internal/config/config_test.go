@@ -296,3 +296,35 @@ func TestDefaultIdleBrowserMinutesIsTenAndOnChangeFires(t *testing.T) {
 		t.Fatalf("OnChange should not fire on failed Update: calls = %d", calls)
 	}
 }
+
+func TestMigrate_ClearsLegacyDefaultMuseSetupMessage(t *testing.T) {
+	if got := DefaultMuseConfig().SetupMessage; got != "" {
+		t.Fatalf("DefaultMuseConfig().SetupMessage = %q, want empty", got)
+	}
+	for i, legacy := range legacyMuseSetupMessages {
+		path := filepath.Join(t.TempDir(), "config.json")
+		raw, _ := json.Marshal(map[string]any{"muse": map[string]any{"setupMessage": legacy}})
+		if err := os.WriteFile(path, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		m, err := NewManager(path)
+		if err != nil {
+			t.Fatalf("case %d: %v", i, err)
+		}
+		if got := m.Get().Muse.SetupMessage; got != "" {
+			t.Fatalf("case %d: legacy setupMessage not cleared: %q", i, got)
+		}
+	}
+	customPath := filepath.Join(t.TempDir(), "custom.json")
+	rawCustom, _ := json.Marshal(map[string]any{"muse": map[string]any{"setupMessage": "Custom note"}})
+	if err := os.WriteFile(customPath, rawCustom, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := NewManager(customPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Get().Muse.SetupMessage; got != "Custom note" {
+		t.Fatalf("custom setupMessage = %q, want Custom note", got)
+	}
+}

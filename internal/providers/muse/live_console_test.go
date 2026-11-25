@@ -34,14 +34,13 @@ type consoleStep struct {
 	Text     string `json:"text,omitempty"`
 	TextFile string `json:"textFile,omitempty"`
 	Job      *struct {
-		Kind        MuseJobKind   `json:"kind"`
-		Ratio       string        `json:"ratio"`
-		Duration    int           `json:"duration"`
-		Prompt      string        `json:"prompt"`
-		PromptFile  string        `json:"promptFile"`
-		Frames      []string      `json:"frames"`
-		SourceVideo string        `json:"sourceVideo"`
-		RefInfo     []MuseRefInfo `json:"refInfo"`
+		Kind       MuseJobKind   `json:"kind"`
+		Ratio      string        `json:"ratio"`
+		Duration   int           `json:"duration"`
+		Prompt     string        `json:"prompt"`
+		PromptFile string        `json:"promptFile"`
+		Frames     []string      `json:"frames"`
+		RefInfo    []MuseRefInfo `json:"refInfo"`
 	} `json:"job,omitempty"`
 	// Images are attached in order (a Job's frames first, then these).
 	Images []string `json:"images,omitempty"`
@@ -185,15 +184,12 @@ func TestLiveConsole(t *testing.T) {
 				}
 				prompt = strings.TrimSpace(strings.ReplaceAll(string(b), "\r\n", "\n"))
 			}
-			job := MuseJob{Kind: j.Kind, Ratio: j.Ratio, Duration: j.Duration, Prompt: prompt, RefInfo: j.RefInfo, Frames: j.Frames, References: s.Images, SourceVideo: j.SourceVideo}
+			job := MuseJob{Kind: j.Kind, Ratio: j.Ratio, Duration: j.Duration, Prompt: prompt, RefInfo: j.RefInfo, Frames: j.Frames, References: s.Images}
 			if len(j.Frames) > 0 {
 				job.BoardFrames = len(j.Frames)
 			}
 			text = buildMessage(job)
 			images = append(append([]string{}, j.Frames...), s.Images...)
-			if j.SourceVideo != "" {
-				images = append([]string{j.SourceVideo}, images...)
-			}
 		}
 		var atts []Attachment
 		for k, img := range images {
