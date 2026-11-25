@@ -153,38 +153,8 @@ func isUnauthorized(err error) bool {
 	return errors.As(err, &remote) && remote.Status == http.StatusUnauthorized
 }
 
-// ValidateAccountCookies verifies that an account has valid, non-expired Google session cookies.
-func ValidateAccountCookies(cookies []chrome.CookieItem) error {
-	if len(cookies) == 0 {
-		return errors.New("tài khoản không có cookie nào")
-	}
-	hasSID := false
-	hasHSID := false
-	hasSSID := false
-	now := time.Now().Unix()
-
-	for _, c := range cookies {
-		if c.Expires > 0 && int64(c.Expires) < now {
-			continue
-		}
-		if c.Name == "SID" || c.Name == "__Secure-1PSID" || c.Name == "__Secure-3PSID" {
-			hasSID = true
-		}
-		if c.Name == "HSID" {
-			hasHSID = true
-		}
-		if c.Name == "SSID" || c.Name == "__Secure-1PAPISID" || c.Name == "__Secure-3PAPISID" || c.Name == "SAPISID" {
-			hasSSID = true
-		}
-	}
-
-	if !hasSID || !hasHSID || !hasSSID {
-		return errors.New("thiếu các cookie phiên Google cốt lõi hoặc cookie đã hết hạn")
-	}
-	return nil
-}
-
-// GetValidConnectedAccounts returns all connected accounts that pass strict cookie validation.
+// GetValidConnectedAccounts lists configured candidates. Chrome verifies the
+// session before dispatch, even if the last stored cookies have expired.
 func (s *Provider) GetValidConnectedAccounts() ([]session.StoredAccount, error) {
 	if s.accounts == nil {
 		return nil, errors.New("dịch vụ tài khoản chưa được khởi tạo")
@@ -194,13 +164,7 @@ func (s *Provider) GetValidConnectedAccounts() ([]session.StoredAccount, error) 
 		return nil, fmt.Errorf("không đọc được danh sách tài khoản: %w", err)
 	}
 
-	var valid []session.StoredAccount
-	for _, acc := range connected {
-		if err := ValidateAccountCookies(acc.Credentials.Cookies); err == nil {
-			valid = append(valid, acc)
-		}
-	}
-	return valid, nil
+	return connected, nil
 }
 
 // catalogAccount picks the account whose model lists the screens show: the

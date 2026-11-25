@@ -296,25 +296,11 @@ func (s *Provider) collectVideoItems(ctx context.Context, client *chrome.FlowCli
 // can lag behind; the listing supplies failure states and the media IDs of
 // generations known only by operation.
 func (s *Provider) waitForVideos(ctx context.Context, client *chrome.FlowClient, projectID string, started []pendingVideo, intervalMS, timeoutSeconds int, checkpoint ...func([]pendingVideo) error) ([]pendingVideo, error) {
-	timeout := time.Duration(s.cfg.Get().FlowPagePolicy().RequestTimeoutSeconds) * time.Second
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 	videos := append([]pendingVideo(nil), started...)
 	settled := func(v pendingVideo) bool { return v.url != "" || videoFailed(v) }
-	listingRPC := client.Credentials().RPCs.ID(chrome.MethodProjectContents)
-	mediaRPC := client.Credentials().RPCs.ID(chrome.MethodMedia)
-	statusRPC := client.Credentials().RPCs.ID(chrome.MethodVideoStatus)
-	listing, err := BuildBatchEnvelope(listingRPC, []any{"projects/" + projectID, nil, nil, nil, []any{1}})
-	if err != nil {
-		return videos, err
-	}
-	call := func(rpcID, fReq string) (string, error) {
-		body, err := client.Do(ctx, rpcID, fReq, timeout)
-		if err != nil {
-			return "", err
-		}
-		return chrome.ParseRPCPayload(string(body), rpcID)
-	}
+	timeout := time.Duration(s.cfg.Get().FlowPagePolicy().RequestTimeoutSeconds) * time.Second
 
 	delay := time.Duration(intervalMS) * time.Millisecond
 	failures := 0
@@ -329,7 +315,8 @@ func (s *Provider) waitForVideos(ctx context.Context, client *chrome.FlowClient,
 
 		roundFailed := false
 		active := make(map[string]bool)
-		if statusRPC != "" {
+		hasStatus := client.Credentials().RPCs.Has(chrome.MethodVideoStatus)
+		if hasStatus {
 			ids := []any{}
 			for _, v := range videos {
 				if !settled(v) && v.name != "" {
@@ -337,11 +324,7 @@ func (s *Provider) waitForVideos(ctx context.Context, client *chrome.FlowClient,
 				}
 			}
 			if len(ids) > 0 {
-				fReq, err := BuildBatchEnvelope(statusRPC, []any{nil, nil, ids})
-				if err != nil {
-					return videos, err
-				}
-				payload, err := call(statusRPC, fReq)
+				payload, err := readFlowPayload(ctx, client, chrome.MethodVideoStatus, []any{nil, nil, ids}, timeout)
 				if err != nil {
 					roundFailed, lastErr = true, err
 				} else {
@@ -364,11 +347,11 @@ func (s *Provider) waitForVideos(ctx context.Context, client *chrome.FlowClient,
 		}
 		listed := make(map[string]bool)
 		listingOK := false
-		needsListing := statusRPC == "" || slices.ContainsFunc(videos, func(v pendingVideo) bool {
+		needsListing := !hasStatus || slices.ContainsFunc(videos, func(v pendingVideo) bool {
 			return !settled(v) && (v.name == "" || (v.clientID != "" && strings.EqualFold(v.name, v.clientID)))
 		})
 		if needsListing {
-			if payload, err := call(listingRPC, listing); err == nil {
+			if payload, err := s.projectContentsPayload(ctx, client, projectID); err == nil {
 				listingOK = true
 				// GetProjectContents: field 3 (index 2) lists the project's media.
 				media, _ := parseVideoMedia(payload, 2)
@@ -404,11 +387,7 @@ func (s *Provider) waitForVideos(ctx context.Context, client *chrome.FlowClient,
 			if settled(v) || v.name == "" || active[v.name] {
 				continue
 			}
-			fReq, err := BuildBatchEnvelope(mediaRPC, []any{v.name})
-			if err != nil {
-				return videos, err
-			}
-			payload, err := call(mediaRPC, fReq)
+			payload, err := s.getProjectMedia(ctx, client, v.name)
 			if err != nil {
 				// A media still rendering may not be served yet ("Media not found");
 				// only transport failures count against the poll.

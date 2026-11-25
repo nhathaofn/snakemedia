@@ -126,7 +126,8 @@ func (s *Service) ProxyURL(ctx context.Context, acc StoredAccount) (*url.URL, er
 // Google's cookies, so the stored copy goes stale (HTTP 401) unless it is
 // refreshed from the browser like this.
 func (s *Service) SyncSession(ctx context.Context, acc StoredAccount) (StoredAccount, error) {
-	p := s.cfg.Get().FlowPagePolicy()
+	cfg := s.cfg.Get()
+	p := cfg.FlowPagePolicy()
 	b, err := s.accounts.Browser(ctx, acc.ID)
 	if err != nil {
 		return acc, err
@@ -135,36 +136,53 @@ func (s *Service) SyncSession(ctx context.Context, acc StoredAccount) (StoredAcc
 	defer cancel()
 	ticker := time.NewTicker(time.Duration(p.PollIntervalMS) * time.Millisecond)
 	defer ticker.Stop()
-	anonymous := 0
+	var observations signInObservations
 	for {
 		details, err := s.inspectIdentity(ctx, b.Port, p)
 		switch {
-		case err == nil && details != nil && details.IsLoggedIn:
+		case err == nil && details != nil && details.IsLoggedIn && details.Credentials.HasRuntime():
 			if details.GaiaID != acc.GaiaID && acc.GaiaID != "" {
 				return acc, errors.New("Chrome của tài khoản đang đăng nhập một tài khoản Google khác.")
 			}
-			creds := keepRPCs(details.Credentials, acc.Credentials)
-			if err := s.update(acc.ID, func(d *flowData) { d.Credentials = creds }); err != nil {
+			var creds chrome.Credentials
+			if err := s.update(acc.ID, func(d *flowData) {
+				creds = keepRPCs(details.Credentials, d.Credentials)
+				d.Credentials = creds
+			}); err != nil {
 				return acc, err
 			}
 			acc.Credentials = creds
 			return acc, nil
-		case err == nil && details != nil:
-			if anonymous++; anonymous >= s.cfg.Get().Flow.SignedOutReads {
-				s.accounts.Update(acc.ID, func(r *accounts.Record) {
+		case observations.signedOut(err, cfg.Flow.SignedOutReads):
+			_, updateErr := s.accounts.Update(acc.ID, func(r *accounts.Record) {
+				if r.Status == accounts.StatusSignedIn {
 					r.Status, r.Message = accounts.StatusSignedOut, ErrSessionSignedOut.Error()
-				})
-				return acc, ErrSessionSignedOut
+				}
+			})
+			if updateErr != nil {
+				return acc, updateErr
 			}
-		case err != nil && !errors.Is(err, chrome.ErrPageNotReady):
+			return acc, ErrSessionSignedOut
+		case err != nil && !errors.Is(err, chrome.ErrPageNotReady) && !errors.Is(err, chrome.ErrLoginRequired):
 			return acc, err
 		}
 		select {
 		case <-ctx.Done():
-			return acc, fmt.Errorf("Chrome chưa tải xong trang Flow: %w", ctx.Err())
+			return acc, fmt.Errorf("%w: %w", chrome.ErrPageNotReady, ctx.Err())
 		case <-ticker.C:
 		}
 	}
+}
+
+type signInObservations struct{ required int }
+
+func (o *signInObservations) signedOut(err error, limit int) bool {
+	if !errors.Is(err, chrome.ErrLoginRequired) {
+		o.required = 0
+		return false
+	}
+	o.required++
+	return o.required >= limit
 }
 
 // UpdateCredentials stores RPC IDs discovered or cookies rotated during work.

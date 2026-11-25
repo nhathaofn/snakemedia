@@ -66,6 +66,9 @@ func (s *Site) Inspect(ctx context.Context, b *browser.Browser, rec accounts.Rec
 		return accounts.Inspection{}, err
 	}
 	details, err := s.inspect(ctx, b.Port, s.cfg.Get().FlowPagePolicy())
+	if errors.Is(err, chrome.ErrLoginRequired) {
+		return accounts.Inspection{}, nil
+	}
 	if err != nil {
 		return accounts.Inspection{}, err
 	}

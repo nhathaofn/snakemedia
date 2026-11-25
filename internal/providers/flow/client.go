@@ -4,11 +4,20 @@ import (
 	"SnakeMedia/internal/providers/flow/chrome"
 	"SnakeMedia/internal/providers/flow/session"
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
 
 func (s *Provider) flowClient(ctx context.Context, acc session.StoredAccount, methods ...string) (*chrome.FlowClient, error) {
+	if !acc.Credentials.HasRuntime() && s.syncSession != nil {
+		fresh, err := s.syncSession(ctx, acc)
+		if err != nil {
+			return nil, err
+		}
+		acc = fresh
+	}
 	creds := acc.Credentials
 	if !creds.RPCs.Has(methods...) {
 		browser, err := s.accounts.EnsureAccountHeadlessBrowser(ctx, acc)
@@ -43,8 +52,51 @@ func (s *Provider) flowClient(ctx context.Context, acc session.StoredAccount, me
 	if err == nil {
 		client.SetUploadPolicy(s.cfg.Get().Flow)
 		client.SetProxy(proxyURL)
+		if s.syncSession != nil {
+			client.SetReadSessionRefresh(func(ctx context.Context) (*chrome.FlowClient, error) {
+				fresh, err := s.syncSession(ctx, acc)
+				if err != nil {
+					return nil, err
+				}
+				return s.flowClient(ctx, fresh, methods...)
+			})
+		}
 	}
 	return client, err
+}
+
+// readFlowPayload repeats a read-only RPC once after an explicit HTTP 401.
+// Resolving the method again uses the fresh browser session's build and RPCs.
+func readFlowPayload(ctx context.Context, client *chrome.FlowClient, method string, input any, timeout time.Duration) (string, error) {
+	switch method {
+	case chrome.MethodModels, chrome.MethodProjects, chrome.MethodProjectContents, chrome.MethodMedia, chrome.MethodVideoStatus:
+	default:
+		return "", fmt.Errorf("phương thức Flow %q không thuộc nhóm đọc", method)
+	}
+	read := func() (string, error) {
+		id := client.Credentials().RPCs.ID(method)
+		envelope, err := BuildBatchEnvelope(id, input)
+		if err != nil {
+			return "", err
+		}
+		body, err := client.Do(ctx, id, envelope, timeout)
+		if err != nil {
+			return "", err
+		}
+		return chrome.ParseRPCPayload(string(body), id)
+	}
+	payload, err := read()
+	if !isUnauthorized(err) || ctx.Err() != nil {
+		return payload, err
+	}
+	refreshed, refreshErr := client.RefreshReadSession(ctx)
+	if refreshErr != nil {
+		return "", fmt.Errorf("không đọc lại được phiên Flow sau khi máy chủ trả về 401: %w", refreshErr)
+	}
+	if !refreshed {
+		return payload, err
+	}
+	return read()
 }
 
 func (s *Provider) editClient(ctx context.Context, acc session.StoredAccount, projectID string) (*chrome.FlowClient, error) {
@@ -81,6 +133,9 @@ func (s *Provider) projectClient(ctx context.Context, acc session.StoredAccount,
 				return client, nil
 			}
 			err = discoveryErr
+		}
+		if errors.Is(err, session.ErrSessionSignedOut) {
+			return nil, err
 		}
 		select {
 		case <-ctx.Done():
@@ -120,6 +175,9 @@ func (s *Provider) homePageClient(ctx context.Context, acc session.StoredAccount
 		client, err := s.flowClient(ctx, acc, chrome.MethodProjects, chrome.MethodCreateProject)
 		if err == nil {
 			return client, nil
+		}
+		if errors.Is(err, session.ErrSessionSignedOut) {
+			return nil, err
 		}
 		select {
 		case <-ctx.Done():

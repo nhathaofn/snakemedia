@@ -25,6 +25,7 @@ type FlowClient struct {
 	policy       config.AccountConfig
 	uploadPolicy config.FlowConfig
 	client       *http.Client
+	refreshRead  func(context.Context) (*FlowClient, error)
 }
 
 // NewFlowClient prepares a client for FlowURL.
@@ -85,6 +86,23 @@ func (f *FlowClient) Credentials() Credentials {
 	c := f.creds
 	c.Cookies = append([]CookieItem(nil), f.creds.Cookies...)
 	return c
+}
+
+// SetReadSessionRefresh installs the account-scoped recovery for read RPCs.
+func (f *FlowClient) SetReadSessionRefresh(refresh func(context.Context) (*FlowClient, error)) {
+	f.refreshRead = refresh
+}
+
+func (f *FlowClient) RefreshReadSession(ctx context.Context) (bool, error) {
+	if f.refreshRead == nil {
+		return false, nil
+	}
+	fresh, err := f.refreshRead(ctx)
+	if err != nil {
+		return false, err
+	}
+	*f = *fresh
+	return true, nil
 }
 
 // Do posts fReq for rpcID within timeout and returns the bounded response body.

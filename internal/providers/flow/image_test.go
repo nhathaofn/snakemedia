@@ -4,56 +4,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
 	"SnakeMedia/internal/providers/flow/chrome"
 )
-
-func TestValidateAccountCookies(t *testing.T) {
-	t.Run("empty cookies fail", func(t *testing.T) {
-		err := ValidateAccountCookies(nil)
-		if err == nil {
-			t.Fatal("expected error for nil cookies")
-		}
-	})
-
-	t.Run("missing core cookies fail", func(t *testing.T) {
-		cookies := []chrome.CookieItem{
-			{Name: "_ga", Value: "123"},
-			{Name: "NID", Value: "456"},
-		}
-		err := ValidateAccountCookies(cookies)
-		if err == nil {
-			t.Fatal("expected error for missing core cookies")
-		}
-	})
-
-	t.Run("expired core cookie fails", func(t *testing.T) {
-		past := float64(time.Now().Add(-1 * time.Hour).Unix())
-		cookies := []chrome.CookieItem{
-			{Name: "SID", Value: "val", Expires: past},
-			{Name: "HSID", Value: "val"},
-			{Name: "SSID", Value: "val"},
-		}
-		err := ValidateAccountCookies(cookies)
-		if err == nil {
-			t.Fatal("expected error for expired core cookie")
-		}
-	})
-
-	t.Run("valid cookies succeed", func(t *testing.T) {
-		future := float64(time.Now().Add(24 * time.Hour).Unix())
-		cookies := []chrome.CookieItem{
-			{Name: "__Secure-1PSID", Value: "val", Expires: future},
-			{Name: "HSID", Value: "val"},
-			{Name: "__Secure-3PAPISID", Value: "val", Expires: future},
-		}
-		err := ValidateAccountCookies(cookies)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
-}
 
 func TestBuildImageBatchRequest(t *testing.T) {
 	data, err := BuildImageBatchRequest("cyberpunk city", "proj-test", "16:9", "GEM_PIX_2", 2, "test_token")

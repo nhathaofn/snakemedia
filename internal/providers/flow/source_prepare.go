@@ -15,38 +15,28 @@ import (
 // A successful Scotty upload only starts Flow's transcoding/safety pipeline.
 // Editing must wait for status 3 AND a serving URL, not just an upload media ID.
 func (s *Provider) waitForUploadedSource(ctx context.Context, client *chrome.FlowClient, id string) (media.VideoMetadata, error) {
-	policy := s.cfg.Get().FlowPagePolicy()
-	rpc := client.Credentials().RPCs.ID(chrome.MethodMedia)
-	fReq, err := BuildBatchEnvelope(rpc, []any{id})
-	if err != nil {
-		return media.VideoMetadata{}, err
-	}
 	failures := 0
 	delay := time.Duration(s.cfg.Get().Flow.VideoPollIntervalMS) * time.Millisecond
 	for {
-		body, callErr := client.Do(ctx, rpc, fReq, time.Duration(policy.RequestTimeoutSeconds)*time.Second)
+		payload, callErr := s.getProjectMedia(ctx, client, id)
 		if callErr == nil {
-			var payload string
-			payload, callErr = chrome.ParseRPCPayload(string(body), rpc)
-			if callErr == nil {
-				rows, parseErr := parseVideoMedia("[["+payload+"]]", 0)
-				if parseErr != nil {
-					return media.VideoMetadata{}, parseErr
+			rows, parseErr := parseVideoMedia("[["+payload+"]]", 0)
+			if parseErr != nil {
+				return media.VideoMetadata{}, parseErr
+			}
+			if len(rows) != 1 || rows[0].name != id {
+				return media.VideoMetadata{}, errors.New("Flow trả về thông tin nguồn không khớp.")
+			}
+			video := rows[0]
+			if videoFailed(video) {
+				return media.VideoMetadata{}, fmt.Errorf("Flow xử lý video nguồn thất bại: %s %s", videoStatusText(video.status), video.errMsg)
+			}
+			if video.statusObserved && video.status == videoStatusSuccess && video.url != "" {
+				var record []any
+				if err := json.Unmarshal([]byte(payload), &record); err != nil {
+					return media.VideoMetadata{}, err
 				}
-				if len(rows) != 1 || rows[0].name != id {
-					return media.VideoMetadata{}, errors.New("Flow trả về thông tin nguồn không khớp.")
-				}
-				video := rows[0]
-				if videoFailed(video) {
-					return media.VideoMetadata{}, fmt.Errorf("Flow xử lý video nguồn thất bại: %s %s", videoStatusText(video.status), video.errMsg)
-				}
-				if video.statusObserved && video.status == videoStatusSuccess && video.url != "" {
-					var record []any
-					if err := json.Unmarshal([]byte(payload), &record); err != nil {
-						return media.VideoMetadata{}, err
-					}
-					return preparedVideoMetadata(record)
-				}
+				return preparedVideoMetadata(record)
 			}
 		}
 		if callErr != nil {
