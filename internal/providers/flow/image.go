@@ -412,7 +412,7 @@ func (s *Provider) generateImagesFromAccount(ctx context.Context, acc session.St
 	}()
 
 	// 1. Upload references, then mint the generation token last so it is fresh.
-	browser, err := s.generationBrowser(ctx, acc)
+	browser, err := s.generationBrowser(ctx, acc, projectID)
 	if err != nil {
 		return nil, err
 	}

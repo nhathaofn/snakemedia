@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('MuseSingle', 'MuseBatch', 'MuseVideo', 'FlowPause')]
+    [ValidateSet('MuseSingle', 'MuseBatch', 'MuseVideo', 'MuseVideoBatch', 'FlowPause')]
     [string]$Scenario,
     [string]$ProcessName = 'SnakeMedia-dev',
     [string]$DataDir = (Join-Path $env:APPDATA 'SnakeMedia-dev'),
@@ -115,13 +115,14 @@ if ($Scenario -eq 'FlowPause') {
 
 $journal = Join-Path $DataDir 'muse/jobs.json'
 Click-Control 'Muse' 'Hyperlink'
-if ($Scenario -eq 'MuseVideo') {
+$batch = $Scenario -in @('MuseBatch', 'MuseVideoBatch')
+if ($Scenario -in @('MuseVideo', 'MuseVideoBatch')) {
     Click-Control 'Video' 'Hyperlink'
     $prompt = "Create a short silent landscape video of a paper pinwheel turning on a wooden table, fixed camera, no text. $tag"
 } else {
     Click-Control 'Ảnh' 'Hyperlink'
 }
-if ($Scenario -ne 'MuseBatch') {
+if (!$batch) {
     Click-Control 'Đơn' 'TabItem'
     Click-Control 'x1'
     Set-Prompt '*Enter để tạo*' $prompt
@@ -129,7 +130,7 @@ if ($Scenario -ne 'MuseBatch') {
     Click-Control 'Tạo*'
 } else {
     Click-Control 'Hàng loạt' 'TabItem'
-    if (Find-Control 'Chạy * prompt' 'Button') { throw 'MuseBatch needs zero held prompts before the test.' }
+    if (Find-Control 'Chạy * prompt' 'Button') { throw 'The Muse batch test needs zero held prompts before it starts.' }
     Set-Prompt 'Prompt * prompt' $prompt -Submit
     $held = Wait-For { $job = Read-Job $journal $prompt; if ($job.held) { $job } }
     if ($held.sessionId) { throw 'The held Muse job was already sent.' }
@@ -140,9 +141,10 @@ $result = Wait-For { $job = Read-Job $journal $prompt; if ($job.status -in @('su
 if ($result.status -ne 'succeeded' -or !$result.sessionId -or !$result.files.Count) {
     throw "Muse job $($result.id) ended as $($result.status) without a confirmed result."
 }
+if (!(Find-Control 'Thư viện' 'Hyperlink')) { Click-Control 'Muse' 'Hyperlink' }
 Click-Control 'Thư viện' 'Hyperlink'
 $null = Wait-For { Find-Control "Phóng to*$tag*" 'Button' }
-if ($Scenario -eq 'MuseBatch') {
+if ($batch) {
     foreach ($path in $result.savedFiles) {
         if (!(Test-Path -LiteralPath $path -PathType Leaf)) { throw 'A saved output file was missing.' }
     }

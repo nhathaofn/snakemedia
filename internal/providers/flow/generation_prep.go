@@ -13,9 +13,8 @@ import (
 	"SnakeMedia/internal/providers/flow/session"
 )
 
-// generationBrowser returns the account's headless Chrome, which mints the
-// reCAPTCHA Enterprise tokens every billable Flow mutation needs.
-func (s *Provider) generationBrowser(ctx context.Context, acc session.StoredAccount) (*browser.Browser, error) {
+// generationBrowser opens the selected project in the account's Chrome.
+func (s *Provider) generationBrowser(ctx context.Context, acc session.StoredAccount, projectID string) (*browser.Browser, error) {
 	if s.accounts == nil {
 		return nil, errors.New("dịch vụ tài khoản chưa được liên kết để cấp token reCAPTCHA")
 	}
@@ -25,6 +24,12 @@ func (s *Provider) generationBrowser(ctx context.Context, acc session.StoredAcco
 	}
 	if browser == nil {
 		return nil, errors.New("trình duyệt Chrome chưa được khởi tạo")
+	}
+	page := s.pageLock(browser.Port)
+	page.Lock()
+	defer page.Unlock()
+	if err := chrome.OpenProject(ctx, browser.Port, projectID, s.cfg.Get().FlowPagePolicy()); err != nil {
+		return nil, fmt.Errorf("không mở được trình soạn dự án Flow: %w", err)
 	}
 	return browser, nil
 }
