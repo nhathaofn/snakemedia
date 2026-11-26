@@ -1,7 +1,6 @@
 package flow
 
 import (
-	"SnakeMedia/internal/providers/flow/session"
 	"bytes"
 	"context"
 	"errors"
@@ -9,10 +8,11 @@ import (
 	"math"
 	"slices"
 	"strings"
-	"time"
 
+	"SnakeMedia/internal/browser"
 	"SnakeMedia/internal/models"
 	"SnakeMedia/internal/providers/flow/chrome"
+	"SnakeMedia/internal/providers/flow/session"
 	"github.com/google/uuid"
 )
 
@@ -225,17 +225,23 @@ func (s *Provider) GenerateVideos(ctx context.Context, req GenerateVideoRequest)
 	if err != nil {
 		return models.ErrorResponse[[]GeneratedVideoItem]("Không thể tạo video: "+err.Error(), models.CodeUnavailable)
 	}
+	// Run refreshLiveCredits AFTER release() clears videoReserved, otherwise
+	// refreshAccountCredits skips the refresh while videoReserved > 0.
+	calledLive := false
+	defer func() {
+		if calledLive && s.refreshLiveCredits != nil {
+			s.refreshLiveCredits(ctx, account.ID)
+		}
+	}()
 	defer release()
 
 	req.onAccepted = lease.commitVideoSpend
+	calledLive = true
 	videos, err := s.generateLiveVideos(ctx, account, req, chosen.usage.key)
-	if s.refreshLiveCredits != nil {
-		s.refreshLiveCredits(ctx, account.ID)
-	}
 	if err != nil {
 		job, readErr := s.loadGenerationJob(req.RequestID)
 		if readErr == nil && (job.Phase == generationSubmitting || job.Phase == generationAccepted) {
-			if definiteMutationRejection(err) {
+			if job.Phase == generationSubmitting && definiteMutationRejection(err) {
 				job.Phase, job.Message = generationRejected, err.Error()
 				if saveErr := s.saveGenerationJob(job); saveErr != nil {
 					return models.ErrorResponse[[]GeneratedVideoItem](saveErr.Error(), models.CodeInternal)
@@ -308,7 +314,7 @@ func (s *Provider) generateVideosFromAccount(ctx context.Context, acc session.St
 	}
 
 	// 1. Upload references, then mint the generation token last so it is fresh.
-	browser, err := s.generationBrowser(ctx, acc)
+	browser, err := s.generationBrowser(ctx, acc, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -334,13 +340,17 @@ func (s *Provider) generateVideosFromAccount(ctx context.Context, acc session.St
 		return nil, fmt.Errorf("không đóng gói được payload tạo video: %w", err)
 	}
 	template := GeneratedVideoItem{JobID: req.RequestID, Prompt: req.Prompt, Model: variant, AspectRatio: req.AspectRatio, Duration: req.Duration, Resolution: req.Resolution}
-	return s.runVideoJob(ctx, client, acc.ID, req.RequestID, req.fingerprint, projectID, rpcID, inner, clientIDs, template, req.onAccepted)
+	return s.runVideoJobWithBrowser(ctx, client, browser, acc.ID, req.RequestID, req.fingerprint, projectID, rpcID, inner, clientIDs, template, req.onAccepted)
 }
 
 // runVideoJob submits a built video request (text, reference or edit), follows
 // its videos until Flow finishes them and downloads the results. template
 // carries the request's settings into every returned item.
 func (s *Provider) runVideoJob(ctx context.Context, client *chrome.FlowClient, accountID, requestID, fingerprint, projectID, rpcID string, inner []byte, clientIDs []string, template GeneratedVideoItem, accepted ...func()) ([]GeneratedVideoItem, error) {
+	return s.runVideoJobWithBrowser(ctx, client, nil, accountID, requestID, fingerprint, projectID, rpcID, inner, clientIDs, template, accepted...)
+}
+
+func (s *Provider) runVideoJobWithBrowser(ctx context.Context, client *chrome.FlowClient, b *browser.Browser, accountID, requestID, fingerprint, projectID, rpcID string, inner []byte, clientIDs []string, template GeneratedVideoItem, accepted ...func()) ([]GeneratedVideoItem, error) {
 	fReq, err := BuildBatchEnvelope(rpcID, inner)
 	if err != nil {
 		return nil, err
@@ -350,7 +360,7 @@ func (s *Provider) runVideoJob(ctx context.Context, client *chrome.FlowClient, a
 	if err := s.saveGenerationJob(job); err != nil {
 		return nil, fmt.Errorf("không lưu được mã request trước khi gửi Flow: %w", err)
 	}
-	body, err := client.Do(ctx, rpcID, fReq, time.Duration(s.cfg.Get().Flow.GenerationTimeoutSeconds)*time.Second)
+	body, err := s.sendBillable(ctx, client, b, rpcID, fReq)
 	if bytes.Contains(body, []byte("PUBLIC_ERROR_UNUSUAL_ACTIVITY")) {
 		rejected := unusualActivity("tạo video")
 		job.Phase, job.Message = generationRejected, rejected.Error()

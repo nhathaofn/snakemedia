@@ -1,11 +1,17 @@
 import { splitPromptList } from '../../../components/batch/prompts';
 import { MuseAssetBatchConflict, MuseRefRole } from '../../../types';
-import type { MuseAsset, MuseFolderImage } from '../../../types';
+import type { MuseAsset, MuseAssetType, MuseFolderImage } from '../../../types';
+import {
+  buildCanonicalPreviewName,
+  cleanToken,
+  defaultTypeForRole,
+  normalizeProjectName,
+} from './assetRoles';
 
 const BOM = String.fromCharCode(0xfeff);
 const MAX_TAG_LENGTH = 40;
-const VALID_TAG_RE = /^[\p{L}\p{N}_-]{1,40}$/u;
-const DISALLOWED_TAG_RE = /[^\p{L}\p{N}_-]+/gu;
+const VALID_TAG_RE = /^[\p{L}\p{N}_+-]{1,40}$/u;
+const DISALLOWED_TAG_RE = /[^\p{L}\p{N}_+-]+/gu;
 
 export type LockSplitMode = 'line' | 'positional' | 'block';
 
@@ -22,10 +28,16 @@ export interface ParsedRole {
 
 export interface BatchRowOverride {
   excluded?: boolean;
+  project?: string;
+  type?: MuseAssetType;
   tag?: string;
   name?: string;
   role?: MuseRefRole;
   lock?: string;
+  angle?: string;
+  variant?: string;
+  state?: string;
+  rejected?: boolean;
 }
 
 export type BatchRowStatus = 'ready' | 'rename' | 'overwrite' | 'skip' | 'excluded' | 'error';
@@ -33,11 +45,26 @@ export type BatchRowStatus = 'ready' | 'rename' | 'overwrite' | 'skip' | 'exclud
 export interface BatchPreviewRow {
   index: number;
   image: MuseFolderImage;
+  project: string;
+  /** Raw controlled-input draft so typing underscores/spaces mid-word is not stripped live. */
+  projectInput: string;
+  type: MuseAssetType;
   tag: string;
   resolvedTag: string;
   name: string;
   role: MuseRefRole;
   lock: string;
+  angle: string;
+  angleInput: string;
+  variant: string;
+  variantInput: string;
+  state: string;
+  stateInput: string;
+  version: number;
+  primary: boolean;
+  rejected: boolean;
+  canonicalName: string;
+  hint?: string;
   excluded: boolean;
   status: BatchRowStatus;
   note?: string;
@@ -60,6 +87,15 @@ const ROLE_ALIASES: Record<string, MuseRefRole> = {
   'chân dung': MuseRefRole.Face,
   'chan dung': MuseRefRole.Face,
 
+  animal: MuseRefRole.Animal,
+  pet: MuseRefRole.Animal,
+  thú: MuseRefRole.Animal,
+  thu: MuseRefRole.Animal,
+  'thú cưng': MuseRefRole.Animal,
+  'thu cung': MuseRefRole.Animal,
+  'động vật': MuseRefRole.Animal,
+  'dong vat': MuseRefRole.Animal,
+
   product: MuseRefRole.Product,
   'sản phẩm': MuseRefRole.Product,
   'san pham': MuseRefRole.Product,
@@ -70,6 +106,21 @@ const ROLE_ALIASES: Record<string, MuseRefRole> = {
   'dao cu': MuseRefRole.Prop,
   'đồ vật': MuseRefRole.Prop,
   'do vat': MuseRefRole.Prop,
+
+  vehicle: MuseRefRole.Vehicle,
+  veh: MuseRefRole.Vehicle,
+  xe: MuseRefRole.Vehicle,
+  'xe cộ': MuseRefRole.Vehicle,
+  'xe co': MuseRefRole.Vehicle,
+  'phương tiện': MuseRefRole.Vehicle,
+  'phuong tien': MuseRefRole.Vehicle,
+
+  document: MuseRefRole.Document,
+  doc: MuseRefRole.Document,
+  'tài liệu': MuseRefRole.Document,
+  'tai lieu': MuseRefRole.Document,
+  'bảng biểu': MuseRefRole.Document,
+  'bang bieu': MuseRefRole.Document,
 
   storyboard: MuseRefRole.Storyboard,
   sb: MuseRefRole.Storyboard,
@@ -108,6 +159,12 @@ export function fileStem(fileName: string): string {
   return dot > 0 ? fileName.slice(0, dot) : fileName;
 }
 
+export function fileExt(fileName: string): string {
+  const clean = fileName.split('?')[0];
+  const dot = clean.lastIndexOf('.');
+  return dot > 0 ? clean.slice(dot).toLowerCase() : '.png';
+}
+
 export function isValidTag(tag: string): boolean {
   return VALID_TAG_RE.test(tag);
 }
@@ -125,12 +182,6 @@ export function sanitizeTag(input: string, fallback = ''): string {
   return tryClean(input) || tryClean(fallback);
 }
 
-/**
- * Parses alias/tag lines ordered top-to-bottom:
- * - `@tag` or `tag` -> `{ tag, name: '' }`
- * - `tag | Tên` or `tag\tTên` -> `{ tag, name }`
- * - `Tên có dấu cách` -> `{ tag: sanitized, name: 'Tên có dấu cách' }`
- */
 export function parseAliasLines(text: string): ParsedAlias[] {
   return splitPromptList(text, 'line').map((line) => {
     const sep = line.includes('|') ? '|' : line.includes('\t') ? '\t' : '';
@@ -176,12 +227,6 @@ export function parseRoleLines(text: string): ParsedRole[] {
   });
 }
 
-/**
- * Splits lock prompts top-to-bottom:
- * - `line`: every non-empty line is one prompt
- * - `positional`: keeps internal blank lines aligned with image index (drops trailing empty lines)
- * - `block`: multi-line prompts separated by blank lines
- */
 export function parseLockList(text: string, mode: LockSplitMode): string[] {
   if (mode === 'line' || mode === 'block') {
     return splitPromptList(text, mode);
@@ -193,16 +238,20 @@ export function parseLockList(text: string, mode: LockSplitMode): string[] {
   return lines.map((line) => line.trim());
 }
 
-function uniqueRenamedTag(tag: string, taken: Set<string>): string {
+function uniqueRenamedTag(tag: string, scopePrefix: string, taken: Set<string>): string {
   const runes = Array.from(tag);
   for (let n = 2; ; n++) {
     const suffix = `_${n}`;
     const keep = Math.max(0, MAX_TAG_LENGTH - suffix.length);
     const candidate = `${runes.slice(0, keep).join('')}${suffix}`;
-    if (!taken.has(candidate.toLowerCase())) {
+    if (!taken.has(`${scopePrefix}|${candidate.toLowerCase()}`)) {
       return candidate;
     }
   }
+}
+
+function assetScopeKey(project: string, tag: string): string {
+  return `${normalizeProjectName(project)}|${tag.toLowerCase().trim()}`;
 }
 
 export function buildBatchRows({
@@ -210,8 +259,10 @@ export function buildBatchRows({
   aliases,
   roles,
   locks,
+  defaultProject = '',
   defaultRole,
   conflict,
+  mergeByAlias = false,
   existingAssets,
   overrides,
 }: {
@@ -219,37 +270,102 @@ export function buildBatchRows({
   aliases: readonly ParsedAlias[];
   roles: readonly ParsedRole[];
   locks: readonly string[];
+  defaultProject?: string;
   defaultRole: MuseRefRole;
   conflict: MuseAssetBatchConflict;
+  mergeByAlias?: boolean;
   existingAssets: readonly MuseAsset[];
   overrides: ReadonlyMap<number, BatchRowOverride>;
 }): { rows: BatchPreviewRow[]; warnings: string[] } {
-  const existingTags = new Set(existingAssets.map((a) => a.tag.toLowerCase()));
-  const taken = new Set(existingTags);
+  const existingScopes = new Set(existingAssets.map((a) => assetScopeKey(a.project ?? '', a.tag)));
+  const taken = new Set(existingScopes);
   const batchSeen = new Set<string>();
+  const normDefaultProject = normalizeProjectName(defaultProject);
 
   const rows: BatchPreviewRow[] = images.map((image, index) => {
     const ov = overrides.get(index);
     const alias = aliases[index];
     const parsedRole = roles[index];
+    const parsedName = image.parsed;
     const fallbackTag = sanitizeTag(fileStem(image.fileName), `tu-lieu-${index + 1}`);
 
-    const rawTag = ov?.tag !== undefined ? ov.tag : alias ? alias.tag : fallbackTag;
+    const rawProject =
+      ov?.project !== undefined ? ov.project : (parsedName?.project ?? normDefaultProject);
+    const project = normalizeProjectName(rawProject);
+    const projectInput = ov?.project !== undefined ? ov.project : project;
+    const rawTag =
+      ov?.tag !== undefined
+        ? ov.tag
+        : alias
+          ? alias.tag
+          : parsedName?.alias
+            ? parsedName.alias
+            : fallbackTag;
     const tag = rawTag.replace(/^@+/, '').trim();
     const name = ov?.name !== undefined ? ov.name : (alias?.name ?? '');
-    const role = ov?.role !== undefined ? ov.role : (parsedRole?.role ?? defaultRole);
+    const role =
+      ov?.role !== undefined
+        ? ov.role
+        : (parsedRole?.role ?? (parsedName ? parsedName.role : defaultRole));
+    const type =
+      ov?.type !== undefined
+        ? ov.type
+        : parsedName?.type && ov?.role === undefined
+          ? parsedName.type
+          : defaultTypeForRole(role);
     const lock = ov?.lock !== undefined ? ov.lock : (locks[index] ?? '');
+    const angle = cleanToken(ov?.angle !== undefined ? ov.angle : (parsedName?.angle ?? ''));
+    const angleInput = ov?.angle !== undefined ? ov.angle : angle;
+    const variant = cleanToken(
+      ov?.variant !== undefined ? ov.variant : (parsedName?.variant ?? ''),
+    );
+    const variantInput = ov?.variant !== undefined ? ov.variant : variant;
+    const state = cleanToken(ov?.state !== undefined ? ov.state : (parsedName?.state ?? ''));
+    const stateInput = ov?.state !== undefined ? ov.state : state;
+    const version = parsedName?.version ?? 1;
+    const rejected = ov?.rejected !== undefined ? ov.rejected : Boolean(parsedName?.rejected);
+    const primary = !rejected && (angle === 'front' || !angle);
+    const canonicalName = buildCanonicalPreviewName({
+      project,
+      type,
+      alias: cleanToken(tag, true) || fallbackTag,
+      angle,
+      variant,
+      state,
+      version,
+      rejected,
+      ext: fileExt(image.fileName),
+    });
     const excluded = ov?.excluded ?? Boolean(image.error);
+
+    const baseRow = {
+      index,
+      image,
+      project,
+      projectInput,
+      type,
+      tag,
+      resolvedTag: tag,
+      name,
+      role,
+      lock,
+      angle,
+      angleInput,
+      variant,
+      variantInput,
+      state,
+      stateInput,
+      version,
+      primary,
+      rejected,
+      canonicalName,
+      hint: parsedName?.hint,
+      excluded: false,
+    };
 
     if (excluded) {
       return {
-        index,
-        image,
-        tag,
-        resolvedTag: tag,
-        name,
-        role,
-        lock,
+        ...baseRow,
         excluded: true,
         status: image.error ? 'error' : 'excluded',
         note: image.error || 'Đã bỏ chọn',
@@ -258,14 +374,7 @@ export function buildBatchRows({
 
     if (image.error) {
       return {
-        index,
-        image,
-        tag,
-        resolvedTag: tag,
-        name,
-        role,
-        lock,
-        excluded: false,
+        ...baseRow,
         status: 'error',
         note: image.error,
       };
@@ -273,14 +382,7 @@ export function buildBatchRows({
 
     if (ov?.role === undefined && parsedRole?.error) {
       return {
-        index,
-        image,
-        tag,
-        resolvedTag: tag,
-        name,
-        role,
-        lock,
-        excluded: false,
+        ...baseRow,
         status: 'error',
         note: parsedRole.error,
       };
@@ -288,83 +390,78 @@ export function buildBatchRows({
 
     if (!isValidTag(tag)) {
       return {
-        index,
-        image,
-        tag,
-        resolvedTag: tag,
-        name,
-        role,
-        lock,
-        excluded: false,
+        ...baseRow,
         status: 'error',
-        note: 'Tag chỉ gồm chữ, số, - và _ (tối đa 40 ký tự)',
+        note: 'Tag chỉ gồm chữ, số, +, - và _ (tối đa 40 ký tự)',
       };
     }
 
-    const lower = tag.toLowerCase();
-    const inExisting = existingTags.has(lower);
-    const inBatch = batchSeen.has(lower);
+    const scopeKey = assetScopeKey(project, tag);
+    const inExisting = existingScopes.has(scopeKey);
+    const inBatch = batchSeen.has(scopeKey);
+
+    if (mergeByAlias && inBatch) {
+      return {
+        ...baseRow,
+        status: 'ready',
+        note: 'Gộp thêm góc vào @' + tag,
+      };
+    }
+
+    if (mergeByAlias && inExisting) {
+      batchSeen.add(scopeKey);
+      return {
+        ...baseRow,
+        status: 'overwrite',
+        note: 'Thêm góc vào tư liệu đã có',
+      };
+    }
 
     if (!inExisting && !inBatch) {
-      taken.add(lower);
-      batchSeen.add(lower);
+      taken.add(scopeKey);
+      batchSeen.add(scopeKey);
       return {
-        index,
-        image,
-        tag,
-        resolvedTag: tag,
-        name,
-        role,
-        lock,
-        excluded: false,
+        ...baseRow,
         status: 'ready',
       };
     }
 
     if (conflict === MuseAssetBatchConflict.Skip) {
       return {
-        index,
-        image,
-        tag,
-        resolvedTag: tag,
-        name,
-        role,
-        lock,
-        excluded: false,
+        ...baseRow,
         status: 'skip',
         note: inExisting ? 'Trùng tag đã có (bỏ qua)' : 'Trùng tag trong danh sách (bỏ qua)',
       };
     }
 
     if (conflict === MuseAssetBatchConflict.Overwrite) {
-      taken.add(lower);
-      batchSeen.add(lower);
+      taken.add(scopeKey);
+      batchSeen.add(scopeKey);
       return {
-        index,
-        image,
-        tag,
-        resolvedTag: tag,
-        name,
-        role,
-        lock,
-        excluded: false,
+        ...baseRow,
         status: 'overwrite',
         note: inExisting ? 'Ghi đè tư liệu cũ' : 'Ghi đè dòng trùng trước đó',
       };
     }
 
-    const resolvedTag = uniqueRenamedTag(tag, taken);
-    taken.add(resolvedTag.toLowerCase());
-    batchSeen.add(resolvedTag.toLowerCase());
+    const resolvedTag = uniqueRenamedTag(tag, project, taken);
+    const resolvedScope = assetScopeKey(project, resolvedTag);
+    taken.add(resolvedScope);
+    batchSeen.add(resolvedScope);
     return {
-      index,
-      image,
-      tag,
+      ...baseRow,
       resolvedTag,
-      name,
-      role,
-      lock,
-      excluded: false,
+      canonicalName: buildCanonicalPreviewName({
+        project,
+        type,
+        alias: cleanToken(resolvedTag, true) || fallbackTag,
+        angle,
+        variant,
+        state,
+        version,
+        rejected,
+        ext: fileExt(image.fileName),
+      }),
       status: 'rename',
       note: `Đổi thành @${resolvedTag}`,
     };
@@ -373,13 +470,13 @@ export function buildBatchRows({
   const warnings: string[] = [];
   if (images.length > 0) {
     if (aliases.length > 0 && aliases.length !== images.length) {
-      warnings.push(`Alias có ${aliases.length} dòng nhưng thư mục có ${images.length} ảnh.`);
+      warnings.push(`Alias có ${aliases.length} dòng nhưng danh sách có ${images.length} ảnh.`);
     }
     if (roles.length > 0 && roles.length !== images.length) {
-      warnings.push(`Vai trò có ${roles.length} dòng nhưng thư mục có ${images.length} ảnh.`);
+      warnings.push(`Vai trò có ${roles.length} dòng nhưng danh sách có ${images.length} ảnh.`);
     }
     if (locks.length > 0 && locks.length !== images.length) {
-      warnings.push(`Prompt khoá có ${locks.length} mục nhưng thư mục có ${images.length} ảnh.`);
+      warnings.push(`Prompt khoá có ${locks.length} mục nhưng danh sách có ${images.length} ảnh.`);
     }
   }
 

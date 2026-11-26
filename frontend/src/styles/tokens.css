@@ -4,6 +4,8 @@
   --bg-secondary: #1e293b;
   --bg-tertiary: #334155;
   --bg-elevated: #1e293b;
+  --surface-hover: rgba(148, 163, 184, 0.08);
+  --surface-media: #090e1a;
 
   --text-primary: #f8fafc;
   --text-secondary: #94a3b8;
@@ -129,7 +131,6 @@
   --flow-edit-trim-label-width: 56px;
   --account-avatar-size: 40px;
   --muse-thumb-size: 64px;
-  --muse-asset-card-min: 260px;
   --muse-asset-card-min: 180px;
   --muse-template-card-min: 300px;
   --muse-asset-dialog-width: 620px;
@@ -201,6 +202,8 @@
   --bg-secondary: #ffffff;
   --bg-tertiary: #f1f5f9;
   --bg-elevated: #ffffff;
+  --surface-hover: rgba(15, 23, 42, 0.04);
+  --surface-media: #f1f5f9;
 
   --text-primary: #0f172a;
   --text-secondary: #475569;

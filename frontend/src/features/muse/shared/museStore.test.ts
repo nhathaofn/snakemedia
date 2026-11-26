@@ -59,6 +59,18 @@ describe('museStore', () => {
     expect(state.jobs).toEqual([job]);
   });
 
+  it('commits jobs independently of options and keeps events received meanwhile', async () => {
+    let answerOptions: (value: unknown) => void = () => {};
+    backend.getMuseOptions.mockReturnValue(new Promise((resolve) => (answerOptions = resolve)));
+    const loading = useMuseStore.getState().load();
+    await useMuseStore.getState().loadJobs();
+    const done = { ...job, status: 'succeeded' } as MuseJob;
+    useMuseStore.getState().setJob(done);
+    answerOptions(ok({}));
+    await loading;
+    expect(useMuseStore.getState().jobs).toEqual([done]);
+  });
+
   // Review #40: an event that lands while a list call is in flight is newer
   // than that call's snapshot and must survive it.
   it('keeps events that arrive while the list loads', async () => {

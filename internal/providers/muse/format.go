@@ -83,7 +83,7 @@ func formatLines(job MuseJob) []string {
 	var lines []string
 	if r, ok := ratioFor(job.Ratio, job.Kind); ok {
 		line := fmt.Sprintf("Aspect ratio: %s (%s)", r.Value, orientation(r.Value))
-		if len(job.References) > 0 {
+		if len(job.References) > 0 || len(job.Frames) > 0 || job.BoardFrames > 0 {
 			// An attached image's own shape must not win over the ratio asked.
 			line += fmt.Sprintf(". Frame the %s in this ratio, not in the shape of the attached images.", kindWord[job.Kind])
 		}
@@ -141,26 +141,35 @@ func formatNote(job MuseJob, width, height int, seconds float64) string {
 	return "Muse " + strings.Join(notes, ", ") + "."
 }
 
-// measureNote measures the job's first downloaded file against what it asked
-// for. A file that cannot be measured gets no note.
+// measureNote measures every downloaded file against what the job asked for.
+// Files that cannot be measured are skipped cleanly.
 func (p *Provider) measureNote(ctx context.Context, job MuseJob, files []string) string {
 	if (job.Ratio == "" && job.Duration == 0) || len(files) == 0 {
 		return ""
 	}
-	path, err := p.media.Path(files[0])
-	if err != nil {
-		return ""
-	}
-	if job.Kind == MuseJobVideo {
-		meta, err := media.ProbeVideo(ctx, path, p.ffprobe)
+	var notes []string
+	for i, f := range files {
+		path, err := p.media.Path(f)
 		if err != nil {
-			return ""
+			continue
 		}
-		return formatNote(job, meta.Width, meta.Height, meta.DurationSeconds)
+		var note string
+		if job.Kind == MuseJobVideo {
+			meta, err := media.ProbeVideo(ctx, path, p.ffprobe)
+			if err == nil {
+				note = formatNote(job, meta.Width, meta.Height, meta.DurationSeconds)
+			}
+		} else if w, h, err := media.ImageSize(path); err == nil {
+			note = formatNote(job, w, h, 0)
+		}
+		if note != "" {
+			if len(files) > 1 {
+				note = fmt.Sprintf("File %d: %s", i+1, note)
+			}
+			if !slices.Contains(notes, note) {
+				notes = append(notes, note)
+			}
+		}
 	}
-	w, h, err := media.ImageSize(path)
-	if err != nil {
-		return ""
-	}
-	return formatNote(job, w, h, 0)
+	return strings.Join(notes, " ")
 }

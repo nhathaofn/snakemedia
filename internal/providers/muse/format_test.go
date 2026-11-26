@@ -5,77 +5,68 @@ import (
 	"context"
 	"image"
 	"image/png"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
 
 func TestMessageAsksForRatioAndDuration(t *testing.T) {
-	img := planRule[MuseJobImage]
-	clip := func(seconds int) string {
-		return strings.Join(shortVideoLines(MuseJob{Kind: MuseJobVideo, Duration: seconds}), "\n")
-	}
 	cases := []struct {
 		job  MuseJob
 		want string
 	}{
-		{MuseJob{Kind: MuseJobImage, Prompt: "p"}, "Task: Create a new image.\n" + img + "\nprompt:\np"},
+		{MuseJob{Kind: MuseJobImage, Prompt: "p"}, "Task: Create a new image.\n" + requestRules + "\nprompt:\np"},
 		{MuseJob{Kind: MuseJobImage, Prompt: "p", Ratio: "3:4"},
-			"Task: Create a new image.\nAspect ratio: 3:4 (portrait)\n" + img + "\nprompt:\np"},
+			"Task: Create a new image.\n" + requestRules + "\nAspect ratio: 3:4 (portrait)\nprompt:\np"},
 		{MuseJob{Kind: MuseJobVideo, Prompt: "p", Ratio: "16:9", Duration: 10},
-			"Task: Create a new video.\nAspect ratio: 16:9 (landscape)\nDuration: 10 seconds\n" + clip(10) + "\nprompt:\np"},
-		{MuseJob{Kind: MuseJobVideo, Prompt: "p", Duration: 10}, "Task: Create a new video.\nDuration: 10 seconds\n" + clip(10) + "\nprompt:\np"},
+			"Task: Create a new video.\n" + requestRules + "\nAspect ratio: 16:9 (landscape)\nDuration: 10 seconds\nprompt:\np"},
+		{MuseJob{Kind: MuseJobVideo, Prompt: "p", Duration: 10}, "Task: Create a new video.\n" + requestRules + "\nDuration: 10 seconds\nprompt:\np"},
 		// An image never asks for a length, nor for a ratio it is not offered.
-		{MuseJob{Kind: MuseJobImage, Prompt: "p", Duration: 5}, "Task: Create a new image.\n" + img + "\nprompt:\np"},
-		// One attached image takes the role the prompt gives it, else it is
-		// the subject; the ratio asked wins over the image's shape.
+		{MuseJob{Kind: MuseJobImage, Prompt: "p", Duration: 5}, "Task: Create a new image.\n" + requestRules + "\nprompt:\np"},
+		// Plain attached images carry a concise grounding cue plus the ratio framing note.
 		{MuseJob{Kind: MuseJobVideo, Prompt: "p", References: []string{"r"}, Ratio: "1:1", Duration: 10},
 			"Task: Create a new video.\n" +
-				"Image 1: use it as the prompt says. If the prompt gives it no role, it shows the subject of this video: keep its look exactly, but take background, framing and pose from the prompt.\n" +
-				wardrobeExceptionRule + "\n" +
-				referenceSheetRule + "\n" +
+				requestRules + "\n" +
+				"Reference image 1: keep the exact look and design of the attached subject, while taking the scene, camera and motion from the prompt (do not show reference grids or plain backdrops as video frames).\n" +
 				"Aspect ratio: 1:1 (square). Frame the video in this ratio, not in the shape of the attached images.\n" +
-				"Duration: 10 seconds\n" + clip(10) + "\nprompt:\np"},
+				"Duration: 10 seconds\nprompt:\np"},
 	}
 	for _, c := range cases {
-		c.want = strings.Replace(c.want, "\n", "\n"+requestRules+"\n", 1)
 		if got := buildMessage(c.job); got != c.want {
 			t.Errorf("message %q, want %q", got, c.want)
 		}
 	}
 }
 
-// Several images are counted and numbered from the job itself, each a
-// separate element unless the prompt says otherwise; nothing is fixed to a
-// number of images.
-func TestMessageNumbersEveryAttachedImage(t *testing.T) {
+func TestPlainReferencesGroundEachImageConcisely(t *testing.T) {
 	for n, names := range map[int]string{2: "image 1 and image 2", 3: "image 1, image 2 and image 3", 7: "image 1 to image 7"} {
 		refs := make([]string, n)
-		msg := buildMessage(MuseJob{Kind: MuseJobImage, Prompt: "p", References: refs})
-		for _, want := range []string{
-			"Images: " + names + ", in the order attached, each show a separate element",
-			"never merge them.",
-			"include its element and keep its look exactly",
-			"take backgrounds, framing and poses from the prompt.",
-		} {
-			if !strings.Contains(msg, want) {
-				t.Errorf("%d images: message lacks %q:\n%s", n, want, msg)
-			}
-		}
-		if strings.Contains(msg, "consistent in every frame") || strings.Contains(msg, "keyframe") {
-			t.Errorf("%d images: image message speaks of frames:\n%s", n, msg)
+		got := buildMessage(MuseJob{Kind: MuseJobImage, Prompt: "p", References: refs})
+		want := "Task: Create a new image.\n" +
+			requestRules + "\n" +
+			"Reference images (" + names + ", in order): keep each attached subject's exact look and design as separate elements unless the prompt merges them, taking the scene, composition and poses from the prompt.\n" +
+			"prompt:\np"
+		if got != want {
+			t.Errorf("%d plain references mismatch:\ngot:\n%s\nwant:\n%s", n, got, want)
 		}
 	}
 }
 
-// Attached files are named image_N, as the message numbers them.
+// Attached files are named image_N and normalized to JPEG when Muse accepts .jpg.
 func TestAttachmentsAreNamedAsNumbered(t *testing.T) {
 	p := testProvider(t, &fakePage{})
-	a, _ := p.media.Put("muse-ref-a", "image/png", ".png", []byte("A"))
-	b, _ := p.media.Put("muse-ref-b", "image/png", ".png", []byte("B"))
-	caps := &MuseCapabilities{MaxFiles: 10, MaxFileBytes: 1 << 20, ImageTypes: []MuseFileType{{Mime: "image/png", Extensions: []string{".png"}}}}
-	atts, err := p.attach(MuseJob{References: []string{a, b}}, caps)
+	a, _ := p.media.Put("muse-ref-a", "image/png", ".png", testPNGBytes(t, 16, 16))
+	b, _ := p.media.Put("muse-ref-b", "image/png", ".png", testPNGBytes(t, 16, 16))
+	pngCaps := &MuseCapabilities{MaxFiles: 10, MaxFileBytes: 1 << 20, ImageTypes: []MuseFileType{{Mime: "image/png", Extensions: []string{".png"}}}}
+	atts, err := p.attach(MuseJob{References: []string{a, b}}, pngCaps)
 	if err != nil || len(atts) != 2 || atts[0].Filename != "image_1.png" || atts[1].Filename != "image_2.png" {
-		t.Fatalf("attachments %+v, err %v", atts, err)
+		t.Fatalf("png attachments %+v, err %v", atts, err)
+	}
+	jpgCaps := testCaps()
+	jpgAtts, err := p.attach(MuseJob{References: []string{a, b}}, jpgCaps)
+	if err != nil || len(jpgAtts) != 2 || jpgAtts[0].Filename != "image_1.jpg" || jpgAtts[1].Filename != "image_2.jpg" || jpgAtts[0].MimeType != "image/jpeg" {
+		t.Fatalf("jpg attachments %+v, err %v", jpgAtts, err)
 	}
 }
 
@@ -135,7 +126,7 @@ func TestJobSendsFormatAndNotesTheResult(t *testing.T) {
 	p.runOne(context.Background(), job.ID, acc.ID)
 	p.wg.Wait()
 
-	if len(page.sends) != 1 || !strings.HasPrefix(page.sends[0], "Task: Create a new image.\n"+requestRules+"\nAspect ratio: 9:16 (portrait)\n") {
+	if len(page.sends) != 1 || page.sends[0] != "Task: Create a new image.\n"+requestRules+"\nAspect ratio: 9:16 (portrait)\nprompt:\nx" {
 		t.Fatalf("sent %q", page.sends)
 	}
 	got := mustJob(t, p, job.ID)
@@ -170,7 +161,7 @@ func TestUpdateJobsFormatUpdatesUnstartedQueueAndStoryboard(t *testing.T) {
 	p := testProvider(t, page)
 	acc := addSignedIn(t, p, "A")
 	withCaps(p, acc, 6)
-	outDir := t.TempDir()
+	outDir := resolvedTempDir(t)
 	p.media.AllowRoot(outDir)
 
 	// Queue a video batch with storyboard, a single video, an image batch, and a paid video.
@@ -234,5 +225,116 @@ func TestUpdateJobsFormatUpdatesUnstartedQueueAndStoryboard(t *testing.T) {
 	}
 	if got := mustJob(t, p, video.ID); got.Ratio != "" || got.Duration != 0 {
 		t.Fatalf("video after clear = %+v", got)
+	}
+}
+
+func TestUpdateJobsConfigMovesFolderAndUpdatesRefs(t *testing.T) {
+	page := &fakePage{loggedIn: true}
+	p := testProvider(t, page)
+	acc := addSignedIn(t, p, "A")
+	withCaps(p, acc, 6)
+
+	outA := resolvedTempDir(t)
+	outB := resolvedTempDir(t)
+	p.media.AllowRoot(outA)
+	p.media.AllowRoot(outB)
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	ref1, err := p.media.Put("ref-1", "", ".png", buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref2, err := p.media.Put("ref-2", "", ".png", buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	vaultImg, err := p.media.Put("vault-hero", "", ".png", buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetRes := p.SaveAsset(MuseAsset{Tag: "hero", Role: MuseRoleCharacter, Images: []string{vaultImg}})
+	if !assetRes.Success {
+		t.Fatalf("save asset: %+v", assetRes)
+	}
+
+	// Queue 2 prompts without manual refs into outA (prompt 1 uses @hero, prompt 2 pairs with storyboard).
+	res1 := p.SubmitJobs(MuseJobRequest{
+		Kind: MuseJobVideo, Mode: MuseJobBatch, Prompts: []string{"@hero chạy bộ"}, OutputDir: outA, Held: true,
+	})
+	res2 := p.SubmitJobs(MuseJobRequest{
+		Kind: MuseJobVideo, Mode: MuseJobBatch, Prompts: []string{"mèo trên mái"}, OutputDir: outA, Held: true,
+		Storyboard: &MuseStoryboard{Frames: 2},
+	})
+	paid := p.SubmitJobs(MuseJobRequest{
+		Kind: MuseJobVideo, Mode: MuseJobBatch, Prompts: []string{"paid"}, OutputDir: outA, Held: true,
+	}).Data[0]
+	p.updateJob(paid.ID, func(j *MuseJob) { j.SessionID = "s-paid" })
+	single := p.SubmitJobs(MuseJobRequest{
+		Kind: MuseJobVideo, Mode: MuseJobSingle, Prompts: []string{"single"}, Held: true,
+	}).Data[0]
+	if !res1.Success || !res2.Success || len(res2.Data) != 2 {
+		t.Fatalf("submit = %+v / %+v", res1, res2)
+	}
+	v1, board2, v2 := res1.Data[0], res2.Data[0], res2.Data[1]
+
+	// Selecting a new OutputDir after queueing moves unpaid batch jobs into outB with sequential indices.
+	if up := p.UpdateJobsConfig(MuseJobsConfigRequest{
+		Kind: MuseJobVideo, Mode: MuseJobBatch, OutputDir: &outB,
+	}); !up.Success || up.Data != 3 {
+		t.Fatalf("outputDir update = %+v, want 3 (v1, board2, v2)", up)
+	}
+	gv1, gBoard2, gv2 := mustJob(t, p, v1.ID), mustJob(t, p, board2.ID), mustJob(t, p, v2.ID)
+	if filepath.Dir(gv1.OutputDir) != outB || gv1.Index != 1 {
+		t.Fatalf("v1 folder/index = %q #%d", gv1.OutputDir, gv1.Index)
+	}
+	if gv2.OutputDir != gv1.OutputDir || gv2.Index != 2 || gBoard2.OutputDir != gv2.OutputDir || gBoard2.Index != 2 {
+		t.Fatalf("v2/board2 folder/index = %q #%d / %q #%d", gv2.OutputDir, gv2.Index, gBoard2.OutputDir, gBoard2.Index)
+	}
+	if gotPaid := mustJob(t, p, paid.ID); filepath.Dir(gotPaid.OutputDir) != outA {
+		t.Fatalf("paid job must stay in outA: %q", gotPaid.OutputDir)
+	}
+	// Selecting the same parent directory again makes no redundant update.
+	if up := p.UpdateJobsConfig(MuseJobsConfigRequest{
+		Kind: MuseJobVideo, Mode: MuseJobBatch, OutputDir: &outB,
+	}); !up.Success || up.Data != 0 {
+		t.Fatalf("same outputDir update = %+v, want 0", up)
+	}
+
+	// Picking references + pair mode after queueing preserves @hero and assigns paired refs cleanly.
+	if up := p.UpdateJobsConfig(MuseJobsConfigRequest{
+		Kind: MuseJobVideo, Mode: MuseJobBatch, SyncRefs: true,
+		References: []string{ref1, ref2}, RefMode: MuseRefPair,
+	}); !up.Success || up.Data != 3 {
+		t.Fatalf("refs update = %+v, want 3", up)
+	}
+	gv1, gBoard2, gv2 = mustJob(t, p, v1.ID), mustJob(t, p, board2.ID), mustJob(t, p, v2.ID)
+	if len(gv1.References) != 2 || gv1.References[1] != ref1 || gv1.RefInfo[0].Tag != "hero" {
+		t.Fatalf("v1 refs/info = %+v / %+v", gv1.References, gv1.RefInfo)
+	}
+	if !slices.Equal(gv2.References, []string{ref2}) || !slices.Equal(gBoard2.References, []string{ref2}) {
+		t.Fatalf("v2/board2 refs = %+v / %+v, want [%s]", gv2.References, gBoard2.References, ref2)
+	}
+	if gotPaid := mustJob(t, p, paid.ID); len(gotPaid.References) != 0 {
+		t.Fatalf("paid job refs mutated: %+v", gotPaid.References)
+	}
+	if gotSingle := mustJob(t, p, single.ID); len(gotSingle.References) != 0 {
+		t.Fatalf("single job refs mutated: %+v", gotSingle.References)
+	}
+
+	// Clearing manual references keeps @hero on v1 and empties v2/board2.
+	if up := p.UpdateJobsConfig(MuseJobsConfigRequest{
+		Kind: MuseJobVideo, Mode: MuseJobBatch, SyncRefs: true, References: []string{},
+	}); !up.Success || up.Data != 3 {
+		t.Fatalf("clear refs = %+v, want 3", up)
+	}
+	gv1, gBoard2, gv2 = mustJob(t, p, v1.ID), mustJob(t, p, board2.ID), mustJob(t, p, v2.ID)
+	if len(gv1.References) != 1 || gv1.RefInfo[0].Tag != "hero" {
+		t.Fatalf("v1 should retain @hero only: %+v / %+v", gv1.References, gv1.RefInfo)
+	}
+	if len(gv2.References) != 0 || len(gBoard2.References) != 0 {
+		t.Fatalf("v2/board2 should be empty: %+v / %+v", gv2.References, gBoard2.References)
 	}
 }

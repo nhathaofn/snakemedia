@@ -35,35 +35,130 @@ func (m MuseRefMode) valid() bool {
 // whole word (so "Mai" does not match "ngày mai"). Every position is a byte
 // offset in the prompt itself.
 func mentionedAssets(prompt string, assets []MuseAsset) []MuseAsset {
-	type hit struct {
-		at    int
-		asset MuseAsset
-	}
-	tags := tagMentions(prompt)
-	var hits []hit
-	for _, a := range assets {
-		at := -1
-		for _, m := range tags {
-			if a.Tag != "" && strings.EqualFold(m.tag, a.Tag) {
-				at = m.at
-				break
-			}
-		}
-		if name := strings.TrimSpace(a.Name); name != "" {
-			if i := wordIndex(prompt, name); i >= 0 && (at < 0 || i < at) {
-				at = i
-			}
-		}
-		if at >= 0 {
-			hits = append(hits, hit{at, a})
-		}
-	}
-	sort.SliceStable(hits, func(i, j int) bool { return hits[i].at < hits[j].at })
+	hits, _, _ := matchPromptAssets(prompt, "", assets)
 	out := make([]MuseAsset, len(hits))
 	for i, h := range hits {
 		out[i] = h.asset
 	}
 	return out
+}
+
+type assetMentionHit struct {
+	at           int
+	asset        MuseAsset
+	suffixTokens []string
+	rawSuffix    string
+}
+
+func scopedAssets(assets []MuseAsset, project string) []MuseAsset {
+	normProj := normalizeProject(project)
+	byTag := make(map[string]int, len(assets))
+	var out []MuseAsset
+	// Prefer exact project match over global (_chung); when project is empty,
+	// prefer global (_chung) over project-specific entries on tag collision.
+	preferAsset := func(cand, prev MuseAsset) bool {
+		cp := normalizeProject(cand.Project)
+		pp := normalizeProject(prev.Project)
+		if normProj != "" {
+			return cp == normProj && pp != normProj
+		}
+		return cp == "" && pp != ""
+	}
+	for _, a := range assets {
+		ap := normalizeProject(a.Project)
+		if normProj != "" && ap != normProj && ap != "" {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(a.Tag))
+		if key != "" {
+			if idx, exists := byTag[key]; exists {
+				if preferAsset(a, out[idx]) {
+					out[idx] = a
+				}
+				continue
+			}
+			byTag[key] = len(out)
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+func splitNormalizedTokens(raw string) []string {
+	s := slugifyToken(raw, false)
+	if s == "" {
+		return nil
+	}
+	var out []string
+	for _, tok := range strings.Split(s, "_") {
+		if tok != "" {
+			out = append(out, tok)
+		}
+	}
+	return out
+}
+
+func matchTagMention(mention string, assets []MuseAsset) (idx int, asset *MuseAsset, suffixTokens []string, rawSuffix string) {
+	// Exact tag match wins first.
+	for i := range assets {
+		if assets[i].Tag != "" && strings.EqualFold(mention, assets[i].Tag) {
+			return i, &assets[i], nil, ""
+		}
+	}
+	// Match @alias_angle_variant_state using the longest registered tag prefix.
+	bestLen := -1
+	bestIdx := -1
+	for i := range assets {
+		tag := assets[i].Tag
+		if tag == "" || len(mention) <= len(tag)+1 {
+			continue
+		}
+		if strings.EqualFold(mention[:len(tag)], tag) && mention[len(tag)] == '_' {
+			if len(tag) > bestLen {
+				bestLen = len(tag)
+				bestIdx = i
+				asset = &assets[i]
+				rawSuffix = mention[len(tag)+1:]
+				suffixTokens = splitNormalizedTokens(rawSuffix)
+			}
+		}
+	}
+	return bestIdx, asset, suffixTokens, rawSuffix
+}
+
+func matchPromptAssets(prompt, project string, assets []MuseAsset) (hits []assetMentionHit, missingTags []string, assetIdx []int) {
+	pool := scopedAssets(assets, project)
+	tags := tagMentions(prompt)
+	matchedPoolIdx := make(map[int]bool)
+
+	for _, m := range tags {
+		idx, a, suffixTokens, rawSuffix := matchTagMention(m.tag, pool)
+		if a == nil {
+			if !slices.Contains(missingTags, m.tag) {
+				missingTags = append(missingTags, m.tag)
+			}
+			continue
+		}
+		matchedPoolIdx[idx] = true
+		hits = append(hits, assetMentionHit{
+			at:           m.at,
+			asset:        *a,
+			suffixTokens: suffixTokens,
+			rawSuffix:    rawSuffix,
+		})
+	}
+	for i, a := range pool {
+		if matchedPoolIdx[i] {
+			continue
+		}
+		if name := strings.TrimSpace(a.Name); name != "" {
+			if pos := wordIndex(prompt, name); pos >= 0 {
+				hits = append(hits, assetMentionHit{at: pos, asset: a})
+			}
+		}
+	}
+	sort.SliceStable(hits, func(i, j int) bool { return hits[i].at < hits[j].at })
+	return hits, missingTags, nil
 }
 
 // tagMention is one @tag in a prompt and the byte offset of its @.
@@ -119,142 +214,288 @@ func wordIndex(s, word string) int {
 }
 
 func wordRune(r rune) bool {
-	return r != utf8.RuneError && (unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-')
+	return r != utf8.RuneError && (unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-' || r == '+')
 }
 
-// promptRefs is what one prompt attaches, in order: the fixed assets, the
-// assets the prompt names, then the batch's own images by mode. Duplicates
-// are dropped. info is nil when no image carries a role or lock, so such a
-// job keeps the plain Reference lines.
-func promptRefs(prompt string, index int, fixed, all []MuseAsset, own []string, mode MuseRefMode) (refs []string, info []MuseRefInfo) {
-	seen := map[string]bool{}
-	add := func(url string, ri MuseRefInfo) {
-		if seen[url] {
+func resolveAssetItems(a MuseAsset, suffixTokens []string) (selected []MuseAssetItem, extraWarnings []string) {
+	if len(a.Items) == 0 && len(a.Images) > 0 {
+		out := make([]MuseAssetItem, 0, len(a.Images))
+		for i, u := range a.Images {
+			if u != "" {
+				out = append(out, MuseAssetItem{URL: u, Primary: i == 0})
+			}
+		}
+		return out, nil
+	}
+	var active []MuseAssetItem
+	for _, it := range a.Items {
+		if !it.Rejected && it.URL != "" {
+			active = append(active, it)
+		}
+	}
+	if len(active) == 0 {
+		if len(a.Items) > 0 && a.Tag != "" {
+			return nil, []string{fmt.Sprintf("@%s hiện chỉ có ảnh loại (rejected), không có ảnh hợp lệ để gắn.", a.Tag)}
+		}
+		return nil, nil
+	}
+
+	if len(suffixTokens) > 0 {
+		type scored struct {
+			item  MuseAssetItem
+			extra int
+		}
+		var matches []scored
+		for _, it := range active {
+			toks := assetItemTokens(it)
+			if it.Version >= 1 {
+				toks = append(toks, fmt.Sprintf("v%d", it.Version))
+			}
+			matchedAll := true
+			for _, reqTok := range suffixTokens {
+				if !slices.Contains(toks, reqTok) {
+					matchedAll = false
+					break
+				}
+			}
+			if matchedAll {
+				extra := len(toks) - len(suffixTokens)
+				if extra < 0 {
+					extra = 0
+				}
+				matches = append(matches, scored{item: it, extra: extra})
+			}
+		}
+		if len(matches) > 0 {
+			sort.SliceStable(matches, func(i, j int) bool {
+				if matches[i].extra != matches[j].extra {
+					return matches[i].extra < matches[j].extra
+				}
+				return matches[i].item.Primary && !matches[j].item.Primary
+			})
+			return []MuseAssetItem{matches[0].item}, nil
+		}
+		extraWarnings = append(extraWarnings, fmt.Sprintf("@%s chưa có biến thể %q (đã dùng ảnh chính thay thế).", a.Tag, strings.Join(suffixTokens, "_")))
+	}
+
+	var primary []MuseAssetItem
+	for _, it := range active {
+		if it.Primary {
+			primary = append(primary, it)
+		}
+	}
+	if len(primary) == 0 {
+		primary = active[:1]
+	}
+	return primary, extraWarnings
+}
+
+func effectiveAssetType(a MuseAsset) MuseAssetType {
+	if a.Type.valid() {
+		return a.Type
+	}
+	if a.Role == MuseRoleNone {
+		return ""
+	}
+	return typeForRole(a.Role)
+}
+
+func assetPriorityTier(a MuseAsset, isPrimary bool) int {
+	t := effectiveAssetType(a)
+	switch t {
+	case MuseTypeChar:
+		if isPrimary {
+			return 0
+		}
+		return 1
+	case MuseTypeAnim:
+		return 2
+	case MuseTypeLoc:
+		return 3
+	case MuseTypeVeh:
+		return 4
+	case MuseTypeProp, MuseTypeDoc:
+		return 5
+	case MuseTypeStyle:
+		return 6
+	default:
+		return 7
+	}
+}
+
+func combinedLock(assetLock, itemLock string) string {
+	al := strings.TrimSpace(assetLock)
+	il := strings.TrimSpace(itemLock)
+	switch {
+	case al != "" && il != "" && !strings.EqualFold(al, il):
+		return al + "; " + il
+	case al != "":
+		return al
+	default:
+		return il
+	}
+}
+
+// resolvePromptRefs computes every attached URL, structured MuseRefInfo, matched
+// @tags, and advisory warnings for a prompt, ordering asset references per Section 13:
+// CHAR primary -> CHAR secondary -> ANIM -> LOC -> VEH -> PROP/DOC -> STYLE -> own images.
+func resolvePromptRefs(prompt, project string, index int, fixed, all []MuseAsset, own []string, mode MuseRefMode) (refs []string, info []MuseRefInfo, tags, warnings []string) {
+	type plannedRef struct {
+		url  string
+		info MuseRefInfo
+		tier int
+	}
+	var assetRefs []plannedRef
+	seenURL := map[string]bool{}
+	tags = []string{}
+
+	addAsset := func(a MuseAsset, it MuseAssetItem) {
+		if it.URL == "" || seenURL[it.URL] {
 			return
 		}
-		seen[url] = true
-		refs = append(refs, url)
-		info = append(info, ri)
+		seenURL[it.URL] = true
+		effType := effectiveAssetType(a)
+		assetRefs = append(assetRefs, plannedRef{
+			url: it.URL,
+			info: MuseRefInfo{
+				Tag:  a.Tag,
+				Role: a.Role,
+				Lock: combinedLock(a.Lock, it.Lock),
+				Type: string(effType),
+			},
+			tier: assetPriorityTier(a, it.Primary),
+		})
 	}
-	assets := append(append([]MuseAsset{}, fixed...), mentionedAssets(prompt, all)...)
-	for _, a := range assets {
-		for _, img := range a.Images {
-			add(img, MuseRefInfo{Tag: a.Tag, Role: a.Role, Lock: a.Lock})
+
+	var extraWarnings []string
+	for _, a := range fixed {
+		if a.Tag != "" {
+			tags = appendOnce(tags, a.Tag)
 		}
+		items, w := resolveAssetItems(a, nil)
+		extraWarnings = append(extraWarnings, w...)
+		for _, it := range items {
+			addAsset(a, it)
+		}
+	}
+
+	hits, missingTags, _ := matchPromptAssets(prompt, project, all)
+	for _, h := range hits {
+		if h.asset.Tag != "" {
+			tags = appendOnce(tags, h.asset.Tag)
+		}
+		items, w := resolveAssetItems(h.asset, h.suffixTokens)
+		extraWarnings = append(extraWarnings, w...)
+		for _, it := range items {
+			addAsset(h.asset, it)
+		}
+	}
+
+	sort.SliceStable(assetRefs, func(i, j int) bool {
+		return assetRefs[i].tier < assetRefs[j].tier
+	})
+
+	for _, pr := range assetRefs {
+		refs = append(refs, pr.url)
+		info = append(info, pr.info)
+	}
+
+	appendOwn := func(url string) {
+		if url == "" || seenURL[url] {
+			return
+		}
+		seenURL[url] = true
+		refs = append(refs, url)
+		info = append(info, MuseRefInfo{})
 	}
 	switch {
 	case len(own) == 0:
 	case mode == MuseRefPair:
 		if index < len(own) {
-			add(own[index], MuseRefInfo{})
+			appendOwn(own[index])
 		}
 	case mode == MuseRefRotate:
-		add(own[index%len(own)], MuseRefInfo{})
+		appendOwn(own[index%len(own)])
 	default:
 		for _, url := range own {
-			add(url, MuseRefInfo{})
+			appendOwn(url)
 		}
 	}
-	if !slices.ContainsFunc(info, func(ri MuseRefInfo) bool { return ri.Role != MuseRoleNone || ri.Lock != "" || ri.Tag != "" }) {
+
+	if !slices.ContainsFunc(info, func(ri MuseRefInfo) bool {
+		return ri.Role != MuseRoleNone || ri.Lock != "" || ri.Tag != "" || ri.Type != ""
+	}) {
 		info = nil
 	}
+
+	warnings = refWarnings(prompt, info, missingTags)
+	for _, w := range extraWarnings {
+		warnings = appendOnce(warnings, w)
+	}
+	if warnings == nil {
+		warnings = []string{}
+	}
+	return refs, info, tags, warnings
+}
+
+// promptRefs is what one prompt attaches, in order: the asset items ordered by
+// Section 13 priority, then the batch's own images by mode.
+func promptRefs(prompt string, index int, fixed, all []MuseAsset, own []string, mode MuseRefMode) (refs []string, info []MuseRefInfo) {
+	refs, info, _, _ = resolvePromptRefs(prompt, "", index, fixed, all, own, mode)
 	return refs, info
 }
 
-// roleRule is the rule one image of a role follows.
-func roleRule(role MuseRefRole, roles map[MuseRefRole]bool) string {
-	faces := roles[MuseRoleFace] || roles[MuseRoleCharacter]
-	switch role {
-	case MuseRoleFace:
-		return "identity only: keep this exact face, hair, skin tone and age whenever this character is visible. Take clothing, body and setting from the other images or the prompt, not from this one, unless nothing else gives them."
-	case MuseRoleCharacter:
-		return "character authority: keep this exact face, body proportions, hair and outfit whenever this character is visible."
-	case MuseRoleProduct:
-		return "sole authority for the product: its shape, colors, materials, printed text and logo exactly as shown, never redrawn or simplified. It overrides any storyboard and any product wording in the prompt."
-	case MuseRoleProp:
-		return "keep this object's exact shape, material and colors whenever it is visible. Do not take people or backgrounds from it."
-	case MuseRoleStoryboard:
-		rule := "authority for composition, camera angle, shot order, setting, lighting and otherwise unlocked wardrobe. Do not reproduce its grid, panel borders or numbers. Use its sketch look only if the requested final style calls for it."
-		if faces {
-			rule += " Faces in it are placeholders: identity comes from the character images."
-		}
-		if roles[MuseRoleProduct] || roles[MuseRoleProp] {
-			rule += " Ignore any product drawn in it: the product comes only from the product image."
-		}
-		return rule
-	case MuseRoleSetting:
-		return "the place: keep its layout, materials, light and colors. Do not take people or products from it."
-	case MuseRoleStyle:
-		return "the look only: color grade and rendering style, with lighting treatment that respects the assigned setting and locks. Take no subject, person or product from it."
-	}
-	return "a separate element of the result; keep its design, colors and details exactly."
+// roleGuides describe what each asset role governs concisely, leaving scene
+// direction, motion, audio, and creative choices to the prompt.
+var roleGuides = map[MuseRefRole]string{
+	MuseRoleFace:       "character face: keep face and hair only; outfit and pose follow prompt",
+	MuseRoleCharacter:  "character, full look: keep exact face, body, hair, and outfit",
+	MuseRoleAnimal:     "animal/pet: keep exact species, coat pattern, and markings",
+	MuseRoleProduct:    "product: keep exact shape, colors, and label text",
+	MuseRoleProp:       "prop: keep exact shape, material, and colors",
+	MuseRoleVehicle:    "vehicle: keep exact model, paint color, livery, and silhouette",
+	MuseRoleDocument:   "document/chart: keep exact layout, labels, and readable text",
+	MuseRoleStoryboard: "storyboard: follow framing, setting, and shot composition",
+	MuseRoleSetting:    "setting: keep location layout and lighting only; no people from it",
+	MuseRoleStyle:      "style: match color grade and rendering style only",
 }
 
-// roleNames words a role in the message.
-var roleNames = map[MuseRefRole]string{
-	MuseRoleFace: "character face", MuseRoleCharacter: "character, full look", MuseRoleProduct: "product",
-	MuseRoleProp: "prop", MuseRoleStoryboard: "storyboard", MuseRoleSetting: "setting", MuseRoleStyle: "style",
-}
-
-// roleLines replace the Reference lines when the job's images carry roles:
-// what each numbered image is for, which wins when they disagree, and what
-// must match exactly. first is the number of the first image they describe
-// (images before it are storyboard frames or the source video).
+// roleLines maps numbered attached images to their @tag, concise role scope,
+// and lock notes without adding directorial or priority rule blocks. first is
+// the 1-based index of the first image in info (images before it are storyboard
+// frames).
 func roleLines(kind MuseJobKind, info []MuseRefInfo, first int) []string {
-	roles := map[MuseRefRole]bool{}
-	for _, ri := range info {
-		roles[ri.Role] = true
+	if len(info) == 0 {
+		return nil
 	}
-	lines := []string{fmt.Sprintf("Reference roles: these attached images are references for this %s, numbered in the order attached:", kindWord[kind])}
-	byRole := map[MuseRefRole][]string{}
+	hasTag := slices.ContainsFunc(info, func(ri MuseRefInfo) bool { return ri.Tag != "" })
+	var notes []string
+	if hasTag {
+		notes = append(notes, "same @tag = views of one subject")
+	}
+	if kind == MuseJobVideo {
+		notes = append(notes, "do not show reference sheets or plain backdrops as video frames")
+	}
+	header := "References:"
+	if len(notes) > 0 {
+		header = fmt.Sprintf("References (%s):", strings.Join(notes, "; "))
+	}
+	lines := []string{header}
 	for k, ri := range info {
 		n := first + k
-		name := roleNames[ri.Role]
-		if name == "" {
-			name = "reference"
-		}
 		label := fmt.Sprintf("image %d", n)
 		if ri.Tag != "" {
 			label += " = @" + ri.Tag
-			byRole[ri.Role] = appendOnce(byRole[ri.Role], "@"+ri.Tag)
-		} else {
-			byRole[ri.Role] = appendOnce(byRole[ri.Role], fmt.Sprintf("image %d", n))
 		}
-		lines = append(lines, fmt.Sprintf("- %s (%s): %s", label, name, roleRule(ri.Role, roles)))
-	}
-	lines = append(lines, "Images with the same @name show one character or object from different views: they are one subject, not several.")
-	var priority []string
-	if names := byRole[MuseRoleProduct]; len(names) > 0 {
-		priority = append(priority, fmt.Sprintf("- Product: %s > storyboard > prompt text.", strings.Join(names, ", ")))
-	}
-	if names := append(append([]string{}, byRole[MuseRoleFace]...), byRole[MuseRoleCharacter]...); len(names) > 0 {
-		priority = append(priority, fmt.Sprintf("- Identity: %s > faces in a storyboard > prompt text. The same person looks the same in every shot.", strings.Join(names, ", ")))
-	}
-	if names := byRole[MuseRoleStoryboard]; len(names) > 0 {
-		priority = append(priority, fmt.Sprintf("- Scene: %s set framing, setting and otherwise unlocked wardrobe; the prompt decides actions and lines.", strings.Join(names, ", ")))
-	}
-	if len(priority) > 0 {
-		lines = append(lines, "Priority when they disagree:")
-		lines = append(lines, priority...)
-	}
-	lines = append(lines, "Apply each role only to its subject and attributes; the prompt decides actions and lines, and may give a role to an image without one. Do not copy backgrounds, framing or poses outside an image's role, or put its subject in shots that do not call for it.")
-	var locks []string
-	seen := map[string]bool{}
-	for k, ri := range info {
-		subject := "@" + ri.Tag
-		if ri.Tag == "" {
-			subject = fmt.Sprintf("image %d", first+k)
+		guide := roleGuides[ri.Role]
+		if guide == "" {
+			guide = "reference: keep exact look; follow prompt for scene"
 		}
-		key := subject + "\x00" + ri.Lock
-		if ri.Lock == "" || seen[key] {
-			continue
+		meta := []string{guide}
+		if lock := strings.TrimSpace(ri.Lock); lock != "" {
+			meta = append(meta, "lock: "+lock)
 		}
-		seen[key] = true
-		locks = append(locks, fmt.Sprintf("- %s: %s", subject, ri.Lock))
-	}
-	if len(locks) > 0 {
-		lines = append(lines, "Locks (highest authority for the named subject and attribute whenever visible; a lock does not require its subject in every frame):")
-		lines = append(lines, locks...)
+		lines = append(lines, fmt.Sprintf("- %s (%s)", label, strings.Join(meta, "; ")))
 	}
 	return lines
 }
@@ -299,12 +540,6 @@ func containsAny(s string, words ...string) bool {
 
 // unknownTags lists the @tags in a prompt that no asset has.
 func unknownTags(prompt string, assets []MuseAsset) []string {
-	var out []string
-	for _, m := range tagMentions(prompt) {
-		known := slices.ContainsFunc(assets, func(a MuseAsset) bool { return strings.EqualFold(a.Tag, m.tag) })
-		if !known && !slices.Contains(out, m.tag) {
-			out = append(out, m.tag)
-		}
-	}
-	return out
+	_, missing, _ := matchPromptAssets(prompt, "", assets)
+	return missing
 }

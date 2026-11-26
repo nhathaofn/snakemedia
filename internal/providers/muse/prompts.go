@@ -1,45 +1,83 @@
 package muse
 
-// The message is read by Muse's agent, not by the video model: the agent
-// applies these lines itself and passes the prompt's scene content on to its
-// media tool (seen in Muse's own account of its tool calls, TestLiveConsole,
-// 2026-11-11). So the lines below only say what the agent must do; anything
-// about the scene stays in the user's prompt. Shortening them from ~4,500 to
-// ~700 characters changed neither the format, the references nor the lines of
-// 18 test clips (docs/decisions/0016-muse-message-brief.md).
+import (
+	"fmt"
+	"strings"
+)
 
-// requestRules open every new job's message: each request stands alone, even
-// though Muse remembers earlier chats of the account.
-const requestRules = "Use only this message and its attached images; ignore earlier chats and outputs unless this message asks to reuse them."
-
-// planRule keeps the prompt authoritative for each kind. Speaker labels are
-// named because Muse once read "X says:" aloud.
-var planRule = map[MuseJobKind]string{
-	MuseJobImage: "The prompt is the plan: keep its subjects, composition, style and any text it asks for exactly. Fill in only what it leaves open. Add no other subjects, captions or watermarks.",
-	MuseJobVideo: "The prompt is the plan: keep its subjects, action order, camera, style and every quoted line word for word, in its language, by its speaker; speaker names are labels, not words to say. Fill in only what it leaves open. Add no other characters, events or speech, and no captions, subtitles, watermarks or music it does not ask for.",
+// Muse's chat agent reads the message and writes its own tool call to
+// media.generate_image / media.generate_video. Keep the header free of
+// directorial, pacing, audio, or negative creative rules, while supplying short
+// session isolation and reference-grounding cues so attached subjects stay
+// consistent and reference sheets are not rendered directly as frames.
+var kindRequest = map[MuseJobKind]string{
+	MuseJobImage: "Task: Create a new image.",
+	MuseJobVideo: "Task: Create a new video.",
 }
 
-// fitRule instructs Muse to always produce a video and never refuse or return text.
-func fitRule(_ MuseJob) string {
-	return "Always generate the video, even if a line feels long for the clip: start the line as early as possible, keep a natural pace, and let any remaining time be a silent hold on the ending state. Never refuse, and never return text instead of a video."
-}
+// requestRules isolates each generation chat from earlier conversations on the
+// account without restricting how the prompt itself is directed.
+const requestRules = "Standalone request: ignore earlier chats unless this message asks to reuse them."
 
-// wardrobeExceptionRule lets per-shot wardrobe lines override locked reference outfits.
-const wardrobeExceptionRule = `Wardrobe exception: locks and reference images govern identity only - face, hair, body, and for settings the layout, materials and light. Whenever the prompt contains a "Wardrobe this shot" line, that line overrides any outfit named in a lock or shown in a reference image.`
-
-// referenceSheetRule keeps reference images out of a video's frames.
-const referenceSheetRule = "Reference images are guidance, never frames: never show a reference sheet, its grid, multiple views or plain background, even at the start or end; frame 0 already shows the scene."
-
-// videoReferenceLines add the sheet rule to a video with reference images
-// (storyboard scene images have their own line).
-func videoReferenceLines(job MuseJob) []string {
-	if job.Kind != MuseJobVideo || len(job.References) == 0 {
-		return nil
+// referenceLines provide concise identity grounding for plain attached images
+// (no @tag/role metadata) while leaving scene, camera, and motion to the prompt.
+func referenceLines(kind MuseJobKind, n int) []string {
+	sheetGuard := ""
+	motion := "composition and poses"
+	if kind == MuseJobVideo {
+		sheetGuard = " (do not show reference grids or plain backdrops as video frames)"
+		motion = "camera and motion"
 	}
-	return []string{wardrobeExceptionRule, referenceSheetRule}
+	if n == 1 {
+		return []string{fmt.Sprintf("Reference image 1: keep the exact look and design of the attached subject, while taking the scene, %s from the prompt%s.", motion, sheetGuard)}
+	}
+	return []string{fmt.Sprintf("Reference images (%s, in order): keep each attached subject's exact look and design as separate elements unless the prompt merges them, taking the scene, %s from the prompt%s.", imageNames(n), motion, sheetGuard)}
 }
 
-// shortVideoLines are the one-clip guide: the plan and the fit check.
-func shortVideoLines(job MuseJob) []string {
-	return []string{planRule[MuseJobVideo], fitRule(job)}
+// imageNames lists n numbered images: "image 1 and image 2", or a range when many.
+func imageNames(n int) string {
+	if n <= 1 {
+		return "image 1"
+	}
+	if n > 4 {
+		return fmt.Sprintf("image 1 to image %d", n)
+	}
+	names := make([]string, n)
+	for i := range names {
+		names[i] = fmt.Sprintf("image %d", i+1)
+	}
+	return strings.Join(names[:n-1], ", ") + " and " + names[n-1]
+}
+
+// buildMessage composes the chat message sent for a job: task line,
+// standalone-request isolation, optional feature and reference grounding
+// (storyboard frames, @tag/role or plain reference cues),
+// requested aspect ratio and duration, the multi-clip protocol when Duration
+// exceeds one clip, and finally the user's prompt unchanged.
+func buildMessage(job MuseJob) string {
+	lines := []string{kindRequest[job.Kind]}
+	if job.Kind == MuseJobImage && job.BoardFrames > 0 {
+		lines = append([]string{"Task: Create the storyboard images of a video."}, boardImageLines(job)...)
+	}
+	lines = append(lines, requestRules)
+	first := 1
+	if len(job.Frames) > 0 {
+		lines = append(lines, boardVideoLines(job)...)
+		first += len(job.Frames)
+	}
+	if n := len(job.References); n > 0 {
+		switch {
+		case len(job.RefInfo) == n:
+			lines = append(lines, roleLines(job.Kind, job.RefInfo, first)...)
+		case first > 1:
+			lines = append(lines, roleLines(job.Kind, make([]MuseRefInfo, n), first)...)
+		default:
+			lines = append(lines, referenceLines(job.Kind, n)...)
+		}
+	}
+	lines = append(lines, formatLines(job)...)
+	if isLong(job) {
+		lines = append(lines, longVideoLines(job)...)
+	}
+	return strings.Join(lines, "\n") + "\nprompt:\n" + job.Prompt
 }

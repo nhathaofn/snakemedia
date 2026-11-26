@@ -7,6 +7,7 @@ import { Sidebar } from './Sidebar';
 import { PreviousRunPrompt, Toaster } from '../feedback';
 import {
   useAppBootstrap,
+  useAccountsLive,
   useCompactLayout,
   useThemeSync,
   useToolsLive,
@@ -19,6 +20,7 @@ import { STARTUP_ELEMENTS } from '../../routes/registry';
 
 export const AppLayout: React.FC = () => {
   useAppBootstrap();
+  useAccountsLive();
   useThemeSync();
   useCompactLayout();
   useUpdateNotice();

@@ -48,17 +48,8 @@ type flowProject struct {
 // FetchAccountProjects queries RPC UpteDb (/Provider.GetProjects) and returns the
 // account's projects, most recently updated first.
 func (s *Provider) FetchAccountProjects(ctx context.Context, client *chrome.FlowClient) ([]flowProject, error) {
-	rpcID := client.Credentials().RPCs.ID(chrome.MethodProjects)
-	fReq, err := BuildBatchEnvelope(rpcID, []any{"projects/*", 21, nil, nil, nil, nil, []any{1}})
-	if err != nil {
-		return nil, err
-	}
 	limits := s.cfg.Get().FlowPagePolicy()
-	body, err := client.Do(ctx, rpcID, fReq, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
-	if err != nil {
-		return nil, err
-	}
-	payload, err := chrome.ParseRPCPayload(string(body), rpcID)
+	payload, err := readFlowPayload(ctx, client, chrome.MethodProjects, []any{"projects/*", 21, nil, nil, nil, nil, []any{1}}, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
 	if err != nil {
 		return nil, err
 	}

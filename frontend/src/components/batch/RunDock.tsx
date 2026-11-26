@@ -2,7 +2,7 @@ import { Pause, Play } from 'lucide-react';
 import { Button, Icon } from '../ui';
 
 /**
- * The bar under a batch panel: "Chạy" starts the prompts on hold, "Dừng" holds
+ * The bar under a batch panel: "Chạy" starts the prompts on hold, "Tạm dừng hàng đợi" holds
  * the ones waiting to run (running ones finish).
  */
 export function RunDock({
@@ -36,7 +36,7 @@ export function RunDock({
         onClick={onStop}
       >
         <Icon icon={Pause} size="sm" />
-        <span>Dừng</span>
+        <span>Tạm dừng hàng đợi</span>
       </Button>
     </div>
   );

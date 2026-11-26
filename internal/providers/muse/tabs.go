@@ -54,26 +54,30 @@ type tabPool struct {
 	reloadAfter int
 
 	navLock     func(accountID, targetID string) *sync.RWMutex
+	routeLock   func(accountID, targetID string) *sync.Mutex
 	listTargets func(context.Context, int, config.AccountConfig) ([]browser.Target, error)
 	openTab     func(context.Context, int, config.AccountConfig) (browser.Target, error)
-	navigate    func(context.Context, browser.Target, int, browser.Site) error
+	navigate    func(context.Context, browser.Target, int, browser.Site, config.AccountConfig) error
+	waitReady   func(context.Context, int, string, config.AccountConfig) error
 	closeTab    func(context.Context, int, config.AccountConfig, string) error
 	sleep       func(context.Context, time.Duration) error
 	now         func() time.Time
 }
 
 func newTabPool() *tabPool {
-	return &tabPool{
+	tp := &tabPool{
 		locks:       make(map[string]chan struct{}),
 		accounts:    make(map[string]*accountTabState),
 		reloadAfter: sharedTabReloadEvery,
 		listTargets: browser.Targets,
 		openTab:     browser.NewTab,
-		navigate:    browser.Navigate,
+		navigate:    browser.NavigateWithPolicy,
 		closeTab:    browser.CloseTab,
 		sleep:       sleepContext,
 		now:         time.Now,
 	}
+	tp.waitReady = tp.waitTabReady
+	return tp
 }
 
 func (tp *tabPool) reloadThreshold() int {
@@ -233,14 +237,12 @@ func removeJobFromSlot(jobs []string, jobID string) []string {
 	if len(jobs) == 0 {
 		return jobs
 	}
-	if jobID != "" {
-		for i := len(jobs) - 1; i >= 0; i-- {
-			if jobs[i] == jobID {
-				return slices.Delete(jobs, i, i+1)
-			}
+	for i := len(jobs) - 1; i >= 0; i-- {
+		if jobs[i] == jobID {
+			return slices.Delete(jobs, i, i+1)
 		}
 	}
-	return jobs[:len(jobs)-1]
+	return jobs
 }
 
 // acquire binds jobID to accountID's single shared muse.ai tab on port (opening
@@ -271,8 +273,11 @@ func (tp *tabPool) acquire(ctx context.Context, accountID, jobID string, port, w
 		// Pick the primary shared tab and close any excess secondary idle tabs.
 		idx := 0
 		chosen := st.slots[idx].targetID
+		soleHolder := len(st.slots[idx].jobs) == 0
 		st.slots[idx].jobs = append(st.slots[idx].jobs, jobID)
-		reload := st.slots[idx].needsReload
+		// Defer shared-tab reload while sibling jobs are still bound to this slot,
+		// so an in-flight download or poll is never aborted by a Home navigation.
+		reload := st.slots[idx].needsReload && soleHolder
 		if reload {
 			st.slots[idx].needsReload = false
 			st.slots[idx].uses = 0
@@ -312,7 +317,7 @@ func (tp *tabPool) acquire(ctx context.Context, accountID, jobID string, port, w
 		target = created
 		openedFresh = true
 	}
-	if err := tp.navigate(ctx, target, port, musePage); err != nil {
+	if err := tp.navigate(ctx, target, port, musePage, policy); err != nil {
 		if openedFresh {
 			_ = tp.closeTab(context.WithoutCancel(ctx), port, policy, target.ID)
 		}
@@ -344,16 +349,105 @@ func (tp *tabPool) reloadSharedTab(ctx context.Context, accountID string, port i
 	if !ok {
 		return errTabMissing
 	}
+	if tp.routeLock != nil {
+		if rm := tp.routeLock(accountID, targetID); rm != nil {
+			rm.Lock()
+			defer rm.Unlock()
+		}
+	}
 	if tp.navLock != nil {
 		if nav := tp.navLock(accountID, targetID); nav != nil {
 			nav.Lock()
 			defer nav.Unlock()
 		}
 	}
-	if err := tp.navigate(ctx, navTarget, port, musePage); err != nil {
+	if err := tp.navigate(ctx, navTarget, port, musePage, policy); err != nil {
 		return err
 	}
-	return tp.waitOnMuse(ctx, port, targetID, policy)
+	if err := tp.waitOnMuseHome(ctx, port, targetID, policy); err != nil {
+		return err
+	}
+	if tp.waitReady != nil {
+		return tp.waitReady(ctx, port, targetID, policy)
+	}
+	return nil
+}
+
+func (tp *tabPool) waitOnMuseHome(ctx context.Context, port int, targetID string, policy config.AccountConfig) error {
+	waitMax := time.Duration(policy.PageReadySeconds) * time.Second
+	if waitMax <= 0 {
+		waitMax = 30 * time.Second
+	}
+	deadline := tp.now().Add(waitMax)
+	for {
+		targets, err := tp.listTargets(ctx, port, policy)
+		if err != nil {
+			return err
+		}
+		for _, t := range targets {
+			if t.ID != targetID {
+				continue
+			}
+			if u, ok := t.Page(); ok && museURL(u) && (u.Path == "" || u.Path == "/") {
+				return nil
+			}
+			if t.URL != "" && t.URL != "about:blank" && t.URL != "chrome://newtab/" {
+				if u, ok := t.Page(); !ok || !museURL(u) {
+					return fmt.Errorf("Tab Muse mới điều hướng sang trang khác (%s)", sanitizeAwayURL(t.URL))
+				}
+			}
+		}
+		if !tp.now().Before(deadline) {
+			return errTabMissing
+		}
+		if err := tp.sleep(ctx, 150*time.Millisecond); err != nil {
+			return err
+		}
+	}
+}
+
+func (tp *tabPool) waitTabReady(ctx context.Context, port int, targetID string, policy config.AccountConfig) error {
+	// Give Chrome a short moment after Page.navigate to begin tearing down the
+	// old document before probing document.readyState.
+	if err := tp.sleep(ctx, 200*time.Millisecond); err != nil {
+		return err
+	}
+	waitMax := time.Duration(policy.PageReadySeconds) * time.Second
+	if waitMax <= 0 || waitMax > 15*time.Second {
+		waitMax = 15 * time.Second
+	}
+	deadline := tp.now().Add(waitMax)
+	for {
+		t, ok := findTarget(ctx, tp, port, policy, targetID)
+		if !ok {
+			return errTabMissing
+		}
+		if u, isPage := t.Page(); !isPage || !museURL(u) {
+			if t.URL != "" && t.URL != "about:blank" && t.URL != "chrome://newtab/" {
+				return fmt.Errorf("Tab Muse mới điều hướng sang trang khác (%s)", sanitizeAwayURL(t.URL))
+			}
+		} else {
+			evalCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			conn, err := browser.Dial(evalCtx, t, port, 0)
+			if err == nil {
+				var ready string
+				evalErr := conn.Evaluate(evalCtx, `document.readyState`, &ready)
+				_ = conn.Close()
+				cancel()
+				if evalErr == nil && (ready == "interactive" || ready == "complete") {
+					return nil
+				}
+			} else {
+				cancel()
+			}
+		}
+		if !tp.now().Before(deadline) {
+			return nil
+		}
+		if err := tp.sleep(ctx, 150*time.Millisecond); err != nil {
+			return err
+		}
+	}
 }
 
 func (tp *tabPool) waitOnMuse(ctx context.Context, port int, targetID string, policy config.AccountConfig) error {
@@ -375,7 +469,7 @@ func (tp *tabPool) waitOnMuse(ctx context.Context, port int, targetID string, po
 				return nil
 			}
 			if t.URL != "" && t.URL != "about:blank" && t.URL != "chrome://newtab/" {
-				return fmt.Errorf("Tab Muse mới điều hướng sang trang khác (%s)", t.URL)
+				return fmt.Errorf("Tab Muse mới điều hướng sang trang khác (%s)", sanitizeAwayURL(t.URL))
 			}
 		}
 		if !tp.now().Before(deadline) {
@@ -394,8 +488,9 @@ func (tp *tabPool) release(ctx context.Context, accountID string, port int, targ
 	if targetID == "" || port <= 0 {
 		return
 	}
+	want := 0
 	if wantThreads != nil {
-		_ = wantThreads()
+		want = wantThreads()
 	}
 	needsClose := false
 	reloadAfter := tp.reloadThreshold()
@@ -409,7 +504,7 @@ func (tp *tabPool) release(ctx context.Context, accountID string, port int, targ
 				if dirty || (reloadAfter > 0 && st.slots[i].uses >= reloadAfter) {
 					st.slots[i].needsReload = true
 				}
-				needsClose = len(st.slots) > 1 && !st.slots[i].busy() && (dirty || i > 0)
+				needsClose = len(st.slots) > 1 && !st.slots[i].busy() && (dirty || i > 0 || (want > 0 && i >= want))
 				break
 			}
 		}

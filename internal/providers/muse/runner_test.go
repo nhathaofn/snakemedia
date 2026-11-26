@@ -25,7 +25,7 @@ func TestRunJobSendsPollsAndDownloads(t *testing.T) {
 	if got.Status != MuseJobSucceeded || got.SessionID != "s1" || got.Attempts != 1 || len(got.Files) != 1 {
 		t.Fatalf("job = %+v", got)
 	}
-	if len(page.sends) != 1 || page.sends[0] != "Task: Create a new video.\n"+requestRules+"\n"+strings.Join(shortVideoLines(got), "\n")+"\nprompt:\nmột con mèo" {
+	if len(page.sends) != 1 || page.sends[0] != "Task: Create a new video.\n"+requestRules+"\nprompt:\nmột con mèo" {
 		t.Fatalf("sent %q", page.sends)
 	}
 	path, err := p.media.Path(got.Files[0])
@@ -180,7 +180,7 @@ func TestImageJobCollectsEveryImage(t *testing.T) {
 	if got := mustJob(t, p, job.ID); got.Status != MuseJobSucceeded || len(got.Files) != 2 {
 		t.Fatalf("job = %+v", got)
 	}
-	if page.sends[0] != "Task: Create a new image.\n"+requestRules+"\n"+planRule[MuseJobImage]+"\nprompt:\nx" {
+	if page.sends[0] != "Task: Create a new image.\n"+requestRules+"\nprompt:\nx" {
 		t.Fatalf("sent %q", page.sends[0])
 	}
 }
@@ -207,7 +207,7 @@ func TestAttachmentsFollowMuseLimits(t *testing.T) {
 	page.events, page.files = videoResult("/v.mp4", []byte("v"))
 	p := testProvider(t, page)
 	acc := addSignedIn(t, p, "A")
-	png, err := p.media.Put("ref", "image/png", ".png", []byte("png"))
+	png, err := p.media.Put("ref", "image/png", ".png", testPNGBytes(t, 16, 16))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestAttachmentsFollowMuseLimits(t *testing.T) {
 	if got := mustJob(t, p, job.ID); got.Status != MuseJobSucceeded {
 		t.Fatalf("job = %+v", got)
 	}
-	if atts := page.attachments[0]; len(atts) != 1 || atts[0].MimeType != "image/png" || atts[0].Filename != "image_1.png" {
+	if atts := page.attachments[0]; len(atts) != 1 || atts[0].MimeType != "image/jpeg" || atts[0].Filename != "image_1.jpg" {
 		t.Fatalf("attachments = %+v", atts)
 	}
 	if a, _ := p.accounts.Record(acc.ID); func() bool {
@@ -232,13 +232,21 @@ func TestAttachmentsFollowMuseLimits(t *testing.T) {
 
 	big, _ := p.media.Put("big", "image/png", ".png", make([]byte, 2<<20))
 	webp, _ := p.media.Put("w", "image/webp", ".webp", []byte("w"))
-	for _, refs := range [][]string{{big}, {webp}, {png, png, png}} {
+	for _, refs := range [][]string{{big}, {webp}} {
 		job := submit(t, p, MuseJobVideo, "x")[0]
 		p.jobs.update(job.ID, func(j *MuseJob) { j.References = refs })
 		p.runOne(context.Background(), job.ID, acc.ID)
 		if got := mustJob(t, p, job.ID); got.Status != MuseJobFailed {
 			t.Fatalf("refs %v: job = %+v", refs, got)
 		}
+	}
+
+	// Attaching more images than caps.MaxFiles (2) is allowed within the 8 MB budget.
+	multi := submit(t, p, MuseJobVideo, "x")[0]
+	p.jobs.update(multi.ID, func(j *MuseJob) { j.References = []string{png, png, png} })
+	p.runOne(context.Background(), multi.ID, acc.ID)
+	if got := mustJob(t, p, multi.ID); got.Status != MuseJobSucceeded {
+		t.Fatalf("3 refs above MaxFiles should succeed within 8MB budget, got %+v", got)
 	}
 }
 

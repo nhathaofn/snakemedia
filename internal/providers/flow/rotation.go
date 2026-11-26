@@ -340,28 +340,34 @@ func (s *Provider) recordVideoSpend(acc session.StoredAccount, cost int) {
 // creditRefresh is the refresh state of one account: a query is running, and
 // pending holds the context of one more asked for while it ran.
 type creditRefresh struct {
-	pending context.Context
+	pending bool
 }
 
 // coalesceCreditRefresh runs refreshAccountCredits in the background, at most
 // once at a time per account. Requests arriving while it runs fold into one
 // trailing run, so a burst of generations costs two Chrome balance queries
 // instead of one goroutine (and query) each.
-func (s *Provider) coalesceCreditRefresh(ctx context.Context, id string) {
-	ctx = context.WithoutCancel(ctx)
+func (s *Provider) coalesceCreditRefresh(_ context.Context, id string) {
+	ctx := s.queue.lifetime()
 	s.creditRefreshMu.Lock()
+	if s.closingCredits || ctx.Err() != nil {
+		s.creditRefreshMu.Unlock()
+		return
+	}
 	if s.creditRefreshes == nil {
 		s.creditRefreshes = make(map[string]*creditRefresh)
 	}
 	if running, ok := s.creditRefreshes[id]; ok {
-		running.pending = ctx
+		running.pending = true
 		s.creditRefreshMu.Unlock()
 		return
 	}
 	state := &creditRefresh{}
 	s.creditRefreshes[id] = state
+	s.creditRefreshWG.Add(1)
 	s.creditRefreshMu.Unlock()
 	go func() {
+		defer s.creditRefreshWG.Done()
 		done := false
 		defer func() {
 			// A panic still frees the account for the next request.
@@ -375,18 +381,17 @@ func (s *Provider) coalesceCreditRefresh(ctx context.Context, id string) {
 		for {
 			s.refreshAccountCredits(ctx, id)
 			s.creditRefreshMu.Lock()
-			next := state.pending
-			state.pending = nil
-			if next == nil {
+			next := state.pending && ctx.Err() == nil
+			state.pending = false
+			if !next {
 				// Ending under the lock: a request arriving now starts a new run.
 				delete(s.creditRefreshes, id)
 				done = true
 			}
 			s.creditRefreshMu.Unlock()
-			if next == nil {
+			if !next {
 				return
 			}
-			ctx = next
 		}
 	}()
 }
@@ -428,16 +433,25 @@ func (s *Provider) refreshAccountCredits(ctx context.Context, id string) {
 		return
 	}
 	policy := s.cfg.Get().FlowPagePolicy()
-	refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(policy.RequestTimeoutSeconds)*time.Second)
+	refreshCtx, cancel := context.WithTimeout(ctx, time.Duration(policy.RequestTimeoutSeconds)*time.Second)
 	defer cancel()
+	release, err := s.accounts.AcquireProfile(refreshCtx, account.ProfileDir)
+	if err != nil {
+		return
+	}
+	defer release()
 	b, err := s.accounts.EnsureAccountHeadlessBrowser(refreshCtx, *account)
 	if err != nil {
-		logger.Get().Warn("cannot open Chrome to refresh Flow credits", "account", id, "error", err)
+		if refreshCtx.Err() == nil {
+			logger.Get().Warn("cannot open Chrome to refresh Flow credits", "account", id, "error", err)
+		}
 		return
 	}
 	credits, credentials, err := chrome.QueryCredits(refreshCtx, b.Port, account.Credentials, policy)
 	if err != nil {
-		logger.Get().Warn("cannot refresh Flow credits after generation", "account", id, "error", err)
+		if refreshCtx.Err() == nil {
+			logger.Get().Warn("cannot refresh Flow credits after generation", "account", id, "error", err)
+		}
 		return
 	}
 	s.rotationMu.Lock()

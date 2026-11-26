@@ -1,5 +1,6 @@
-import React from 'react';
-import { SegmentedControl } from '../../../components/ui';
+import React, { useEffect, useState } from 'react';
+import { FolderOpen, RotateCcw } from 'lucide-react';
+import { Button, Icon, Modal, SegmentedControl } from '../../../components/ui';
 import {
   NumberSetting,
   SettingRow,
@@ -10,6 +11,8 @@ import {
   ToggleSetting,
 } from '../../../components/settings';
 import { useConfigSection } from '../../../hooks';
+import { api, unwrap } from '../../../services';
+import { useAppStore } from '../../../stores';
 import { ImageFormat, MuseMode } from '../../../types';
 import { CleanChatsButton } from './CleanChatsButton';
 import './MuseSettingsPage.css';
@@ -32,6 +35,81 @@ const imageFormatOptions = [
  */
 export const MuseSettingsPage: React.FC = () => {
   const { section: muse, patch, saving } = useConfigSection('muse');
+  const addToast = useAppStore((s) => s.addToast);
+  const [vaultDir, setVaultDir] = useState('');
+  const [assetCount, setAssetCount] = useState(0);
+  const [movingVault, setMovingVault] = useState(false);
+  const [pendingVaultChange, setPendingVaultChange] = useState<{
+    targetConfigDir: string;
+    displayTarget: string;
+    isReset: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    void api
+      .getMuseAssetVaultDirectory()
+      .then((res) => {
+        if (res.success && res.data) setVaultDir(res.data);
+      })
+      .catch(() => {});
+  }, [muse?.assetVaultDir]);
+
+  const openMigrationDialog = async (
+    targetConfigDir: string,
+    displayTarget: string,
+    isReset: boolean,
+  ) => {
+    let count = 0;
+    try {
+      const assetsRes = await api.listMuseAssets();
+      if (assetsRes.success && assetsRes.data) count = assetsRes.data.length;
+    } catch {
+      count = 0;
+    }
+    setAssetCount(count);
+    setPendingVaultChange({ targetConfigDir, displayTarget, isReset });
+  };
+
+  const handleChooseVaultDir = async () => {
+    try {
+      const picked = unwrap(await api.pickMuseAssetVaultDirectoryPath()).trim();
+      if (!picked || picked.toLowerCase() === vaultDir.trim().toLowerCase()) return;
+      await openMigrationDialog(picked, picked, false);
+    } catch (cause) {
+      addToast({ type: 'error', message: cause instanceof Error ? cause.message : String(cause) });
+    }
+  };
+
+  const handleResetVaultDir = async () => {
+    if (!muse?.assetVaultDir) return;
+    await openMigrationDialog('', 'Thư mục mặc định (AppData)', true);
+  };
+
+  const confirmVaultChange = async (migrate: boolean) => {
+    if (!pendingVaultChange) return;
+    setMovingVault(true);
+    try {
+      const activePath = unwrap(
+        await api.setMuseAssetVaultDirectory(pendingVaultChange.targetConfigDir, migrate),
+      );
+      setVaultDir(activePath);
+      const cfgRes = await api.getConfig();
+      if (cfgRes.success && cfgRes.data) {
+        useAppStore.getState().setConfig(cfgRes.data);
+      }
+      setPendingVaultChange(null);
+      addToast({
+        type: 'success',
+        message: migrate
+          ? `Đã chuyển kho tư liệu sang ${activePath}.`
+          : `Đã đổi thư mục kho tư liệu sang ${activePath}.`,
+      });
+    } catch (cause) {
+      addToast({ type: 'error', message: cause instanceof Error ? cause.message : String(cause) });
+    } finally {
+      setMovingVault(false);
+    }
+  };
 
   if (!muse) {
     return <SettingsShell title="Cài đặt Muse">Đang tải cài đặt…</SettingsShell>;
@@ -62,6 +140,7 @@ export const MuseSettingsPage: React.FC = () => {
                 value={muse.sendGapMinSeconds}
                 min={0}
                 max={muse.sendGapMaxSeconds}
+                unit="giây"
                 disabled={saving}
                 onCommit={(sendGapMinSeconds) => patch({ sendGapMinSeconds })}
               />
@@ -102,7 +181,7 @@ export const MuseSettingsPage: React.FC = () => {
         </SettingRow>
         <SettingRow
           label="Luồng mỗi tài khoản"
-          hint="Mọi tài khoản đã đăng nhập và đang dùng được đều tự nhận việc (khi bật Muse API, nhân với số tài khoản khả dụng trên muse2api); tài khoản hết lượt, lỗi proxy hay đăng xuất tự được bỏ qua."
+          hint="Mọi tài khoản đã đăng nhập và đang dùng được đều tự nhận việc; tài khoản hết lượt, lỗi proxy hay đăng xuất tự được bỏ qua."
         >
           <NumberSetting
             aria-label="Luồng mỗi tài khoản"
@@ -159,6 +238,52 @@ export const MuseSettingsPage: React.FC = () => {
             disabled={saving}
             onChange={(imageFormat) => patch({ imageFormat })}
           />
+        </SettingRow>
+      </SettingsSection>
+
+      <SettingsSection title="Kho tư liệu (Asset Vault)">
+        <SettingRow
+          label="Thư mục Kho tư liệu"
+          hint="Thư mục gốc để lưu và mở trực tiếp ảnh tham chiếu theo dự án ([PREFIX_]LOẠI_alias...). Bỏ trống sẽ dùng thư mục AppData mặc định. Ảnh trong kho luôn giữ nguyên định dạng gốc; app chỉ nén .jpg ≤ 2048px (trần 8 MB) lúc gửi lên Muse."
+          stacked
+        >
+          <div className="muse-vault-path-row">
+            <input
+              type="text"
+              readOnly
+              className="settings-input muse-vault-path-input"
+              aria-label="Thư mục Kho tư liệu"
+              value={vaultDir || '(Chưa tải)'}
+              title={vaultDir}
+            />
+            <Button
+              variant="secondary"
+              disabled={saving || movingVault}
+              onClick={() => void handleChooseVaultDir()}
+            >
+              Chọn thư mục…
+            </Button>
+            <Button
+              variant="ghost"
+              disabled={!vaultDir || movingVault}
+              onClick={() => void api.openMuseAssetVaultFolder()}
+              title="Mở thư mục kho ảnh"
+            >
+              <Icon icon={FolderOpen} size="sm" />
+              Mở
+            </Button>
+            {muse.assetVaultDir && (
+              <Button
+                variant="ghost"
+                disabled={saving || movingVault}
+                onClick={() => void handleResetVaultDir()}
+                title="Đưa về thư mục AppData mặc định"
+              >
+                <Icon icon={RotateCcw} size="sm" />
+                Mặc định
+              </Button>
+            )}
+          </div>
         </SettingRow>
       </SettingsSection>
 
@@ -235,6 +360,57 @@ export const MuseSettingsPage: React.FC = () => {
           />
         </SettingRow>
       </SettingsSection>
+
+      {pendingVaultChange && (
+        <Modal
+          onClose={() => !movingVault && setPendingVaultChange(null)}
+          title="Chuyển thư mục Kho tư liệu"
+          subtitle={
+            pendingVaultChange.isReset
+              ? 'Đưa đường dẫn kho tư liệu về vị trí AppData mặc định.'
+              : 'Thay đổi vị trí lưu trữ ảnh Kho tư liệu trên ổ đĩa.'
+          }
+          footer={
+            <div className="muse-vault-modal-actions">
+              <Button
+                variant="ghost"
+                disabled={movingVault}
+                onClick={() => setPendingVaultChange(null)}
+              >
+                Huỷ
+              </Button>
+              <Button
+                variant="secondary"
+                disabled={movingVault}
+                onClick={() => void confirmVaultChange(false)}
+              >
+                Chỉ đổi đường dẫn
+              </Button>
+              <Button
+                variant="primary"
+                disabled={movingVault}
+                onClick={() => void confirmVaultChange(true)}
+              >
+                {movingVault ? 'Đang chuyển…' : 'Chuyển kèm ảnh hiện có'}
+              </Button>
+            </div>
+          }
+        >
+          <div className="muse-vault-modal-body">
+            <p>
+              <strong>Từ:</strong> {vaultDir}
+            </p>
+            <p>
+              <strong>Sang:</strong> {pendingVaultChange.displayTarget}
+            </p>
+            <p className="settings-row-hint">
+              {assetCount > 0
+                ? `Kho có ${assetCount} tư liệu. Nếu chỉ đổi đường dẫn, ảnh chưa có ở thư mục mới sẽ tạm thời không mở được. Chọn "Chuyển kèm ảnh hiện có" để chuyển các ảnh đang được kho quản lý.`
+                : 'Kho hiện chưa có tư liệu nào. Bạn vẫn có thể chọn chuyển thư mục cấu trúc hoặc đổi đường dẫn.'}
+            </p>
+          </div>
+        </Modal>
+      )}
     </SettingsShell>
   );
 };

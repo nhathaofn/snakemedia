@@ -614,21 +614,8 @@ type projectMediaEntry struct {
 }
 
 func (s *Provider) projectContentsPayload(ctx context.Context, client *chrome.FlowClient, projectID string) (string, error) {
-	rpcID := client.Credentials().RPCs.ID(chrome.MethodProjectContents)
-	fReq, err := BuildBatchEnvelope(rpcID, []any{"projects/" + projectID, nil, nil, nil, []any{1}})
-	if err != nil {
-		return "", err
-	}
 	limits := s.cfg.Get().FlowPagePolicy()
-	body, err := client.Do(ctx, rpcID, fReq, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
-	if err != nil {
-		return "", err
-	}
-	payload, err := chrome.ParseRPCPayload(string(body), rpcID)
-	if err != nil {
-		return "", err
-	}
-	return payload, nil
+	return readFlowPayload(ctx, client, chrome.MethodProjectContents, []any{"projects/" + projectID, nil, nil, nil, []any{1}}, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
 }
 
 func (s *Provider) projectMediaEntries(ctx context.Context, client *chrome.FlowClient, projectID string) ([]projectMediaEntry, error) {
@@ -737,17 +724,8 @@ func validProjectMediaID(value string) bool {
 }
 
 func (s *Provider) getProjectMedia(ctx context.Context, client *chrome.FlowClient, mediaID string) (string, error) {
-	rpcID := client.Credentials().RPCs.ID(chrome.MethodMedia)
-	fReq, err := BuildBatchEnvelope(rpcID, []any{mediaID})
-	if err != nil {
-		return "", err
-	}
 	limits := s.cfg.Get().FlowPagePolicy()
-	body, err := client.Do(ctx, rpcID, fReq, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
-	if err != nil {
-		return "", err
-	}
-	return chrome.ParseRPCPayload(string(body), rpcID)
+	return readFlowPayload(ctx, client, chrome.MethodMedia, []any{mediaID}, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
 }
 
 func flowProjectMediaName(mediaID, payload string) string {

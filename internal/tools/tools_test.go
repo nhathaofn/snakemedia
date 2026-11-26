@@ -209,3 +209,18 @@ func TestPostponedToolIsNotAskedAgainThisRun(t *testing.T) {
 		t.Errorf("asks = %d, waiting = %+v after postponing", asks, s.Requests())
 	}
 }
+
+func TestDownloadClientHasFiniteTimeoutAndBlocksHTTPSDowngrade(t *testing.T) {
+	s := newService(testManifest(Source{}), t.TempDir(), "test", nil)
+	if s.client == nil || s.client.Timeout <= 0 {
+		t.Fatalf("expected finite download HTTP timeout, got %+v", s.client)
+	}
+	if s.client.CheckRedirect == nil {
+		t.Fatal("expected CheckRedirect policy on download HTTP client")
+	}
+	prevReq, _ := http.NewRequest(http.MethodGet, "https://example.com/tool.zip", nil)
+	nextReq, _ := http.NewRequest(http.MethodGet, "http://insecure.example.com/tool.zip", nil)
+	if err := s.client.CheckRedirect(nextReq, []*http.Request{prevReq}); err == nil {
+		t.Fatal("expected CheckRedirect to refuse https -> http downgrade")
+	}
+}

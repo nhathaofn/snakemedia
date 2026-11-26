@@ -1,13 +1,16 @@
 import { thumbUrl } from '../../../../services';
 import { memo } from 'react';
+import { BookmarkPlus } from 'lucide-react';
 import { QueuePrompt, QueueProgress } from '../../../../components/batch';
 import type { QueueTone } from '../../../../components/batch';
+import { IconAction } from '../../../../components/ui';
 import { FlowImageTaskStatus } from '../../../../types';
 import type { FlowImageTask, GeneratedImageItem } from '../../../../types';
 
 export interface TaskRowActions {
   toggle: (id: string, checked: boolean) => void;
   preview: (image: GeneratedImageItem) => void;
+  saveToVault: (task: FlowImageTask, image: GeneratedImageItem) => void;
   showReferences: (task: FlowImageTask, number: number) => void;
   cancel: (id: string) => void;
   retry: (id: string) => void;
@@ -53,6 +56,7 @@ export const TaskRow = memo(function TaskRow({
   actions,
 }: TaskRowProps) {
   const running = task.status === FlowImageTaskStatus.Running;
+  const rechecking = task.status === FlowImageTaskStatus.Queued && !!task.requestId;
   const ended =
     task.status === FlowImageTaskStatus.Failed || task.status === FlowImageTaskStatus.Cancelled;
   const shownReferences = task.references.slice(0, 2);
@@ -75,7 +79,7 @@ export const TaskRow = memo(function TaskRow({
 
       <QueuePrompt
         prompt={task.prompt}
-        editable={!running}
+        editable={!running && !rechecking}
         saveLabel={task.status === FlowImageTaskStatus.Queued ? 'Lưu' : 'Lưu & chạy lại'}
         onSave={(prompt) => actions.edit(task.id, prompt)}
       />
@@ -113,24 +117,31 @@ export const TaskRow = memo(function TaskRow({
 
       <div className="queue-table-results" role="cell">
         {results.length > 0 ? (
-          results.map((result, index) => (
-            <button
-              type="button"
-              className="queue-result"
-              key={`${task.id}-result-${result.id || index}`}
-              aria-label="Phóng to ảnh kết quả"
-              title="Xem ảnh lớn"
-              onClick={() => actions.preview(result)}
-            >
-              <img
-                className="queue-result-thumb"
-                src={thumbUrl(result.localUrl)}
-                alt={result.prompt || task.prompt}
-                loading="lazy"
-                decoding="async"
-              />
-            </button>
-          ))
+          <>
+            {results.map((result, index) => (
+              <button
+                type="button"
+                className="queue-result"
+                key={`${task.id}-result-${result.id || index}`}
+                aria-label="Phóng to ảnh kết quả"
+                title="Xem ảnh lớn"
+                onClick={() => actions.preview(result)}
+              >
+                <img
+                  className="queue-result-thumb"
+                  src={thumbUrl(result.localUrl)}
+                  alt={result.prompt || task.prompt}
+                  loading="lazy"
+                  decoding="async"
+                />
+              </button>
+            ))}
+            <IconAction
+              icon={BookmarkPlus}
+              label="Lưu kết quả vào Kho Tư liệu Muse"
+              onClick={() => actions.saveToVault(task, results[0])}
+            />
+          </>
         ) : (
           <span className="queue-muted">—</span>
         )}

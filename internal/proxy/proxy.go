@@ -89,18 +89,25 @@ func Parse(line string) *Parsed {
 		if u, err := url.Parse(raw); err == nil {
 			if (u.Path != "" && u.Path != "/") || u.RawQuery != "" {
 				prov := "custom_url"
+				var key string
+				q := u.Query()
 				lower := strings.ToLower(raw)
-				if strings.Contains(lower, "proxy.vn") || strings.Contains(lower, "proxyxoay") {
+				switch {
+				case strings.Contains(lower, "proxy.vn") || strings.Contains(lower, "proxyxoay"):
 					prov = "proxyvn"
-				} else if strings.Contains(lower, "tmproxy.com") {
+					key = firstNonEmpty(q.Get("key"), q.Get("api_key"))
+				case strings.Contains(lower, "tmproxy.com"):
 					prov = "tmproxy"
-				} else if strings.Contains(lower, "shoplike.vn") {
+					key = firstNonEmpty(q.Get("api_key"), q.Get("key"))
+				case strings.Contains(lower, "shoplike.vn"):
 					prov = "shoplike"
+					key = firstNonEmpty(q.Get("access_token"), q.Get("key"))
 				}
 				return &Parsed{
 					Raw:      raw,
 					Type:     TypeRotating,
 					Provider: prov,
+					Key:      strings.TrimSpace(key),
 					URL:      raw,
 				}
 			}
@@ -206,7 +213,7 @@ func checkStatic(p *Parsed, timeout time.Duration) CheckResult {
 		if p.User != "" || p.Pass != "" {
 			auth = &xproxy.Auth{User: p.User, Password: p.Pass}
 		}
-		dialer, err := xproxy.SOCKS5("tcp", net.JoinHostPort(p.Host, strconv.Itoa(p.Port)), auth, &net.Dialer{Timeout: timeout})
+		dialer, err := xproxy.SOCKS5("tcp", net.JoinHostPort(p.Host, strconv.Itoa(p.Port)), auth, deadlineDialer{timeout: timeout})
 		if err != nil {
 			return CheckResult{Raw: p.Raw, Status: StatusDead, OK: false, Message: err.Error(), CheckedAt: checkedAt}
 		}
@@ -231,7 +238,7 @@ func checkStatic(p *Parsed, timeout time.Duration) CheckResult {
 	_ = conn.SetDeadline(time.Now().Add(timeout))
 
 	req := "CONNECT " + probeHost + " HTTP/1.1\r\nHost: " + probeHost + "\r\n"
-	if p.User != "" {
+	if p.User != "" || p.Pass != "" {
 		cred := base64.StdEncoding.EncodeToString([]byte(p.User + ":" + p.Pass))
 		req += "Proxy-Authorization: Basic " + cred + "\r\n"
 	}
@@ -283,6 +290,15 @@ func readProviderBody(r io.Reader) []byte {
 // tests can point it at a local server.
 var shoplikeAPI = "https://proxy.shoplike.vn/Api/"
 
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func containsAny(s string, subs ...string) bool {
 	for _, sub := range subs {
 		if strings.Contains(s, sub) {
@@ -298,7 +314,10 @@ func fetchRotatingRaw(ctx context.Context, p *Parsed, requestNew bool, timeout t
 
 	switch p.Provider {
 	case "proxyvn":
-		ep := fmt.Sprintf("https://proxyxoay.shop/api/get.php?key=%s", url.QueryEscape(p.Key))
+		ep := p.URL
+		if ep == "" {
+			ep = fmt.Sprintf("https://proxyxoay.shop/api/get.php?key=%s", url.QueryEscape(p.Key))
+		}
 		req, _ := http.NewRequestWithContext(ctx, "GET", ep, nil)
 		req.Header.Set("User-Agent", "Mozilla/5.0")
 		t0 := time.Now()
@@ -351,13 +370,18 @@ func fetchRotatingRaw(ctx context.Context, p *Parsed, requestNew bool, timeout t
 		return CheckResult{Raw: p.Raw, Status: StatusDead, OK: false, Message: string(body), CheckedAt: checkedAt}
 
 	case "tmproxy":
-		ep := "https://api.tmproxy.com/api/proxy/get-current-proxy"
-		if requestNew {
-			ep = "https://api.tmproxy.com/api/proxy/get-new-proxy"
+		var req *http.Request
+		if p.Key == "" && p.URL != "" {
+			req, _ = http.NewRequestWithContext(ctx, "GET", p.URL, nil)
+		} else {
+			ep := "https://api.tmproxy.com/api/proxy/get-current-proxy"
+			if requestNew {
+				ep = "https://api.tmproxy.com/api/proxy/get-new-proxy"
+			}
+			payload, _ := json.Marshal(map[string]any{"api_key": p.Key, "id_location": 0})
+			req, _ = http.NewRequestWithContext(ctx, "POST", ep, bytes.NewReader(payload))
+			req.Header.Set("Content-Type", "application/json")
 		}
-		payload, _ := json.Marshal(map[string]any{"api_key": p.Key, "id_location": 0})
-		req, _ := http.NewRequestWithContext(ctx, "POST", ep, bytes.NewReader(payload))
-		req.Header.Set("Content-Type", "application/json")
 		t0 := time.Now()
 		resp, err := client.Do(req)
 		if err != nil {
@@ -402,7 +426,10 @@ func fetchRotatingRaw(ctx context.Context, p *Parsed, requestNew bool, timeout t
 		if requestNew {
 			method = "getNewProxy"
 		}
-		ep := shoplikeAPI + method + "?access_token=" + url.QueryEscape(p.Key)
+		ep := p.URL
+		if p.Key != "" || ep == "" {
+			ep = shoplikeAPI + method + "?access_token=" + url.QueryEscape(p.Key)
+		}
 		req, _ := http.NewRequestWithContext(ctx, "GET", ep, nil)
 		t0 := time.Now()
 		resp, err := client.Do(req)
@@ -441,7 +468,10 @@ func fetchRotatingRaw(ctx context.Context, p *Parsed, requestNew bool, timeout t
 		return CheckResult{Raw: p.Raw, Status: StatusDead, OK: false, Message: string(body), CheckedAt: checkedAt}
 
 	default: // custom_url
-		req, _ := http.NewRequestWithContext(ctx, "GET", p.URL, nil)
+		req, err := http.NewRequestWithContext(ctx, "GET", p.URL, nil)
+		if err != nil {
+			return CheckResult{Raw: p.Raw, Status: StatusDead, OK: false, Message: "URL kiểm tra proxy không hợp lệ: " + err.Error(), CheckedAt: checkedAt}
+		}
 		req.Header.Set("User-Agent", "Mozilla/5.0")
 		t0 := time.Now()
 		resp, err := client.Do(req)

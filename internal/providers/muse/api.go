@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -42,9 +43,10 @@ type MuseOptions struct {
 	// ClipSeconds is one Muse clip; a longer duration is made as several clips
 	// joined in one chat.
 	ClipSeconds int `json:"clipSeconds"`
-	// MaxBoardFrames caps a storyboard; MaxAssetImages the images of one asset.
-	MaxBoardFrames int `json:"maxBoardFrames"`
-	MaxAssetImages int `json:"maxAssetImages"`
+	// MaxBoardFrames caps a storyboard; MaxAssetImages is 0 (unlimited in Vault).
+	MaxBoardFrames    int   `json:"maxBoardFrames"`
+	MaxAssetImages    int   `json:"maxAssetImages"`
+	InlineBudgetBytes int64 `json:"inlineBudgetBytes"`
 }
 
 // MuseJobRequest queues Repeat jobs per non-empty prompt with shared settings.
@@ -66,6 +68,8 @@ type MuseJobRequest struct {
 	// empty or 0 leaves them to the prompt. MuseOptions lists the values.
 	Ratio    string `json:"ratio"`
 	Duration int    `json:"duration"`
+	// Project narrows @tag matching in MuseAsset Vault (plus global _chung assets).
+	Project string `json:"project,omitempty"`
 	// RefMode says how References go to the prompts; empty shares them all.
 	RefMode MuseRefMode `json:"refMode,omitempty"`
 	// Assets are asset IDs attached to every prompt (a fixed model or
@@ -74,9 +78,6 @@ type MuseJobRequest struct {
 	// Storyboard makes every video prompt as a storyboard image job and a
 	// video job that waits for it (storyboard.go).
 	Storyboard *MuseStoryboard `json:"storyboard,omitempty"`
-	// SourceVideo is a sample video imported with ImportSourceVideo that every
-	// prompt remakes as a similar new video (Muse has no video-to-video).
-	SourceVideo string `json:"sourceVideo,omitempty"`
 }
 
 // MuseStoryboard asks for Frames scene images before each video; with
@@ -97,11 +98,39 @@ type MuseJobsFormatRequest struct {
 	Duration *int        `json:"duration,omitempty"`
 }
 
+// MuseJobsConfigRequest updates output folder and/or reference attachment settings
+// on unstarted queued jobs of kind and mode so post-queue edits take effect.
+type MuseJobsConfigRequest struct {
+	Kind       MuseJobKind `json:"kind"`
+	Mode       MuseJobMode `json:"mode"`
+	OutputDir  *string     `json:"outputDir,omitempty"`
+	SyncRefs   bool        `json:"syncRefs,omitempty"`
+	References []string    `json:"references,omitempty"`
+	RefMode    MuseRefMode `json:"refMode,omitempty"`
+	Project    string      `json:"project,omitempty"`
+	Assets     []string    `json:"assets,omitempty"`
+}
+
 // MusePromptCheck is what a prompt will attach and the hints about it.
 type MusePromptCheck struct {
-	Tags     []string `json:"tags"`
-	Images   int      `json:"images"`
-	Warnings []string `json:"warnings"`
+	Tags           []string `json:"tags"`
+	Images         int      `json:"images"`
+	Warnings       []string `json:"warnings"`
+	EstimatedBytes int64    `json:"estimatedBytes,omitempty"`
+	BudgetBytes    int64    `json:"budgetBytes,omitempty"`
+}
+
+// MusePromptPreview is the exact composed message that would be sent to Muse
+// for one prompt, along with resolved asset tags, attachment count, and hints.
+type MusePromptPreview struct {
+	Prompt            string   `json:"prompt"`
+	Message           string   `json:"message"`
+	StoryboardMessage string   `json:"storyboardMessage,omitempty"`
+	Tags              []string `json:"tags"`
+	Images            int      `json:"images"`
+	Warnings          []string `json:"warnings"`
+	EstimatedBytes    int64    `json:"estimatedBytes,omitempty"`
+	BudgetBytes       int64    `json:"budgetBytes,omitempty"`
 }
 
 // MuseReference is an image imported for use as a reference.
@@ -130,9 +159,6 @@ func (p *Provider) knownCapabilities() (*MuseCapabilities, []MuseModel) {
 				{Mime: "image/png", Extensions: []string{".png"}},
 				{Mime: "image/jpeg", Extensions: []string{".jpg", ".jpeg"}},
 				{Mime: "image/webp", Extensions: []string{".webp"}},
-			},
-			VideoTypes: []MuseFileType{
-				{Mime: "video/mp4", Extensions: []string{".mp4"}},
 			},
 			Models: []MuseModel{
 				{ID: "sora-2", Name: "Sora 2 (Video)"},
@@ -178,13 +204,13 @@ func (p *Provider) GetOptions() models.Response[MuseOptions] {
 	if caps == nil {
 		return models.SuccessResponse(MuseOptions{ImageExtensions: []string{}, Models: offered, JournalWarning: warning,
 			Ratios: museRatios, Durations: museDurations, ClipSeconds: museClipSeconds,
-			MaxBoardFrames: maxBoardFrames, MaxAssetImages: maxAssetImages})
+			MaxBoardFrames: maxBoardFrames, MaxAssetImages: maxAssetImages, InlineBudgetBytes: museInlineRequestBudget})
 	}
 	return models.SuccessResponse(MuseOptions{
 		Known: true, MaxFileBytes: caps.MaxFileBytes, MaxFiles: caps.MaxFiles,
 		ImageExtensions: caps.extensions(), Models: offered, CheckedAt: caps.CheckedAt,
 		JournalWarning: warning, Ratios: museRatios, Durations: museDurations, ClipSeconds: museClipSeconds,
-		MaxBoardFrames: maxBoardFrames, MaxAssetImages: maxAssetImages,
+		MaxBoardFrames: maxBoardFrames, MaxAssetImages: maxAssetImages, InlineBudgetBytes: museInlineRequestBudget,
 	})
 }
 
@@ -281,14 +307,23 @@ func (p *Provider) SubmitJobs(req MuseJobRequest) models.Response[[]MuseJob] {
 			}
 		}
 		if len(existing) > 0 {
-			if err := p.jobs.journal.Flush(); err != nil {
-				return fail[[]MuseJob](err, models.CodeInternal)
-			}
 			p.trigger()
 			return models.SuccessResponse(existing)
 		}
+		if pending, ok := p.failedSubmissions[req.SubmissionID]; ok {
+			if pending.hash != hash {
+				return fail[[]MuseJob](errors.New("Lần gửi này đã có nội dung khác. Hãy gửi lại bằng một lần tạo mới."), models.CodeInvalidArgument)
+			}
+			trimmed, err := p.jobs.add(pending.fresh...)
+			if err != nil {
+				return fail[[]MuseJob](err, models.CodeInternal)
+			}
+			delete(p.failedSubmissions, req.SubmissionID)
+			p.publishSubmittedJobs(pending.fresh, trimmed)
+			return models.SuccessResponse(slices.Clone(pending.out))
+		}
 	}
-	return p.submitJobs(req, "")
+	return p.submitJobsLocked(req, "")
 }
 
 func submissionHash(req MuseJobRequest) string {
@@ -303,26 +338,34 @@ const maxNodeAttempts = 50
 // runJobID gives one job of a graph run a stable ID derived from the run key,
 // so running the same graph again finds the job it queued before instead of
 // queueing (and paying for) it again. A job that ended without Muse ever
-// taking it (no SessionID) moves on to the next attempt; one Muse took is
-// returned as it is, its failure retried only from the queue.
-func (p *Provider) runJobID(runKey string, parts ...any) (string, *MuseJob) {
-	for attempt := range maxNodeAttempts {
+// taking it moves on to the next attempt. A send with an unknown outcome
+// keeps its job even if the session ID was lost.
+func (p *Provider) runJobID(runKey string, parts ...any) (string, *MuseJob, error) {
+	for attempt := 0; ; attempt++ {
 		id := engine.RequestIDFor(runKey, attempt, parts...)
 		job, ok := p.jobs.get(id)
 		if !ok {
-			return id, nil
+			if p.jobs.journal.Retired(id) {
+				return "", nil, errGraphJobRetired
+			}
+			return id, nil, nil
 		}
-		if (job.Status == MuseJobFailed || job.Status == MuseJobCancelled) && job.SessionID == "" {
+		if attempt+1 < maxNodeAttempts && (job.Status == MuseJobFailed || job.Status == MuseJobCancelled) && !job.mayBePaid() && !job.Sending {
 			continue
 		}
-		return id, &job
+		return id, &job, nil
 	}
-	return uuid.NewString(), nil
 }
 
 // submitJobs queues one job per prompt and repeat. With a graph run key the
 // job IDs are derived from it (runJobID); without one every job is new.
 func (p *Provider) submitJobs(req MuseJobRequest, runKey string) models.Response[[]MuseJob] {
+	p.submitMu.Lock()
+	defer p.submitMu.Unlock()
+	return p.submitJobsLocked(req, runKey)
+}
+
+func (p *Provider) submitJobsLocked(req MuseJobRequest, runKey string) models.Response[[]MuseJob] {
 	if !req.Kind.valid() {
 		return fail[[]MuseJob](errors.New("Loại tác vụ không hợp lệ."), models.CodeInvalidArgument)
 	}
@@ -342,35 +385,14 @@ func (p *Provider) submitJobs(req MuseJobRequest, runKey string) models.Response
 			return fail[[]MuseJob](fmt.Errorf("Storyboard có 1 đến %d khung.", maxBoardFrames), models.CodeInvalidArgument)
 		}
 	}
-	if req.SourceVideo != "" {
-		if !strings.HasPrefix(req.SourceVideo, media.Route+sourceVideoPrefix) {
-			return fail[[]MuseJob](errors.New("Video mẫu phải được chọn từ màn tạo."), models.CodeInvalidArgument)
-		}
-		if len(p.missingImages([]string{req.SourceVideo})) > 0 {
-			return fail[[]MuseJob](errors.New("Video mẫu không còn trong thư mục media. Hãy chọn lại."), models.CodeInvalidArgument)
-		}
-	}
 	if len(req.References) > 0 {
 		caps, _ := p.knownCapabilities()
 		if caps == nil {
 			return fail[[]MuseJob](errLimitsUnknown, models.CodeUnavailable)
 		}
-		if len(req.References) > caps.MaxFiles {
-			return fail[[]MuseJob](fmt.Errorf("Muse nhận tối đa %d ảnh mỗi tin nhắn.", caps.MaxFiles), models.CodeInvalidArgument)
-		}
 	}
-	var missing []string
-	for _, ref := range req.References {
-		path, err := p.media.Path(ref)
-		if err != nil {
-			return fail[[]MuseJob](err, models.CodeInvalidArgument)
-		}
-		if _, err := os.Stat(path); err != nil {
-			missing = append(missing, filepath.Base(path))
-		}
-	}
-	if len(missing) > 0 {
-		return fail[[]MuseJob](fmt.Errorf("Ảnh tham chiếu không còn trong thư mục media (có thể đã được dọn vì lâu không dùng): %s. Hãy bỏ và chọn lại ảnh.", strings.Join(missing, ", ")), models.CodeInvalidArgument)
+	if err := p.checkReferenceFiles(req.References); err != nil {
+		return fail[[]MuseJob](err, models.CodeInvalidArgument)
 	}
 	var prompts []string
 	for _, prompt := range req.Prompts {
@@ -434,32 +456,71 @@ func (p *Provider) submitJobs(req MuseJobRequest, runKey string) models.Response
 		jobs = append(jobs, job)
 	}
 	label := strings.TrimSpace(req.Label)
+	boardFrames, boardReview := 0, false
+	if board != nil {
+		boardFrames, boardReview = board.Frames, board.Review
+	}
 	for pi, prompt := range prompts {
 		refs, info := plans[pi].refs, plans[pi].info
 		for r := range repeat {
 			id := uuid.NewString()
 			if runKey != "" {
 				var existing *MuseJob
-				id, existing = p.runJobID(runKey, req.Kind, pi, r, prompt, refs)
+				id, existing, err = p.runJobID(runKey, req.Kind, pi, r, prompt, refs, info, req.Ratio, req.Duration, boardFrames, boardReview)
+				if err != nil {
+					return fail[[]MuseJob](err, models.CodeUnavailable)
+				}
 				if existing != nil {
+					if existing.After != "" && len(existing.Frames) == 0 {
+						if bj, ok := p.jobs.get(existing.After); ok {
+							jobs = append(jobs, bj)
+						}
+					}
 					jobs = append(jobs, *existing)
 					continue
 				}
 			}
 			job := MuseJob{
 				ID: id, Kind: req.Kind, Mode: mode, Prompt: prompt, Label: label,
-				References: slices.Clone(refs), RefInfo: info, SourceVideo: req.SourceVideo,
+				References: slices.Clone(refs), RefInfo: info,
 				Held: req.Held, Status: MuseJobQueued,
 				OutputDir: outputDir, Index: first + pi, Ratio: req.Ratio, Duration: req.Duration,
 				Files: []string{}, SavedFiles: []string{},
 			}
 			if board != nil {
-				boardJob := storyboardJob(job, board.Frames)
-				boardJob.CreatedAt = stamp()
-				add(boardJob)
-				job.After, job.BoardFrames, job.Review = boardJob.ID, board.Frames, board.Review
-				job.Held = req.Held || board.Review
-				job.Step = "Chờ storyboard"
+				var boardJob MuseJob
+				var existingBoard *MuseJob
+				boardID := uuid.NewString()
+				if runKey != "" {
+					boardID, existingBoard, err = p.runJobID(runKey, "storyboard", pi, r, prompt, refs, info, req.Ratio, board.Frames)
+					if err != nil {
+						return fail[[]MuseJob](err, models.CodeUnavailable)
+					}
+				}
+				job.After, job.BoardFrames, job.Review = boardID, board.Frames, board.Review
+				if existingBoard != nil && existingBoard.Status == MuseJobSucceeded && len(existingBoard.Files) >= board.Frames && len(existingBoard.Files) > 0 {
+					frames := slices.Clone(existingBoard.Files)
+					if len(frames) > board.Frames {
+						frames = frames[:board.Frames]
+					}
+					job.Frames = frames
+					job.Held = req.Held || board.Review
+					job.Step = "Đã có storyboard"
+					if board.Review {
+						job.Paused = true
+					}
+				} else {
+					if existingBoard != nil {
+						jobs = append(jobs, *existingBoard)
+					} else {
+						boardJob = storyboardJob(job, board.Frames)
+						boardJob.ID = boardID
+						boardJob.CreatedAt = stamp()
+						add(boardJob)
+					}
+					job.Held = req.Held || board.Review
+					job.Step = "Chờ storyboard"
+				}
 			}
 			job.CreatedAt = stamp()
 			add(job)
@@ -468,17 +529,38 @@ func (p *Provider) submitJobs(req MuseJobRequest, runKey string) models.Response
 	if len(fresh) > 0 {
 		trimmed, err := p.jobs.add(fresh...)
 		if err != nil {
+			if req.SubmissionID != "" {
+				if p.failedSubmissions == nil {
+					p.failedSubmissions = make(map[string]pendingSubmission)
+				} else if len(p.failedSubmissions) >= 64 {
+					clear(p.failedSubmissions)
+				}
+				p.failedSubmissions[req.SubmissionID] = pendingSubmission{
+					hash:  hash,
+					fresh: slices.Clone(fresh),
+					out:   slices.Clone(jobs),
+				}
+			}
 			return fail[[]MuseJob](err, models.CodeInternal)
 		}
-		if len(trimmed) > 0 {
-			p.emit(events.EventMuseJobsRemoved, trimmed)
-		}
-		for _, job := range fresh {
-			p.emit(events.EventMuseJobUpdated, job)
-		}
+		p.publishSubmittedJobs(fresh, trimmed)
+	} else {
+		p.trigger()
+	}
+	return models.SuccessResponse(jobs)
+}
+
+var errGraphJobRetired = errors.New("Tác vụ Graph có thể đã dùng quota và đã được dọn khỏi hàng đợi. Hãy kiểm tra lịch sử Muse trước khi tạo lượt mới.")
+
+func (p *Provider) publishSubmittedJobs(fresh []MuseJob, trimmed []string) {
+	if len(trimmed) > 0 {
+		p.emit(events.EventMuseJobsRemoved, trimmed)
+		p.sweepUnused()
+	}
+	for _, job := range fresh {
+		p.emit(events.EventMuseJobUpdated, job)
 	}
 	p.trigger()
-	return models.SuccessResponse(jobs)
 }
 
 // batchFolder picks the Hàng loạt folder under parent and the first number
@@ -512,6 +594,7 @@ func (p *Provider) CancelJob(id string) models.Response[MuseJob] {
 	}
 	p.mu.Lock()
 	cancel := p.cancels[id]
+	_, activeRun := p.running[id]
 	p.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -539,7 +622,12 @@ func (p *Provider) CancelJob(id string) models.Response[MuseJob] {
 		if ended = j.finished(); ended {
 			return
 		}
-		j.Status, j.Step, j.Error, j.Sending, j.Held, j.Paused = MuseJobCancelled, "", "Đã huỷ", false, false, false
+		j.Status, j.Step, j.Error, j.Held, j.Paused = MuseJobCancelled, "", "Đã huỷ", false, false
+		// Preserve Sending/PreSendTracked while the active run finishes in-flight
+		// send(), so a crash mid-send still triggers SendUnknown reconciliation on restart.
+		if !activeRun || !j.Sending {
+			j.Sending, j.PreSendTracked, j.PreSendSessions = false, false, nil
+		}
 		j.FinishedAt = p.now().UTC().Format(time.RFC3339)
 	})
 	if err != nil {
@@ -578,14 +666,24 @@ func (p *Provider) RetryJob(id string) models.Response[MuseJob] {
 // RemoveJob deletes a job that is not running. Downloaded files stay in the
 // media folder.
 func (p *Provider) RemoveJob(id string) models.Response[bool] {
+	p.mu.Lock()
+	_, active := p.running[id]
+	if active {
+		p.mu.Unlock()
+		return fail[bool](errors.New("Tác vụ đang chạy; hãy huỷ trước khi xoá."), models.CodeInvalidArgument)
+	}
 	job, ok := p.jobs.get(id)
 	if !ok {
+		p.mu.Unlock()
 		return fail[bool](errJobNotFound, models.CodeNotFound)
 	}
 	if job.Status == MuseJobProcessing {
+		p.mu.Unlock()
 		return fail[bool](errors.New("Tác vụ đang chạy; hãy huỷ trước khi xoá."), models.CodeInvalidArgument)
 	}
-	if err := p.jobs.remove(id); err != nil {
+	err := p.jobs.remove(id)
+	p.mu.Unlock()
+	if err != nil {
 		return fail[bool](err, models.CodeInternal)
 	}
 	p.sweepUnused()
@@ -595,13 +693,16 @@ func (p *Provider) RemoveJob(id string) models.Response[bool] {
 
 // RunJobs removes the Held/Paused flags from queued jobs so the scheduler picks them up.
 func (p *Provider) RunJobs(ids []string) models.Response[int] {
-	changed := p.updateJobs(ids, func(job *MuseJob) bool {
-		if !job.Held && !job.Paused {
+	changed, err := p.updateJobs(ids, func(job *MuseJob) bool {
+		if job.Status != MuseJobQueued || (!job.Held && !job.Paused) {
 			return false
 		}
 		job.Held, job.Paused = false, false
 		return true
 	})
+	if err != nil {
+		return fail[int](err, models.CodeInternal)
+	}
 	if len(changed) > 0 {
 		p.trigger()
 	}
@@ -686,18 +787,239 @@ func (p *Provider) UpdateJobsFormat(req MuseJobsFormatRequest) models.Response[i
 	}
 
 	p.mu.Lock()
-	var ids []string
-	for _, j := range p.jobs.list() {
+	var candidates []MuseJob
+	if byID {
+		snap := p.jobs.snapshot(req.IDs)
+		candidates = make([]MuseJob, 0, len(snap))
+		for _, id := range req.IDs {
+			if j, ok := snap[id]; ok {
+				candidates = append(candidates, j)
+			}
+		}
+	} else {
+		candidates = p.jobs.listActive()
+	}
+	allow := func(j MuseJob) bool {
+		if byID {
+			return j.Status == MuseJobQueued || j.Status == MuseJobFailed || j.Status == MuseJobCancelled
+		}
+		return j.Status == MuseJobQueued && inScope(j, req.Kind, req.Mode)
+	}
+	return p.commitUnstartedLocked(candidates, allow, func(j *MuseJob) bool {
+		updated := false
+		if req.Ratio != nil {
+			wantRatio := *req.Ratio
+			if j.Kind == MuseJobImage && j.BoardFrames > 0 {
+				// Keep storyboard image ratios within what Muse offers for images.
+				if wantRatio != "" {
+					if _, ok := ratioFor(wantRatio, MuseJobImage); !ok {
+						wantRatio = ""
+					}
+				}
+			} else if wantRatio != "" {
+				if _, ok := ratioFor(wantRatio, j.Kind); !ok {
+					wantRatio = j.Ratio
+				}
+			}
+			if j.Ratio != wantRatio {
+				j.Ratio = wantRatio
+				updated = true
+			}
+		}
+		if req.Duration != nil && j.Kind == MuseJobVideo {
+			wantDur := *req.Duration
+			if wantDur == 0 || slices.Contains(museDurations, wantDur) {
+				if j.Duration != wantDur {
+					j.Duration = wantDur
+					updated = true
+				}
+			}
+		}
+		return updated
+	})
+}
+
+// UpdateJobsConfig updates OutputDir and/or planned references on unstarted
+// queued jobs of kind and mode when the user picks them after queueing prompts.
+func (p *Provider) UpdateJobsConfig(req MuseJobsConfigRequest) models.Response[int] {
+	if req.OutputDir == nil && !req.SyncRefs {
+		return models.SuccessResponse(0)
+	}
+	if !req.Kind.valid() {
+		return fail[int](errors.New("Loại tác vụ không hợp lệ."), models.CodeInvalidArgument)
+	}
+	if !req.Mode.valid() {
+		return fail[int](errors.New("Chế độ tác vụ không hợp lệ."), models.CodeInvalidArgument)
+	}
+	var checkedDir string
+	if req.OutputDir != nil {
+		if req.Mode != MuseJobBatch {
+			return fail[int](errors.New("Chỉ Hàng loạt mới có thư mục lưu."), models.CodeInvalidArgument)
+		}
+		trimmed := strings.TrimSpace(*req.OutputDir)
+		if trimmed == "" {
+			return fail[int](errors.New("Chưa chọn thư mục lưu."), models.CodeInvalidArgument)
+		}
+		dir, err := p.media.CheckDir(trimmed)
+		if err != nil {
+			return fail[int](err, models.CodeInvalidArgument)
+		}
+		checkedDir = dir
+	}
+	var fixed []MuseAsset
+	if req.SyncRefs {
+		if !req.RefMode.valid() {
+			return fail[int](errors.New("Cách gắn ảnh không hợp lệ."), models.CodeInvalidArgument)
+		}
+		var err error
+		if fixed, err = p.assetsByID(req.Assets); err != nil {
+			return fail[int](err, models.CodeInvalidArgument)
+		}
+		if err := p.checkReferenceFiles(req.References); err != nil {
+			return fail[int](err, models.CodeInvalidArgument)
+		}
+		if len(req.References) > 0 {
+			caps, _ := p.knownCapabilities()
+			if caps == nil {
+				return fail[int](errLimitsUnknown, models.CodeUnavailable)
+			}
+		}
+	}
+
+	p.mu.Lock()
+	var eligible []MuseJob
+	byID := make(map[string]MuseJob)
+	for _, j := range p.jobs.listActive() {
 		if _, active := p.running[j.ID]; active || j.mayBePaid() {
 			continue
 		}
-		if byID {
-			if slices.Contains(req.IDs, j.ID) && (j.Status == MuseJobQueued || j.Status == MuseJobFailed || j.Status == MuseJobCancelled) {
-				ids = append(ids, j.ID)
+		if j.Status == MuseJobQueued && inScope(j, req.Kind, req.Mode) {
+			eligible = append(eligible, j)
+			byID[j.ID] = j
+		}
+	}
+	p.mu.Unlock()
+	if len(eligible) == 0 {
+		return models.SuccessResponse(0)
+	}
+
+	// Storyboard image jobs (referenced via video.After) inherit their paired
+	// video job's prompt ordinal and file index instead of advancing counts twice.
+	isLinkedBoard := make(map[string]bool)
+	for _, j := range eligible {
+		if j.After != "" {
+			if _, ok := byID[j.After]; ok {
+				isLinkedBoard[j.After] = true
 			}
+		}
+	}
+
+	var prompts []string
+	var extraFrames []int
+	ordinalByID := make(map[string]int, len(eligible))
+	for _, j := range eligible {
+		if isLinkedBoard[j.ID] {
 			continue
 		}
-		if j.Status == MuseJobQueued && inScope(j, req.Kind, req.Mode) {
+		pi := len(prompts)
+		prompts = append(prompts, j.Prompt)
+		extraFrames = append(extraFrames, j.BoardFrames)
+		ordinalByID[j.ID] = pi
+		if j.After != "" && isLinkedBoard[j.After] {
+			ordinalByID[j.After] = pi
+		}
+	}
+
+	var planByID map[string]promptPlan
+	if req.SyncRefs {
+		plans, err := p.planPromptSpecs(prompts, req.Project, req.References, req.RefMode, fixed, p.assets.List(), extraFrames)
+		if err != nil {
+			return fail[int](err, models.CodeInvalidArgument)
+		}
+		planByID = make(map[string]promptPlan, len(eligible))
+		for _, j := range eligible {
+			pi := ordinalByID[j.ID]
+			planByID[j.ID] = plans[pi]
+		}
+	}
+
+	type targetLocation struct {
+		dir   string
+		index int
+	}
+	dirByID := make(map[string]targetLocation)
+	if req.OutputDir != nil {
+		needsMove := make(map[string]bool, len(eligible))
+		for _, j := range eligible {
+			if j.OutputDir == "" || !sameDirPath(filepath.Dir(j.OutputDir), checkedDir) {
+				needsMove[j.ID] = true
+			}
+		}
+		if len(needsMove) > 0 {
+			batchDir, firstIdx := p.batchFolder(req.Kind, checkedDir)
+			nextOffset := 0
+			for _, j := range eligible {
+				if isLinkedBoard[j.ID] {
+					continue
+				}
+				linkedMove := j.After != "" && isLinkedBoard[j.After] && needsMove[j.After]
+				if !needsMove[j.ID] && !linkedMove {
+					continue
+				}
+				loc := targetLocation{dir: batchDir, index: firstIdx + nextOffset}
+				nextOffset++
+				if needsMove[j.ID] {
+					dirByID[j.ID] = loc
+				}
+				if linkedMove {
+					dirByID[j.After] = loc
+				}
+			}
+		}
+	}
+	if len(dirByID) == 0 && !req.SyncRefs {
+		return models.SuccessResponse(0)
+	}
+
+	p.mu.Lock()
+	candidates := make([]MuseJob, 0, len(eligible))
+	for _, j := range eligible {
+		candidates = append(candidates, j)
+	}
+	allow := func(j MuseJob) bool {
+		return j.Status == MuseJobQueued && inScope(j, req.Kind, req.Mode)
+	}
+	return p.commitUnstartedLocked(candidates, allow, func(j *MuseJob) bool {
+		updated := false
+		if loc, ok := dirByID[j.ID]; ok {
+			if j.OutputDir != loc.dir || j.Index != loc.index {
+				j.OutputDir, j.Index = loc.dir, loc.index
+				updated = true
+			}
+		}
+		if plan, ok := planByID[j.ID]; ok {
+			if !slices.Equal(j.References, plan.refs) || !slices.Equal(j.RefInfo, plan.info) {
+				j.References = slices.Clone(plan.refs)
+				if j.References == nil {
+					j.References = []string{}
+				}
+				j.RefInfo = slices.Clone(plan.info)
+				updated = true
+			}
+		}
+		return updated
+	})
+}
+
+// commitUnstartedLocked updates each non-running, unpaid candidate passing allow
+// and releases p.mu before emitting JobUpdated events.
+func (p *Provider) commitUnstartedLocked(candidates []MuseJob, allow func(MuseJob) bool, apply func(*MuseJob) bool) models.Response[int] {
+	var ids []string
+	for _, j := range candidates {
+		if _, active := p.running[j.ID]; active || j.mayBePaid() {
+			continue
+		}
+		if allow(j) {
 			ids = append(ids, j.ID)
 		}
 	}
@@ -705,46 +1027,10 @@ func (p *Provider) UpdateJobsFormat(req MuseJobsFormatRequest) models.Response[i
 	var updateErr error
 	if len(ids) > 0 {
 		changed, updateErr = p.jobs.updateMany(ids, func(j *MuseJob) bool {
-			if _, active := p.running[j.ID]; active || j.mayBePaid() {
+			if _, active := p.running[j.ID]; active || j.mayBePaid() || !allow(*j) {
 				return false
 			}
-			if byID {
-				if j.Status != MuseJobQueued && j.Status != MuseJobFailed && j.Status != MuseJobCancelled {
-					return false
-				}
-			} else if j.Status != MuseJobQueued || !inScope(*j, req.Kind, req.Mode) {
-				return false
-			}
-			updated := false
-			if req.Ratio != nil {
-				wantRatio := *req.Ratio
-				if j.Kind == MuseJobImage && j.BoardFrames > 0 {
-					// Keep storyboard image ratios within what Muse offers for images.
-					if wantRatio != "" {
-						if _, ok := ratioFor(wantRatio, MuseJobImage); !ok {
-							wantRatio = ""
-						}
-					}
-				} else if wantRatio != "" {
-					if _, ok := ratioFor(wantRatio, j.Kind); !ok {
-						wantRatio = j.Ratio
-					}
-				}
-				if j.Ratio != wantRatio {
-					j.Ratio = wantRatio
-					updated = true
-				}
-			}
-			if req.Duration != nil && j.Kind == MuseJobVideo {
-				wantDur := *req.Duration
-				if wantDur == 0 || slices.Contains(museDurations, wantDur) {
-					if j.Duration != wantDur {
-						j.Duration = wantDur
-						updated = true
-					}
-				}
-			}
-			return updated
+			return apply(j)
 		})
 	}
 	p.mu.Unlock()
@@ -755,6 +1041,39 @@ func (p *Provider) UpdateJobsFormat(req MuseJobsFormatRequest) models.Response[i
 		p.emit(events.EventMuseJobUpdated, job)
 	}
 	return models.SuccessResponse(len(changed))
+}
+
+func (p *Provider) checkReferenceFiles(refs []string) error {
+	var missing []string
+	for _, ref := range refs {
+		path, err := p.media.OpenPath(ref)
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stat(path); err != nil {
+			missing = append(missing, filepath.Base(path))
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("Ảnh tham chiếu không còn trong thư mục media (có thể đã được dọn vì lâu không dùng): %s. Hãy bỏ và chọn lại ảnh.", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+func canonicalDirPath(dir string) string {
+	clean := filepath.Clean(dir)
+	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
+		return resolved
+	}
+	return clean
+}
+
+func sameDirPath(a, b string) bool {
+	ca, cb := canonicalDirPath(a), canonicalDirPath(b)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(ca, cb)
+	}
+	return ca == cb
 }
 
 // inScope reports whether job is of kind and mode; an empty kind or mode
@@ -773,18 +1092,21 @@ func (p *Provider) HoldQueued(kind MuseJobKind, mode MuseJobMode) models.Respons
 		return j.Status == MuseJobQueued && !j.Held && inScope(j, kind, mode)
 	}
 	var ids []string
-	for _, j := range p.jobs.list() {
+	for _, j := range p.jobs.listActive() {
 		if holdable(j) {
 			ids = append(ids, j.ID)
 		}
 	}
-	changed := p.updateJobs(ids, func(job *MuseJob) bool {
+	changed, err := p.updateJobs(ids, func(job *MuseJob) bool {
 		if !holdable(*job) {
 			return false
 		}
 		job.Held, job.Paused = true, true
 		return true
 	})
+	if err != nil {
+		return fail[int](err, models.CodeInternal)
+	}
 	return models.SuccessResponse(len(changed))
 }
 
@@ -803,7 +1125,7 @@ func (p *Provider) RetryFailed(kind MuseJobKind, mode MuseJobMode) models.Respon
 			ids = append(ids, j.ID)
 		}
 	}
-	changed := p.updateJobs(ids, func(job *MuseJob) bool {
+	changed, err := p.updateJobs(ids, func(job *MuseJob) bool {
 		if !retryable(*job) {
 			return false
 		}
@@ -811,6 +1133,9 @@ func (p *Provider) RetryFailed(kind MuseJobKind, mode MuseJobMode) models.Respon
 		job.Attempts, job.Held, job.Paused = 0, false, false
 		return true
 	})
+	if err != nil {
+		return fail[int](err, models.CodeInternal)
+	}
 	if len(changed) > 0 {
 		p.trigger()
 	}
@@ -832,15 +1157,18 @@ func (p *Provider) ClearFinished(kind MuseJobKind, mode MuseJobMode) models.Resp
 	return models.SuccessResponse(len(removed))
 }
 
-// RemoveJobs deletes the specified jobs that are not actively processing.
+// RemoveJobs deletes the specified jobs that are not actively processing or staggered in flight.
 func (p *Provider) RemoveJobs(ids []string) models.Response[int] {
 	idSet := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		idSet[id] = true
 	}
+	p.mu.Lock()
 	removed, err := p.jobs.removeWhere(func(j MuseJob) bool {
-		return idSet[j.ID] && j.Status != MuseJobProcessing
+		_, active := p.running[j.ID]
+		return idSet[j.ID] && !active && j.Status != MuseJobProcessing
 	})
+	p.mu.Unlock()
 	if err != nil {
 		return fail[int](err, models.CodeInternal)
 	}

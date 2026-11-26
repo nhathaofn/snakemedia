@@ -13,7 +13,9 @@ import (
 // without a version predates versioning and is read as format 1.
 // Version 2 records partial Muse output saves by source URL so older builds
 // cannot mistake a compact saved-file list for a fully saved batch.
-const FormatVersion = 2
+// Version 3 extends MuseAsset with Project, Type, and structured Items (angles/variants).
+// Version 4 keeps IDs of retired Graph jobs that may have been billed.
+const FormatVersion = 4
 
 // ErrNewerFormat marks data saved by a newer build of the app (after the user
 // went back to an older one). It is kept as it is and never overwritten: the
@@ -38,12 +40,23 @@ func CheckFormat(data []byte) error {
 	return nil
 }
 
-// Stamp adds the current FormatVersion to a JSON object.
+// Stamp adds or replaces the current FormatVersion on a JSON object, removing any
+// pre-existing formatVersion key so decoders never read an older trailing value.
 func Stamp(data []byte) []byte {
 	if !isObject(data) {
 		return data
 	}
-	rest := bytes.TrimSpace(data)[1:]
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Contains(trimmed, []byte(`"formatVersion"`)) {
+		var obj map[string]json.RawMessage
+		if json.Unmarshal(trimmed, &obj) == nil {
+			delete(obj, "formatVersion")
+			if stripped, err := json.Marshal(obj); err == nil {
+				trimmed = stripped
+			}
+		}
+	}
+	rest := trimmed[1:]
 	out := fmt.Appendf(nil, `{"formatVersion":%d`, FormatVersion)
 	if len(bytes.TrimSpace(rest)) > 1 { // more than the closing brace
 		out = append(out, ',')

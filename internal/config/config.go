@@ -212,18 +212,18 @@ func (m *Manager) Update(cfg AppConfig) (AppConfig, error) {
 
 	m.mu.Lock()
 	if m.readOnly != nil {
-		res := m.config
+		res := m.config.clone()
 		m.mu.Unlock()
 		return res, m.readOnly
 	}
 	if cfg.Revision != 0 && cfg.Revision != m.config.Revision {
-		res := m.config
+		res := m.config.clone()
 		m.mu.Unlock()
 		return res, ErrConflict
 	}
 	cfg.Revision = m.config.Revision + 1
 	if err := m.write(cfg); err != nil {
-		res := m.config
+		res := m.config.clone()
 		m.mu.Unlock()
 		return res, err
 	}
@@ -325,6 +325,9 @@ func migrate(data []byte, cfg *AppConfig) {
 		if _, set := cfg.Tools.Paths[program]; !set && filepath.IsAbs(path) {
 			cfg.Tools.Paths[program] = path
 		}
+	}
+	if isLegacyMuseSetupMessage(cfg.Muse.SetupMessage) {
+		cfg.Muse.SetupMessage = ""
 	}
 }
 

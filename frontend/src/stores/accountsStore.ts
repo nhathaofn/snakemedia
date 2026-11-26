@@ -41,6 +41,7 @@ export const useAccountsStore = create<AccountsState>((set) => ({
       touched.forEach((account) => (accounts = replaceAccount(accounts, account)));
       set({ accounts, loaded: true, loadError: null });
     } catch (cause) {
+      if (version !== listVersion) return;
       set({ loaded: true, loadError: cause instanceof Error ? cause.message : String(cause) });
     } finally {
       if (--listsInFlight === 0) touched.clear();

@@ -297,9 +297,19 @@ func TestSubmissionRetryPersistsAfterDiskFailure(t *testing.T) {
 	if res := p.SubmitJobs(req); res.Success {
 		t.Fatal("acknowledged a failed write")
 	}
-	first := p.jobs.list()[0].ID
+	if len(p.jobs.list()) != 0 {
+		t.Fatalf("failed disk write leaked unpersisted jobs into queue RAM: %+v", p.jobs.list())
+	}
+	pending, ok := p.failedSubmissions[req.SubmissionID]
+	if !ok || len(pending.fresh) != 1 {
+		t.Fatalf("missing pending retry state: %+v", p.failedSubmissions)
+	}
+	first := pending.fresh[0].ID
 	if res := p.SubmitJobs(req); res.Success {
 		t.Fatal("acknowledged memory-only duplicate")
+	}
+	if len(p.jobs.list()) != 0 {
+		t.Fatalf("failed retry leaked unpersisted jobs into queue RAM: %+v", p.jobs.list())
 	}
 	if err := os.Remove(blocker); err != nil {
 		t.Fatal(err)

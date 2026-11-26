@@ -1,5 +1,6 @@
-// Mirrors internal/media: Route (where stored media is served) and ThumbQuery.
+// Mirrors internal/media: Route, VaultRoute (where stored media/vault are served) and ThumbQuery.
 const MEDIA_ROUTE = '/flow-media/';
+const VAULT_ROUTE = '/muse-vault/';
 const THUMB_QUERY = 'thumb';
 
 /**
@@ -9,6 +10,6 @@ const THUMB_QUERY = 'thumb';
 export function thumbUrl(url: string): string;
 export function thumbUrl(url: string | undefined): string | undefined;
 export function thumbUrl(url: string | undefined): string | undefined {
-  if (!url?.startsWith(MEDIA_ROUTE)) return url;
+  if (!url?.startsWith(MEDIA_ROUTE) && !url?.startsWith(VAULT_ROUTE)) return url;
   return `${url}${url.includes('?') ? '&' : '?'}${THUMB_QUERY}`;
 }

@@ -24,7 +24,7 @@ func withCaps(p *Provider, acc accounts.Record, maxFiles int) {
 
 func saveAsset(t *testing.T, p *Provider, tag, name string, role MuseRefRole, lock string) MuseAsset {
 	t.Helper()
-	img, err := p.media.Put(assetPrefix+tag, "image/png", ".png", []byte(tag))
+	img, err := p.media.Put(assetPrefix+tag, "image/png", ".png", testPNGBytes(t, 16, 16))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,22 +75,23 @@ func TestPromptRefsModes(t *testing.T) {
 	}
 }
 
-func TestRoleLinesNameRolesPriorityAndLocks(t *testing.T) {
+func TestRoleLinesNameRolesAndLocksConcisely(t *testing.T) {
 	job := MuseJob{Kind: MuseJobVideo, Prompt: "p", References: []string{"1", "2", "3"}, RefInfo: []MuseRefInfo{
 		{Tag: "lan", Role: MuseRoleFace, Lock: "nốt ruồi má trái"}, {Tag: "hop", Role: MuseRoleProduct, Lock: "chữ ABC"}, {Tag: "sb", Role: MuseRoleStoryboard},
 	}}
 	msg := buildMessage(job)
 	for _, want := range []string{
-		"image 1 = @lan (character face)", "image 2 = @hop (product)", "image 3 = @sb (storyboard)",
-		"- Product: @hop > storyboard", "- Identity: @lan", "Ignore any product drawn in it",
-		"- @lan: nốt ruồi má trái", "- @hop: chữ ABC",
+		"References (same @tag = views of one subject; do not show reference sheets or plain backdrops as video frames):",
+		"- image 1 = @lan (character face: keep face and hair only; outfit and pose follow prompt; lock: nốt ruồi má trái)",
+		"- image 2 = @hop (product: keep exact shape, colors, and label text; lock: chữ ABC)",
+		"- image 3 = @sb (storyboard: follow framing, setting, and shot composition)",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("message lacks %q:\n%s", want, msg)
 		}
 	}
-	if strings.Contains(msg, "Reference: ") {
-		t.Fatal("plain reference lines kept next to the roles")
+	if strings.Contains(msg, "Priority when they disagree") {
+		t.Fatalf("verbose rules kept in message:\n%s", msg)
 	}
 }
 
@@ -108,7 +109,8 @@ func TestSubmitAttachesNamedAssetsWithRoles(t *testing.T) {
 		t.Fatal(res.Error)
 	}
 	first, second := res.Data[0], res.Data[1]
-	if len(first.References) != 2 || first.RefInfo[0].Tag != "hop" || first.RefInfo[1].Tag != "lan" {
+	// Section 13 ordering puts CHAR (@lan) before PROP (@hop) regardless of prompt order.
+	if len(first.References) != 2 || first.RefInfo[0].Tag != "lan" || first.RefInfo[1].Tag != "hop" {
 		t.Fatalf("first = %+v", first)
 	}
 	if len(second.References) != 0 || second.RefInfo != nil {
@@ -123,15 +125,19 @@ func TestSubmitAttachesNamedAssetsWithRoles(t *testing.T) {
 	if got := mustJob(t, p, first.ID); got.Status != MuseJobSucceeded {
 		t.Fatalf("job = %+v", got)
 	}
-	if !strings.Contains(page.sends[0], "Reference roles:") || len(page.attachments[0]) != 2 {
+	if !strings.Contains(page.sends[0], "- image 1 = @lan (character face: keep face and hair only; outfit and pose follow prompt)\n- image 2 = @hop (product: keep exact shape, colors, and label text)") || len(page.attachments[0]) != 2 {
 		t.Fatalf("sent %q with %d files", page.sends[0], len(page.attachments[0]))
+	}
+	if page.attachments[0][0].MimeType != "image/jpeg" || page.attachments[0][1].MimeType != "image/jpeg" {
+		t.Fatalf("expected outgoing attachments normalized to JPEG: %+v", page.attachments[0])
 	}
 }
 
 func TestStoryboardVideoWaitsForItsFrames(t *testing.T) {
+	sbBytes := testPNGBytes(t, 16, 16)
 	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"completed"},
-		events: []AssistantEvent{{Images: []ResultMedia{{Path: "/1.png", Mime: "image/png", ByteLen: 1}, {Path: "/2.png", Mime: "image/png", ByteLen: 1}}}},
-		files:  map[string][]byte{"/1.png": {1}, "/2.png": {2}}}
+		events: []AssistantEvent{{Images: []ResultMedia{{Path: "/1.png", Mime: "image/png", ByteLen: int64(len(sbBytes))}, {Path: "/2.png", Mime: "image/png", ByteLen: int64(len(sbBytes))}}}},
+		files:  map[string][]byte{"/1.png": sbBytes, "/2.png": sbBytes}}
 	p := testProvider(t, page)
 	acc := addSignedIn(t, p, "A")
 	withCaps(p, acc, 4)
@@ -165,7 +171,7 @@ func TestStoryboardVideoWaitsForItsFrames(t *testing.T) {
 	if got := mustJob(t, p, video.ID); got.Status != MuseJobSucceeded {
 		t.Fatalf("video = %+v", got)
 	}
-	if !strings.Contains(page.sends[1], "Storyboard: image 1 to image 2 show") || len(page.attachments[1]) != 2 {
+	if !strings.Contains(page.sends[1], "Storyboard: image 1 to image 2 are scene references in order") || len(page.attachments[1]) != 2 {
 		t.Fatalf("video message %q, %d files", page.sends[1], len(page.attachments[1]))
 	}
 }
@@ -196,9 +202,10 @@ func mustRecord(t *testing.T, p *Provider, id string) accounts.Record {
 // which "clear finished" may remove; under review it is held again when the
 // frames arrive, even if the whole batch was run before.
 func TestStoryboardVideoSurvivesClearedBoardAndHoldsForReview(t *testing.T) {
+	sbBytes := testPNGBytes(t, 16, 16)
 	page := &fakePage{loggedIn: true, sendRes: SendResult{OK: true, SessionID: "s1"}, statuses: []string{"completed"},
-		events: []AssistantEvent{{Images: []ResultMedia{{Path: "/1.png", Mime: "image/png", ByteLen: 1}}}},
-		files:  map[string][]byte{"/1.png": {1}}}
+		events: []AssistantEvent{{Images: []ResultMedia{{Path: "/1.png", Mime: "image/png", ByteLen: int64(len(sbBytes))}}}},
+		files:  map[string][]byte{"/1.png": sbBytes}}
 	p := testProvider(t, page)
 	acc := addSignedIn(t, p, "A")
 	withCaps(p, acc, 4)
@@ -270,7 +277,7 @@ func TestScanAssetFolderSortsNaturallyAndFiltersNonImages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res := p.ScanAssetFolder(dir)
+	res := p.ScanAssetFolder(context.Background(), dir, false)
 	if !res.Success {
 		t.Fatalf("scan failed: %s", res.Error)
 	}
@@ -282,11 +289,28 @@ func TestScanAssetFolderSortsNaturallyAndFiltersNonImages(t *testing.T) {
 	if !slices.Equal(names, want) {
 		t.Fatalf("order = %v, want %v", names, want)
 	}
-	if !strings.HasPrefix(res.Data.Images[0].PreviewURL, "data:image/jpeg;base64,") {
-		t.Fatalf("expected preview data URL, got %q", res.Data.Images[0].PreviewURL)
+	if !strings.HasPrefix(res.Data.Images[0].PreviewURL, "/import-preview/") {
+		t.Fatalf("expected lazy preview URL, got %q", res.Data.Images[0].PreviewURL)
 	}
 	if res.Data.Images[3].Error == "" || res.Data.Images[3].PreviewURL != "" {
 		t.Fatalf("oversized image should flag error and skip preview: %+v", res.Data.Images[3])
+	}
+}
+
+func TestAssetFolderScanHonorsCancellation(t *testing.T) {
+	p := testProvider(t, &fakePage{})
+	acc := addSignedIn(t, p, "A")
+	withCaps(p, acc, 4)
+	dir := t.TempDir()
+	writeTestPNG(t, filepath.Join(dir, "selected.png"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, recursive := range []bool{false, true} {
+		res := p.ScanAssetFolder(ctx, dir, recursive)
+		if !res.Success || !res.Data.Canceled || len(res.Data.Images) != 0 {
+			t.Fatalf("expected a cancelled scan: %+v", res)
+		}
 	}
 }
 
@@ -328,7 +352,7 @@ func TestImportAssetBatchConflictModesAndImmediateCleanup(t *testing.T) {
 	if !over.Success || over.Data.Updated != 1 || over.Data.Added != 0 {
 		t.Fatalf("overwrite = %+v", over)
 	}
-	oldLanPath, _ := p.media.Path(oldLanImg)
+	oldLanPath, _ := p.media.OpenPath(oldLanImg)
 	if _, err := os.Stat(oldLanPath); !os.IsNotExist(err) {
 		t.Fatalf("overwritten asset image was not deleted immediately: %v", err)
 	}
@@ -364,12 +388,115 @@ func TestImportAssetBatchConflictModesAndImmediateCleanup(t *testing.T) {
 	if !rem.Success || rem.Data != 3 {
 		t.Fatalf("RemoveAssets = %+v", rem)
 	}
-	hopPath, _ := p.media.Path(oldHopImg)
+	hopPath, _ := p.media.OpenPath(oldHopImg)
 	if _, err := os.Stat(hopPath); err != nil {
 		t.Fatalf("job-referenced asset image must stay on disk: %v", err)
 	}
-	newLanPath, _ := p.media.Path(updatedLan.Images[0])
+	newLanPath, _ := p.media.OpenPath(updatedLan.Images[0])
 	if _, err := os.Stat(newLanPath); !os.IsNotExist(err) {
 		t.Fatalf("removed asset image must be deleted immediately: %v", err)
+	}
+}
+
+func TestPreviewMessagesBuildsWithoutWritingJournal(t *testing.T) {
+	p := testProvider(t, &fakePage{})
+	acc := addSignedIn(t, p, "A")
+	withCaps(p, acc, 4)
+	saveAsset(t, p, "lan", "Lan", MuseRoleFace, "nốt ruồi")
+
+	res := p.PreviewMessages(MuseJobRequest{
+		Kind:       MuseJobVideo,
+		Prompts:    []string{"@lan bước qua cửa", "   ", "@unknown ở quán"},
+		Ratio:      "9:16",
+		Duration:   10,
+		Storyboard: &MuseStoryboard{Frames: 2},
+	})
+	if !res.Success || len(res.Data) != 2 {
+		t.Fatalf("PreviewMessages = %+v", res)
+	}
+	first, second := res.Data[0], res.Data[1]
+	if first.Images != 1 || !slices.Equal(first.Tags, []string{"lan"}) {
+		t.Fatalf("first preview meta = %+v", first)
+	}
+	if !strings.Contains(first.StoryboardMessage, "Task: Create the storyboard images of a video.") {
+		t.Fatalf("expected StoryboardMessage, got %q", first.StoryboardMessage)
+	}
+	if !strings.Contains(first.Message, "Storyboard: image 1 to image 2") ||
+		!strings.Contains(first.Message, "- image 3 = @lan") ||
+		!strings.Contains(first.Message, "Aspect ratio: 9:16 (portrait)") ||
+		!strings.Contains(first.Message, "Duration: 10 seconds") {
+		t.Fatalf("first preview message mismatch:\n%s", first.Message)
+	}
+	if len(second.Warnings) == 0 || !strings.Contains(second.Warnings[0], "@unknown") {
+		t.Fatalf("expected unknown tag warning on second prompt, got %+v", second.Warnings)
+	}
+	if len(p.jobs.list()) != 0 {
+		t.Fatalf("PreviewMessages must write nothing to job journal, got %d jobs", len(p.jobs.list()))
+	}
+}
+
+func TestCheckPromptForSpecSeparatesImageAndStoryboardSizes(t *testing.T) {
+	p := testProvider(t, &fakePage{})
+	saveAsset(t, p, "lan", "Lan", MuseRoleFace, "nốt ruồi")
+
+	imgCheck := p.CheckPromptForSpec("@lan giữa phố", "", nil, MuseJobImage, 4)
+	vidCheck := p.CheckPromptForSpec("@lan giữa phố", "", nil, MuseJobVideo, 0)
+	sbCheck := p.CheckPromptForSpec("@lan giữa phố", "", nil, MuseJobVideo, 3)
+	if !imgCheck.Success || !vidCheck.Success || !sbCheck.Success {
+		t.Fatalf("check failed: img=%+v vid=%+v sb=%+v", imgCheck, vidCheck, sbCheck)
+	}
+	if imgCheck.Data.EstimatedBytes == vidCheck.Data.EstimatedBytes {
+		t.Fatalf("expected image check bytes (%d) to differ from video (%d) and ignore boardFrames", imgCheck.Data.EstimatedBytes, vidCheck.Data.EstimatedBytes)
+	}
+	if sbCheck.Data.EstimatedBytes <= vidCheck.Data.EstimatedBytes {
+		t.Fatalf("expected storyboard check bytes (%d) > plain video bytes (%d)", sbCheck.Data.EstimatedBytes, vidCheck.Data.EstimatedBytes)
+	}
+	if sbCheck.Data.Images != 1 {
+		t.Fatalf("expected asset reference count 1 (not counting unmade storyboard frames), got %d", sbCheck.Data.Images)
+	}
+}
+
+func TestImportAssetBatchPreservesItemLockAcrossModes(t *testing.T) {
+	p := testProvider(t, &fakePage{})
+	acc := addSignedIn(t, p, "A")
+	withCaps(p, acc, 5)
+
+	dir := t.TempDir()
+	f1 := filepath.Join(dir, "a1.png")
+	f2 := filepath.Join(dir, "a2.png")
+	f3 := filepath.Join(dir, "b1.png")
+	writeTestPNG(t, f1)
+	writeTestPNG(t, f2)
+	writeTestPNG(t, f3)
+
+	mergedRes := p.ImportAssetBatch(MuseAssetBatchRequest{
+		MergeByAlias: true,
+		Conflict:     MuseConflictSkip,
+		Items: []MuseAssetBatchItem{
+			{SourcePath: f1, Tag: "hero", Role: MuseRoleCharacter, Lock: "scar on cheek", Angle: "front"},
+			{SourcePath: f2, Tag: "hero", Role: MuseRoleCharacter, Lock: "red jacket", Angle: "side"},
+		},
+	})
+	if !mergedRes.Success || len(mergedRes.Data.SavedIDs) != 1 {
+		t.Fatalf("merged import failed: %+v", mergedRes)
+	}
+	hero, ok := p.assets.Get(mergedRes.Data.SavedIDs[0])
+	if !ok || len(hero.Items) != 2 || hero.Items[0].Lock != "scar on cheek" || hero.Items[1].Lock != "red jacket" {
+		t.Fatalf("merged item locks missing: %+v", hero.Items)
+	}
+
+	separateRes := p.ImportAssetBatch(MuseAssetBatchRequest{
+		MergeByAlias: false,
+		Conflict:     MuseConflictOverwrite,
+		Items: []MuseAssetBatchItem{
+			{SourcePath: f3, Tag: "villain", Role: MuseRoleCharacter, Lock: "gold watch", Angle: "front"},
+		},
+	})
+	if !separateRes.Success || len(separateRes.Data.SavedIDs) != 1 {
+		t.Fatalf("separate import failed: %+v", separateRes)
+	}
+	villain, ok := p.assets.Get(separateRes.Data.SavedIDs[0])
+	if !ok || len(villain.Items) != 1 || villain.Items[0].Lock != "gold watch" {
+		t.Fatalf("separate item lock missing: %+v", villain.Items)
 	}
 }

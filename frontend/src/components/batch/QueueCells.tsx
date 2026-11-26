@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { FolderOpen } from 'lucide-react';
-import { Button, Icon } from '../ui';
+import { FolderOpen, Pencil } from 'lucide-react';
+import { Button, Icon, IconAction } from '../ui';
 
 /**
  * A row's prompt. A double click on an editable prompt opens a box that fills
@@ -30,11 +30,14 @@ export function QueuePrompt({
     return (
       <div className="queue-table-prompt" role="cell">
         <span
-          title={editable ? `${prompt}\n\nNhấp đúp để sửa` : prompt}
+          title={editable ? `${prompt}\n\nNhấp đúp hoặc bấm nút Sửa để sửa` : prompt}
           onDoubleClick={editable ? () => setDraft(prompt) : undefined}
         >
           {prompt}
         </span>
+        {editable && (
+          <IconAction icon={Pencil} label="Sửa prompt" onClick={() => setDraft(prompt)} />
+        )}
       </div>
     );
   }

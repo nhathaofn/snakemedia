@@ -5,6 +5,9 @@ describe('thumbUrl', () => {
   it('asks the backend for a thumbnail of stored media only', () => {
     expect(thumbUrl('/flow-media/a.png')).toBe('/flow-media/a.png?thumb');
     expect(thumbUrl('/flow-media/a.png?v=1')).toBe('/flow-media/a.png?v=1&thumb');
+    expect(thumbUrl('/muse-vault/OLIVA/CHAR_jimena_front.png')).toBe(
+      '/muse-vault/OLIVA/CHAR_jimena_front.png?thumb',
+    );
     expect(thumbUrl('blob:abc')).toBe('blob:abc');
     expect(thumbUrl('data:image/png;base64,xx')).toBe('data:image/png;base64,xx');
   });

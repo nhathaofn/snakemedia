@@ -86,7 +86,7 @@ func TestPrepareAttachmentsLeavesSmallRequestUntouched(t *testing.T) {
 	}
 }
 
-func TestReduceAttachmentPreservesTransparencyAndPerFileLimit(t *testing.T) {
+func TestReduceAttachmentNormalizesTransparentPNGToOpaqueJPEGAndFitsLimit(t *testing.T) {
 	att := noisyAttachment(t, true)
 	caps := compressionCaps()
 	caps.MaxFileBytes = 200 << 10
@@ -99,12 +99,12 @@ func TestReduceAttachmentPreservesTransparencyAndPerFileLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	img, format, err := image.Decode(bytes.NewReader(data))
-	if err != nil || format != "png" || out.MimeType != "image/png" || int64(len(data)) > caps.MaxFileBytes {
-		t.Fatalf("invalid transparent output: %s %v", format, err)
+	if err != nil || format != "jpeg" || out.MimeType != "image/jpeg" || int64(len(data)) > caps.MaxFileBytes {
+		t.Fatalf("invalid JPEG output: %s %s size=%d %v", format, out.MimeType, len(data), err)
 	}
 	c := color.NRGBAModel.Convert(img.At(img.Bounds().Dx()/2, img.Bounds().Dy()/2)).(color.NRGBA)
-	if c.A == 255 {
-		t.Fatal("lost transparency")
+	if c.A != 255 {
+		t.Fatal("expected flattened opaque JPEG")
 	}
 }
 

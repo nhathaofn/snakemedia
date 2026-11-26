@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { FolderOpen, Pause, Play, RotateCcw, Trash2 } from 'lucide-react';
+import { BookmarkPlus, Eye, FolderOpen, Pause, Play, RotateCcw, Trash2 } from 'lucide-react';
 import {
   BatchForm,
   ConfigGroup,
@@ -8,33 +8,43 @@ import {
   QueueTable,
   RunDock,
 } from '../../../components/batch';
-import { Button, Icon, IconAction, Modal } from '../../../components/ui';
-import { api, unwrap } from '../../../services';
+import { Button, Icon, IconAction, confirmAction } from '../../../components/ui';
+import { api, unwrap, unwrapList } from '../../../services';
 import { useAccountsStore, useAppStore } from '../../../stores';
 import {
   AccountProvider,
   MuseJobKind,
   MuseJobMode,
+  MuseJobRequest,
   MuseJobStatus,
+  MuseJobsConfigRequest,
   MuseJobsFormatRequest,
+  MuseStoryboard,
 } from '../../../types';
-import type { MuseJob } from '../../../types';
+import type { ApiResponse, MuseJob, MusePromptPreview } from '../../../types';
 import { isEnded, jobStatusLabels, jobsOf, matchesFilter, mayBePaid } from '../shared/format';
 import type { QueueFilter } from '../shared/format';
-import { useMuseDraft } from '../shared/museDraft';
-import { FormatFields } from '../shared/MusePanel';
+import { getMuseDraft, useMuseDraft } from '../shared/museDraft';
+import type { MuseDraft } from '../shared/museDraft';
+import { FormatFields, MuseAccountStatus, ReferencesField } from '../shared/MusePanel';
 import { MuseNotices } from '../shared/MuseNotices';
+import { SaveToVaultDialog, type VaultImportSource } from '../assets/SaveToVaultDialog';
 import {
   activeExtras,
   FixedAssetsField,
+  ProjectScopeField,
+  RefModeField,
   referenceFileSummary,
   StoryboardField,
   TemplateField,
   useMuseStudio,
 } from '../shared/StudioExtras';
+import { liveAssetIds } from '../shared/museStudioStore';
 import { useMuseStore, useVisibleMuseJobs } from '../shared/museStore';
 import { useMuseActions, useMuseSubmit } from '../shared/useMuseActions';
+import { MuseMediaLightbox, type MuseLightboxItem } from '../shared/MuseMediaLightbox';
 import { JobRow } from './JobRow';
+import { MessagePreviewModal } from './MessagePreviewModal';
 
 const placeholders: Record<MuseJobKind, string> = {
   [MuseJobKind.Image]: 'Chân dung cô gái dưới mưa đèn neon, ảnh dọc',
@@ -48,6 +58,7 @@ const filters: readonly { value: QueueFilter; label: string }[] = [
   { value: 'held', label: 'Tạm dừng' },
   { value: MuseJobStatus.Succeeded, label: jobStatusLabels[MuseJobStatus.Succeeded] },
   { value: MuseJobStatus.Failed, label: jobStatusLabels[MuseJobStatus.Failed] },
+  { value: MuseJobStatus.Cancelled, label: jobStatusLabels[MuseJobStatus.Cancelled] },
 ];
 
 /**
@@ -72,28 +83,111 @@ export function MuseBatchPanel({ kind }: { kind: MuseJobKind }) {
     [jobs],
   );
   const [draft, update] = useMuseDraft(kind, MuseJobMode.Batch);
-  const [outputDir, setOutputDir] = useState('');
+  const outputDir = draft.outputDir;
+  const setOutputDir = useCallback((nextDir: string) => update({ outputDir: nextDir }), [update]);
+  const [messagePreview, setMessagePreview] = useState<MusePromptPreview[] | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
   const { submit } = useMuseSubmit(kind, MuseJobMode.Batch);
   const addToast = useAppStore((s) => s.addToast);
-  const { act } = useMuseActions();
+  const { act, report } = useMuseActions();
 
-  const syncFormat = (change: { ratio?: string; duration?: number }) => {
-    if (!jobs.some((j) => j.status === MuseJobStatus.Queued && !mayBePaid(j))) return;
-    void act(async () => {
-      const updated = unwrap(
-        await api.updateMuseJobsFormat(
-          MuseJobsFormatRequest.createFrom({
+  const openMessagePreview = async (prompts: string[]) => {
+    if (previewBusy || prompts.length === 0) return;
+    setPreviewBusy(true);
+    try {
+      const items = unwrapList(
+        await api.previewMuseMessages(
+          MuseJobRequest.createFrom({
             kind,
             mode: MuseJobMode.Batch,
-            ...change,
+            prompts,
+            references: draft.references.map((r) => r.localUrl),
+            ratio: draft.ratio,
+            duration: draft.duration,
+            project: draft.project || undefined,
+            refMode: draft.refMode || undefined,
+            assets: draft.assetIds?.length ? liveAssetIds(draft.assetIds) : undefined,
+            storyboard:
+              kind === MuseJobKind.Video && draft.boardFrames > 0
+                ? MuseStoryboard.createFrom({
+                    frames: draft.boardFrames,
+                    review: draft.boardReview,
+                  })
+                : undefined,
           }),
         ),
       );
-      if (updated > 0) {
-        addToast({ type: 'success', message: `Đã cập nhật cho ${updated} tác vụ đang chờ.` });
-      }
-    });
+      setMessagePreview(items);
+    } catch (cause) {
+      report(cause);
+    } finally {
+      setPreviewBusy(false);
+    }
   };
+
+  const hasEditableQueuedJobs = useCallback(
+    () =>
+      jobsOf(useMuseStore.getState().jobs, kind, MuseJobMode.Batch).some(
+        (j) => j.status === MuseJobStatus.Queued && !mayBePaid(j),
+      ),
+    [kind],
+  );
+
+  const runBatchSync = useCallback(
+    (run: () => Promise<ApiResponse<number>>) => {
+      if (!hasEditableQueuedJobs()) return;
+      void act(async () => {
+        const updated = unwrap(await run());
+        if (updated > 0) {
+          addToast({ type: 'success', message: `Đã cập nhật cho ${updated} tác vụ đang chờ.` });
+        }
+      });
+    },
+    [act, addToast, hasEditableQueuedJobs],
+  );
+
+  const syncFormat = (change: { ratio?: string; duration?: number }) =>
+    runBatchSync(() =>
+      api.updateMuseJobsFormat(
+        MuseJobsFormatRequest.createFrom({
+          kind,
+          mode: MuseJobMode.Batch,
+          ...change,
+        }),
+      ),
+    );
+
+  const syncConfig = useCallback(
+    (payload: { outputDir?: string; syncRefs?: boolean }) => {
+      const latest = getMuseDraft(kind, MuseJobMode.Batch);
+      runBatchSync(() =>
+        api.updateMuseJobsConfig(
+          MuseJobsConfigRequest.createFrom({
+            kind,
+            mode: MuseJobMode.Batch,
+            outputDir: payload.outputDir,
+            syncRefs: Boolean(payload.syncRefs),
+            references: payload.syncRefs ? latest.references.map((r) => r.localUrl) : undefined,
+            refMode: payload.syncRefs ? latest.refMode || undefined : undefined,
+            project: payload.syncRefs ? latest.project || undefined : undefined,
+            assets:
+              payload.syncRefs && latest.assetIds.length
+                ? liveAssetIds(latest.assetIds)
+                : undefined,
+          }),
+        ),
+      );
+    },
+    [kind, runBatchSync],
+  );
+
+  const updateAndSyncRefs = useCallback(
+    (change: Partial<MuseDraft>) => {
+      update(change);
+      syncConfig({ syncRefs: true });
+    },
+    [syncConfig, update],
+  );
 
   return (
     <div className="studio-mode-panel is-docked">
@@ -111,7 +205,15 @@ export function MuseBatchPanel({ kind }: { kind: MuseJobKind }) {
             provider={AccountProvider.Muse}
             value={outputDir}
             onChange={setOutputDir}
+            onUserChange={(dir) => syncConfig({ outputDir: dir })}
           />
+          <ReferencesField
+            references={draft.references}
+            options={options}
+            onChange={(references) => updateAndSyncRefs({ references })}
+            onError={report}
+          />
+          <RefModeField draft={draft} update={updateAndSyncRefs} />
         </ConfigGroup>
         <ConfigGroup
           title="Đồng nhất nhân vật"
@@ -119,15 +221,35 @@ export function MuseBatchPanel({ kind }: { kind: MuseJobKind }) {
           badge={activeExtras(draft)}
           summary={referenceFileSummary(assets, draft.assetIds)}
         >
-          <FixedAssetsField draft={draft} update={update} />
+          <ProjectScopeField draft={draft} update={updateAndSyncRefs} />
+          <FixedAssetsField draft={draft} update={updateAndSyncRefs} />
           {kind === MuseJobKind.Video && <StoryboardField draft={draft} update={update} />}
-          <TemplateField />
+          <TemplateField
+            onInsert={(text) =>
+              update({ prompt: draft.prompt.trim() ? `${draft.prompt}\n${text}` : text })
+            }
+          />
         </ConfigGroup>
         <BatchForm
           id={formId}
           rows={4}
           placeholder={placeholders[kind]}
           pending={pending}
+          value={draft.prompt}
+          onChange={(prompt) => update({ prompt })}
+          renderPromptActions={(prompts) => (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={prompts.length === 0 || previewBusy}
+              title="Xem trước nội dung thực tế sẽ gửi cho Muse"
+              onClick={() => void openMessagePreview(prompts)}
+            >
+              <Icon icon={Eye} size="sm" />
+              <span>Xem câu gửi</span>
+            </Button>
+          )}
           onAdd={async (prompts) => {
             const added = await submit(prompts, 1, true, draft, outputDir);
             if (added) {
@@ -150,6 +272,10 @@ export function MuseBatchPanel({ kind }: { kind: MuseJobKind }) {
           void act(async () => void unwrap(await api.holdMuseQueued(kind, MuseJobMode.Batch)))
         }
       />
+      <MuseAccountStatus />
+      {messagePreview && (
+        <MessagePreviewModal items={messagePreview} onClose={() => setMessagePreview(null)} />
+      )}
     </div>
   );
 }
@@ -163,11 +289,35 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
   const { act, jobActions } = useMuseActions();
   const [filter, setFilter] = useState<QueueFilter>('all');
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
-  const [preview, setPreview] = useState<{ job: MuseJob; url: string } | null>(null);
+  const [lightbox, setLightbox] = useState<{ items: MuseLightboxItem[]; index: number } | null>(
+    null,
+  );
+  const [vaultSources, setVaultSources] = useState<VaultImportSource[] | null>(null);
 
   // Oldest first, like Flow's queue: a batch reads 1..n from the top.
   const jobs = useMemo(() => jobsOf(allJobs, kind, MuseJobMode.Batch).reverse(), [allJobs, kind]);
-  const openPreview = useCallback((job: MuseJob, url: string) => setPreview({ job, url }), []);
+  const openPreview = useCallback((job: MuseJob, url: string) => {
+    const meta: string[] = [];
+    if (job.ratio) meta.push(job.ratio);
+    if (job.kind === MuseJobKind.Video && job.duration) meta.push(`${job.duration} giây`);
+    const note = [job.formatNote, job.changeNote ? `Muse đã đổi: ${job.changeNote}` : '']
+      .filter(Boolean)
+      .join(' ');
+    const items: MuseLightboxItem[] = job.files.map((fileUrl) => ({
+      url: fileUrl,
+      kind: job.kind,
+      prompt: job.prompt,
+      title: job.label,
+      meta,
+      note: note || undefined,
+      revealPath: job.savedFiles?.[0] || fileUrl,
+    }));
+    const index = Math.max(
+      0,
+      items.findIndex((it) => it.url === url),
+    );
+    setLightbox({ items, index });
+  }, []);
   const shown = useMemo(() => jobs.filter((job) => matchesFilter(job, filter)), [jobs, filter]);
   const selectedJobs = useMemo(
     () => shown.filter((job) => selectedIds.has(job.id)),
@@ -198,6 +348,12 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
     [jobs],
   );
   const finishedCount = counts.get(MuseJobStatus.Succeeded) ?? 0;
+  const processingCount = counts.get(MuseJobStatus.Processing) ?? 0;
+  const failedCount = failedJobs.length;
+  const totalJobs = jobs.length;
+  const okPct = totalJobs > 0 ? (finishedCount / totalJobs) * 100 : 0;
+  const runPct = totalJobs > 0 ? (processingCount / totalJobs) * 100 : 0;
+  const errPct = totalJobs > 0 ? (failedCount / totalJobs) * 100 : 0;
   const accountNames = useMemo(
     () =>
       new Map(
@@ -210,6 +366,16 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
     () => filters.map(({ value, label }) => ({ value, label, count: counts.get(value) ?? 0 })),
     [counts],
   );
+
+  const openSaveToVault = useCallback((targetJob: MuseJob) => {
+    setVaultSources(
+      targetJob.files.map((url) => ({
+        localUrl: url,
+        suggestedPrompt: targetJob.prompt,
+        suggestedName: targetJob.label,
+      })),
+    );
+  }, []);
 
   const toggle = useMemo(
     () => (id: string) =>
@@ -236,14 +402,16 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
       setSelectedIds(new Set());
     });
 
-  const retryBatch = (targets: readonly MuseJob[]) => {
+  const retryBatch = async (targets: readonly MuseJob[]) => {
     if (targets.length === 0) return;
     const paidCount = targets.filter(mayBePaid).length;
     if (
       paidCount > 0 &&
-      !window.confirm(
-        `Có ${paidCount}/${targets.length} tác vụ mà Muse có thể đã nhận. Chạy lại sẽ gửi chat mới và có thể tốn thêm lượt. Tiếp tục?`,
-      )
+      !(await confirmAction({
+        title: 'Chạy lại tác vụ đã gửi?',
+        message: `Có ${paidCount}/${targets.length} tác vụ mà Muse có thể đã nhận. Chạy lại sẽ gửi chat mới và có thể tốn thêm lượt. Tiếp tục?`,
+        confirmLabel: 'Chạy lại',
+      }))
     ) {
       return;
     }
@@ -280,25 +448,54 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
                   </Button>
                 )}
                 {retryableSelected.length > 0 && (
-                  <Button size="sm" variant="primary" onClick={() => retryBatch(retryableSelected)}>
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    onClick={() => void retryBatch(retryableSelected)}
+                  >
                     <Icon icon={RotateCcw} size="sm" />
                     <span>Chạy lại ({retryableSelected.length})</span>
+                  </Button>
+                )}
+                {kind === MuseJobKind.Image && selectedJobs.some((j) => j.files.length > 0) && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() =>
+                      setVaultSources(
+                        selectedJobs.flatMap((j) =>
+                          j.files.map((url) => ({
+                            localUrl: url,
+                            suggestedPrompt: j.prompt,
+                            suggestedName: j.label,
+                          })),
+                        ),
+                      )
+                    }
+                  >
+                    <Icon icon={BookmarkPlus} size="sm" />
+                    <span>Lưu ảnh vào Kho</span>
                   </Button>
                 )}
                 <Button
                   size="sm"
                   variant="danger"
                   onClick={() => {
-                    if (
-                      !window.confirm(
-                        `Xoá ${selected.length} tác vụ đã chọn khỏi hàng đợi? Tác vụ đang chạy được giữ lại; file đã tạo vẫn còn trên đĩa.`,
+                    void (async () => {
+                      if (
+                        !(await confirmAction({
+                          title: 'Xoá tác vụ đã chọn?',
+                          message: `Xoá ${selected.length} tác vụ đã chọn khỏi hàng đợi? Tác vụ đang chạy được giữ lại; file đã tạo vẫn còn trên đĩa.`,
+                          confirmLabel: 'Xoá',
+                          danger: true,
+                        }))
                       )
-                    )
-                      return;
-                    void bulk(
-                      async () => unwrap(await api.removeMuseJobs(selected)),
-                      (n) => `Đã xoá ${n} tác vụ.`,
-                    );
+                        return;
+                      void bulk(
+                        async () => unwrap(await api.removeMuseJobs(selected)),
+                        (n) => `Đã xoá ${n} tác vụ.`,
+                      );
+                    })();
                   }}
                 >
                   <Icon icon={Trash2} size="sm" />
@@ -322,31 +519,36 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
                   icon={RotateCcw}
                   label="Chạy lại các tác vụ lỗi"
                   disabled={failedJobs.length === 0}
-                  onClick={() => retryBatch(failedJobs)}
+                  onClick={() => void retryBatch(failedJobs)}
                 />
                 <IconAction
                   icon={Trash2}
                   label="Xoá các tác vụ đã xong (Thư viện vẫn giữ file)"
                   disabled={finishedCount === 0}
                   onClick={() => {
-                    if (
-                      !window.confirm(
-                        `Xoá ${finishedCount} tác vụ đã xong khỏi hàng đợi? Thư viện Muse vẫn giữ các file đã tạo.`,
+                    void (async () => {
+                      if (
+                        !(await confirmAction({
+                          title: 'Dọn tác vụ đã xong?',
+                          message: `Xoá ${finishedCount} tác vụ đã xong khỏi hàng đợi? Thư viện Muse vẫn giữ các file đã tạo.`,
+                          confirmLabel: 'Xoá',
+                          danger: true,
+                        }))
                       )
-                    )
-                      return;
-                    void bulk(
-                      async () =>
-                        // Older runs are always hidden: clear only the finished jobs shown.
-                        unwrap(
-                          await api.removeMuseJobs(
-                            jobs
-                              .filter((j) => j.status === MuseJobStatus.Succeeded)
-                              .map((j) => j.id),
+                        return;
+                      void bulk(
+                        async () =>
+                          // Older runs are always hidden: clear only the finished jobs shown.
+                          unwrap(
+                            await api.removeMuseJobs(
+                              jobs
+                                .filter((j) => j.status === MuseJobStatus.Succeeded)
+                                .map((j) => j.id),
+                            ),
                           ),
-                        ),
-                      (n) => `Đã dọn ${n} tác vụ xong.`,
-                    );
+                        (n) => `Đã dọn ${n} tác vụ xong.`,
+                      );
+                    })();
                   }}
                 />
                 <IconAction
@@ -361,6 +563,35 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
           </>
         }
       />
+      {totalJobs > 0 && (
+        <div className="muse-batch-progress" aria-label="Tiến độ hàng loạt">
+          <div className="muse-batch-progress-track" aria-hidden="true">
+            {okPct > 0 && (
+              <span
+                className="muse-batch-progress-seg is-succeeded"
+                style={{ width: `${okPct}%` }}
+              />
+            )}
+            {runPct > 0 && (
+              <span
+                className="muse-batch-progress-seg is-running"
+                style={{ width: `${runPct}%` }}
+              />
+            )}
+            {errPct > 0 && (
+              <span className="muse-batch-progress-seg is-failed" style={{ width: `${errPct}%` }} />
+            )}
+          </div>
+          <div className="muse-batch-progress-meta">
+            <span>
+              <strong className="muse-batch-stat-ok">{finishedCount}</strong>/{totalJobs} xong
+            </span>
+            {processingCount > 0 && <span>{processingCount} đang chạy</span>}
+            {queuedCount > 0 && <span>{queuedCount} chờ</span>}
+            {failedCount > 0 && <span className="muse-batch-stat-err">{failedCount} lỗi</span>}
+          </div>
+        </div>
+      )}
 
       <QueueTable
         label="Hàng đợi Muse"
@@ -384,7 +615,7 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
             {!loaded
               ? 'Đang tải…'
               : jobs.length === 0
-                ? 'Hàng đợi trống. Nhập prompt ở bên trái rồi bấm Thêm.'
+                ? 'Hàng đợi trống. Nhập prompt ở bên trái rồi nhấn Enter (Ctrl+Enter để xuống dòng).'
                 : 'Không có tác vụ nào ở mục này.'}
           </span>
         }
@@ -397,18 +628,33 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
             actions={jobActions}
             onToggle={toggle}
             onPreview={openPreview}
+            onSaveToVault={kind === MuseJobKind.Image ? openSaveToVault : undefined}
           />
         )}
       />
 
-      {preview && (
-        <Modal variant="lightbox" label="Kết quả phóng to" onClose={() => setPreview(null)}>
-          {preview.job.kind === MuseJobKind.Video ? (
-            <video src={preview.url} controls autoPlay />
-          ) : (
-            <img src={preview.url} alt={preview.job.prompt} decoding="async" />
-          )}
-        </Modal>
+      {vaultSources && (
+        <SaveToVaultDialog sources={vaultSources} onClose={() => setVaultSources(null)} />
+      )}
+
+      {lightbox && (
+        <MuseMediaLightbox
+          items={lightbox.items}
+          index={lightbox.index}
+          onIndexChange={(nextIndex) =>
+            setLightbox((prev) => (prev ? { ...prev, index: nextIndex } : null))
+          }
+          onClose={() => setLightbox(null)}
+          onSave={(item) => jobActions.save(item.url)}
+          onReveal={(item) => jobActions.reveal(item.revealPath || item.url)}
+          onSaveToVault={(item) => {
+            if (item.kind !== MuseJobKind.Image) return;
+            setLightbox(null);
+            setVaultSources([
+              { localUrl: item.url, suggestedPrompt: item.prompt, suggestedName: item.title },
+            ]);
+          }}
+        />
       )}
     </div>
   );

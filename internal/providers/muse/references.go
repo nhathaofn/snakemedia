@@ -33,15 +33,12 @@ func (p *Provider) sweepUnused() {
 	p.sweepMedia(assetPrefix, p.usedAssetImages(jobs), entries)
 }
 
-// usedReferences is the set of reference images and source videos jobs use.
+// usedReferences is the set of reference images jobs use.
 func usedReferences(jobs []MuseJob) map[string]bool {
 	used := map[string]bool{}
 	for _, job := range jobs {
 		for _, ref := range job.References {
 			used[ref] = true
-		}
-		if job.SourceVideo != "" {
-			used[job.SourceVideo] = true
 		}
 	}
 	return used

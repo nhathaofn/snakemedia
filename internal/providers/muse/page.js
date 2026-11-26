@@ -49,16 +49,21 @@ function pageMain(CHUNK) {
         window.requestAnimationFrame = (cb) => {
           const id = ++seq;
           let done = false;
+          let rId = 0;
+          let timer = 0;
           const run = (ts) => {
             if (done) return;
             done = true;
+            clearTimeout(timer);
+            if (rId) caf(rId);
             pending.delete(id);
             cb(ts);
           };
-          pending.set(id, [
-            raf(run),
-            setTimeout(() => run(performance.now()), 32),
-          ]);
+          rId = raf(run);
+          if (!done) {
+            timer = setTimeout(() => run(performance.now()), 32);
+            pending.set(id, [rId, timer]);
+          }
           return id;
         };
         window.cancelAnimationFrame = (id) => {
@@ -360,6 +365,50 @@ function pageMain(CHUNK) {
       return "";
     }
   };
+  const waitRt = async (ms = 3000) => {
+    const end = Date.now() + ms;
+    for (;;) {
+      try {
+        const snap =
+          window.__hatchEarlyGatewayRuntimeState?.activeRuntime?.getSnapshot?.();
+        if (snap && typeof snap.sendRequest === "function") return snap;
+      } catch (e) {}
+      if (Date.now() >= end) break;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    return rt();
+  };
+  const readyRt = async () => {
+    ensureVisible();
+    let snap = await waitRt();
+    if (gatewayDownKind(snap)) {
+      const gwErr = await ensureGatewayReady(5000);
+      if (gwErr) {
+        throw new Error("gateway disconnected: " + gwErr);
+      }
+      snap = await waitRt(1500);
+    }
+    if (gatewayDownKind(snap)) {
+      throw new Error("gateway disconnected");
+    }
+    return snap;
+  };
+  const withTimeout = (promise, ms, label) => {
+    if (!(ms > 0)) return promise;
+    let timer = null;
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timeout`)), ms);
+      }),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
+  };
+  const gwRequest = async (method, params, ms = 15000, label = method) => {
+    const snap = await readyRt();
+    return withTimeout(snap.sendRequest(method, params), ms, label);
+  };
   // sessions.list lists every chat of the account, and every job opens one:
   // jobs polling the same tab side by side share one listing for a moment.
   // Shorter than the shortest poll interval the settings allow (1 s), so one
@@ -368,7 +417,7 @@ function pageMain(CHUNK) {
   let listed = null;
   const sessionList = () => {
     if (listed && Date.now() - listed.at < LIST_SHARE_MS) return listed.p;
-    const p = rt().sendRequest("sessions.list", {});
+    const p = gwRequest("sessions.list", {}, 8000, "sessions");
     const entry = { at: Date.now(), p };
     listed = entry;
     p.catch(() => {
@@ -376,8 +425,54 @@ function pageMain(CHUNK) {
     });
     return p;
   };
+  // Serialize composer send/route transitions on a shared tab so concurrent
+  // threads (Send / SendTo) never interleave Next.js thread navigation or
+  // read stale cachedChat context mid-transition.
+  let sendTail = Promise.resolve();
+  let routeBusy = 0;
+  const routeWaiters = [];
+  const notifyRouteIdle = () => {
+    if (routeBusy === 0 && routeWaiters.length > 0) {
+      const list = routeWaiters.splice(0, routeWaiters.length);
+      for (const resolve of list) resolve();
+    }
+  };
+  const withSendLock = (fn) => {
+    const run = sendTail.then(fn, fn);
+    sendTail = run.catch(() => {});
+    return run;
+  };
+  const waitRouteSettled = async (ms = 2000) => {
+    if (routeBusy === 0) return;
+    await new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        resolve();
+      };
+      const timer = setTimeout(finish, ms);
+      routeWaiters.push(() => {
+        clearTimeout(timer);
+        finish();
+      });
+    });
+  };
+  const FILE_TTL_MS = 10 * 60 * 1000;
+  const MAX_OPEN_FILES = 16;
   const files = new Map();
   let fileSeq = 0;
+  const sweepFiles = () => {
+    const cutoff = Date.now() - FILE_TTL_MS;
+    for (const [id, entry] of files) {
+      if (!entry || entry.at < cutoff) files.delete(id);
+    }
+    while (files.size >= MAX_OPEN_FILES) {
+      const oldest = files.keys().next().value;
+      if (oldest === undefined) break;
+      files.delete(oldest);
+    }
+  };
   const b64 = (u8) => {
     const parts = [];
     for (let i = 0; i < u8.length; i += 32768)
@@ -410,6 +505,7 @@ function pageMain(CHUNK) {
     ),
   ];
   const chunkTexts = new Map();
+  let activeScans = 0;
   const source = (u) => {
     let pending = chunkTexts.get(u);
     if (!pending) {
@@ -503,11 +599,19 @@ function pageMain(CHUNK) {
         if (!known.has(base + m[0])) lazy.add(base + m[0] + query);
       }
     };
-    const v =
-      (await first(loaded, find, listLazy)) ?? (await first([...lazy], find));
-    if (v != null) return remember(v);
-    misses.set(memo, Date.now());
-    return null;
+    activeScans++;
+    try {
+      const v =
+        (await first(loaded, find, listLazy)) ?? (await first([...lazy], find));
+      if (v != null) return remember(v);
+      misses.set(memo, Date.now());
+      return null;
+    } finally {
+      if (--activeScans <= 0) {
+        activeScans = 0;
+        chunkTexts.clear();
+      }
+    }
   };
   // A Next.js server action is registered as createServerReference)("<id>",…,"<name>").
   const actionId = (name) =>
@@ -594,6 +698,9 @@ function pageMain(CHUNK) {
         );
         const raw = await r.json().catch(() => null);
         const j = raw && typeof raw === "object" ? raw : {};
+        if (r.status === 200 && routeBusy > 0 && !chat()) {
+          await waitRouteSettled(Math.min(ms, 2000));
+        }
         const c = Boolean(chat());
         const notice =
           !c && typeof document !== "undefined" && document.body
@@ -635,124 +742,109 @@ function pageMain(CHUNK) {
     },
     // thread = an existing chat's sessionId: send into that chat; empty = a new thread.
     async send(text, atts, thread) {
-      ensureVisible();
-      // The page may be rebuilding (the user opened another chat): wait up to 20s for the client.
-      let c = chat();
-      for (let k = 0; !c && k < 20; k++) {
-        await new Promise((r) => setTimeout(r, 1000));
-        c = chat();
-      }
-      if (!c) {
-        const diag = chatDiag();
-        const path =
+      return withSendLock(async () => {
+        ensureVisible();
+        // The page may be rebuilding (the user opened another chat): wait up to 20s for the client.
+        let c = chat();
+        for (let k = 0; !c && k < 20; k++) {
+          await new Promise((r) => setTimeout(r, 1000));
+          c = chat();
+        }
+        if (!c) {
+          const diag = chatDiag();
+          const path =
+            typeof location !== "undefined" ? String(location.pathname || "") : "";
+          return {
+            ok: false,
+            sessionId: "",
+            reason: diag ? `not_ready (${path}; ${diag})` : `not_ready (${path})`,
+          };
+        }
+        const gwErr = await ensureGatewayReady();
+        if (gwErr) {
+          cachedChat = null;
+          return {
+            ok: false,
+            sessionId: "",
+            reason: `not_ready (gateway:${gwErr})`,
+          };
+        }
+        const beforePath =
           typeof location !== "undefined" ? String(location.pathname || "") : "";
+        let r;
+        routeBusy++;
+        try {
+          r = await c.sendMessage(
+            text,
+            atts,
+            thread
+              ? {
+                  targetRoute: { kind: "thread", sessionId: thread },
+                  waitForReadiness: true,
+                }
+              : { createNewThread: true, waitForReadiness: true },
+          );
+        } catch (err) {
+          cachedChat = null;
+          throw err;
+        } finally {
+          routeBusy--;
+          notifyRouteIdle();
+        }
+        const afterPath =
+          typeof location !== "undefined" ? String(location.pathname || "") : "";
+        if (
+          thread ||
+          afterPath !== beforePath ||
+          (!r?.ok && String(r?.reason || "").startsWith("not_ready"))
+        ) {
+          cachedChat = null;
+        }
         return {
-          ok: false,
-          sessionId: "",
-          reason: diag ? `not_ready (${path}; ${diag})` : `not_ready (${path})`,
+          ok: Boolean(r?.ok),
+          sessionId: r?.sessionId || (r?.ok ? thread : ""),
+          reason: String(r?.reason || r?.error || ""),
+          // Muse returns both reason: "send_failed" and an Error. Keep the
+          // latter's useful fields: choosing reason || error hid the cause.
+          diagnostics: r?.error
+            ? Object.fromEntries(
+                ["name", "message", "code", "kind", "deliveryState", "requestTimedOut"]
+                  .filter((k) => ["string", "number", "boolean"].includes(typeof r.error[k]))
+                  .map((k) => {
+                    let v = r.error[k];
+                    if (typeof v === "string") {
+                      if (text) v = v.split(text).join("[prompt]");
+                      v = v.replace(/[A-Za-z0-9+/=]{128,}/g, "[data]").slice(0, 1024);
+                    }
+                    return [k, v];
+                  }),
+              )
+            : null,
         };
-      }
-      const gwErr = await ensureGatewayReady();
-      if (gwErr) {
-        cachedChat = null;
-        return {
-          ok: false,
-          sessionId: "",
-          reason: `not_ready (gateway:${gwErr})`,
-        };
-      }
-      let r;
-      try {
-        r = await c.sendMessage(
-          text,
-          atts,
-          thread
-            ? {
-                targetRoute: { kind: "thread", sessionId: thread },
-                waitForReadiness: true,
-              }
-            : { createNewThread: true, waitForReadiness: true },
-        );
-      } catch (err) {
-        cachedChat = null;
-        throw err;
-      }
-      if (!r?.ok && String(r?.reason || "").startsWith("not_ready")) {
-        cachedChat = null;
-      }
-      return {
-        ok: Boolean(r?.ok),
-        sessionId: r?.sessionId || (r?.ok ? thread : ""),
-        reason: String(r?.reason || r?.error || ""),
-        // Muse returns both reason: "send_failed" and an Error. Keep the
-        // latter's useful fields: choosing reason || error hid the cause.
-        diagnostics: r?.error
-          ? Object.fromEntries(
-              ["name", "message", "code", "kind", "deliveryState", "requestTimedOut"]
-                .filter((k) => ["string", "number", "boolean"].includes(typeof r.error[k]))
-                .map((k) => {
-                  let v = r.error[k];
-                  if (typeof v === "string") {
-                    if (text) v = v.split(text).join("[prompt]");
-                    v = v.replace(/[A-Za-z0-9+/=]{128,}/g, "[data]").slice(0, 1024);
-                  }
-                  return [k, v];
-                }),
-            )
-          : null,
-      };
+      });
     },
     async status(sid) {
       const { sessions = [] } = await sessionList();
       return sessions.find((s) => s.session_id === sid)?.status || "";
     },
     async sessions(fresh) {
-      ensureVisible();
-      const waitRt = async (ms = 3000) => {
-        const end = Date.now() + ms;
-        for (;;) {
-          try {
-            const snap =
-              window.__hatchEarlyGatewayRuntimeState?.activeRuntime?.getSnapshot?.();
-            if (snap && typeof snap.sendRequest === "function") return snap;
-          } catch (e) {}
-          if (Date.now() >= end) break;
-          await new Promise((r) => setTimeout(r, 150));
-        }
-        return rt();
-      };
-      let snap = await waitRt();
-      if (gatewayDownKind(snap)) {
-        const gwErr = await ensureGatewayReady(5000);
-        if (gwErr) {
-          throw new Error("gateway disconnected: " + gwErr);
-        }
-        snap = await waitRt(1500);
-      }
-      if (gatewayDownKind(snap)) {
-        throw new Error("gateway disconnected");
-      }
-      let timer = null;
-      try {
-        const { sessions = [] } = await Promise.race([
-          fresh ? snap.sendRequest("sessions.list", {}) : sessionList(),
-          new Promise((_, reject) => {
-            timer = setTimeout(() => reject(new Error("sessions timeout")), 8000);
-          }),
-        ]);
-        return sessions.map((s) => ({
-          id: s.session_id || "",
-          status: s.status || "",
-        }));
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
+      const { sessions = [] } = fresh
+        ? await gwRequest("sessions.list", {}, 8000, "sessions")
+        : await sessionList();
+      return sessions.map((s) => ({
+        id: s.session_id || "",
+        status: s.status || "",
+      }));
     },
     async userMessages(sid) {
-      const h = await rt().sendRequest("chat.history", {
-        session_id: sid,
-        limit: 50,
-      });
+      const h = await gwRequest(
+        "chat.history",
+        {
+          session_id: sid,
+          limit: 500,
+        },
+        20000,
+      );
       const textOf = (e) => {
         for (const v of [
           e?.display_text,
@@ -784,16 +876,24 @@ function pageMain(CHUNK) {
     },
     // The chat's raw events, tool calls included (TestLiveConsole only).
     async history(sid) {
-      return await rt().sendRequest("chat.history", {
-        session_id: sid,
-        limit: 200,
-      });
+      return await gwRequest(
+        "chat.history",
+        {
+          session_id: sid,
+          limit: 500,
+        },
+        20000,
+      );
     },
     async result(sid) {
-      const h = await rt().sendRequest("chat.history", {
-        session_id: sid,
-        limit: 50,
-      });
+      const h = await gwRequest(
+        "chat.history",
+        {
+          session_id: sid,
+          limit: 500,
+        },
+        20000,
+      );
       const media = (list) =>
         (list || []).map((m) => ({
           path: m.path || "",
@@ -810,27 +910,36 @@ function pageMain(CHUNK) {
         }));
     },
     async open(path, maxBytes) {
-      const r = await rt().sendRequest("fs.raw", {
-        path: path.replace(/^sandbox:\/\//, ""),
-      });
+      sweepFiles();
+      const r = await gwRequest(
+        "fs.raw",
+        {
+          path: path.replace(/^sandbox:\/\//, ""),
+        },
+        90000,
+      );
       const blob = r instanceof Blob ? r : r.data;
       if (!blob || blob.size <= 0 || blob.size > maxBytes)
         throw new Error("Muse file is empty or exceeds the download limit");
       if (blob.size <= CHUNK) {
         return { id: 0, size: blob.size, data: await blobB64(blob) };
       }
-      files.set(++fileSeq, blob);
-      return { id: fileSeq, size: blob.size };
+      const id = ++fileSeq;
+      files.set(id, { blob, at: Date.now() });
+      return { id, size: blob.size };
     },
     async slice(id, i) {
-      return blobB64(files.get(id).slice(i * CHUNK, (i + 1) * CHUNK));
+      const entry = files.get(id);
+      if (!entry?.blob) throw new Error("Muse file handle expired or closed");
+      entry.at = Date.now();
+      return blobB64(entry.blob.slice(i * CHUNK, (i + 1) * CHUNK));
     },
     closeFile(id) {
       files.delete(id);
       return null;
     },
     async cancel(sid) {
-      await rt().sendRequest("chat.cancel", { session_id: sid });
+      await gwRequest("chat.cancel", { session_id: sid }, 10000);
       return null;
     },
     // The subscription Muse's settings screen shows (fetchSubscriptionAction):
@@ -844,7 +953,7 @@ function pageMain(CHUNK) {
       const upload = await scan("upload", uploadConfig);
       let models = null;
       try {
-        models = await rt().sendRequest("model.get", {});
+        models = await gwRequest("model.get", {}, 10000);
       } catch (e) {}
       return { upload, models };
     },

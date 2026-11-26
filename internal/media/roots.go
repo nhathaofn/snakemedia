@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -74,10 +75,19 @@ func (s *Store) within(path string, mediaDir bool) bool {
 	for _, fn := range dynamic {
 		roots = append(roots, fn()...)
 	}
+	seen := make(map[string]struct{}, min(len(roots), 16))
 	for _, root := range roots {
 		if root == "" {
 			continue
 		}
+		key := filepath.Clean(root)
+		if runtime.GOOS == "windows" {
+			key = strings.ToLower(key)
+		}
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
 		clean, err := cleanDir(root)
 		if err == nil && inside(clean, path) {
 			return true

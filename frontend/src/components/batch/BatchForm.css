@@ -66,6 +66,48 @@
   font-size: var(--font-size-caption);
 }
 
+.batch-meta-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap-inline);
+}
+
+/* When a provider supplies an extra prompt action (e.g. Muse preview), split the
+   header into a clean left/right label+count row and a full-width action pair. */
+.batch-meta.has-extra {
+  gap: var(--gap-label);
+}
+
+.batch-meta.has-extra .batch-field {
+  width: 100%;
+  justify-content: space-between;
+}
+
+.batch-meta.has-extra .batch-meta-actions {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--gap-related);
+}
+
+.batch-meta.has-extra .batch-meta-actions .btn {
+  min-width: 0;
+  width: 100%;
+  padding-inline: var(--space-3);
+  gap: var(--space-2);
+  font-size: var(--font-size-caption);
+  border-color: var(--border-color);
+  background-color: var(--bg-primary);
+  color: var(--text-secondary);
+}
+
+.batch-meta.has-extra .batch-meta-actions .btn:hover:not(:disabled) {
+  background-color: var(--surface-hover);
+  border-color: var(--primary);
+  color: var(--text-primary);
+}
+
 .batch-field {
   align-items: baseline;
 }

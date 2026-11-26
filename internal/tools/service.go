@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"SnakeMedia/internal/events"
 	"SnakeMedia/internal/logger"
@@ -112,9 +113,24 @@ func New(dir, userAgent string, paths func() map[string]string) (*Service, error
 	return newService(m, dir, userAgent, paths), nil
 }
 
+func newDownloadHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 15 * time.Minute,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("quá nhiều lần chuyển hướng")
+			}
+			if len(via) > 0 && via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
+				return errors.New("từ chối chuyển hướng xuống HTTP không mã hóa")
+			}
+			return nil
+		},
+	}
+}
+
 func newService(m Manifest, dir, userAgent string, paths func() map[string]string) *Service {
 	return &Service{
-		manifest: m, dir: dir, paths: paths, client: &http.Client{}, userAgent: userAgent,
+		manifest: m, dir: dir, paths: paths, client: newDownloadHTTPClient(), userAgent: userAgent,
 		installing: map[string]bool{}, progress: map[string]Progress{}, waiting: map[string]Request{}, postponed: map[string]bool{},
 	}
 }
@@ -220,6 +236,12 @@ func (s *Service) specOf(program string) (Spec, bool) {
 		return Spec{}, false
 	}
 	return s.manifest.Tools[i], true
+}
+
+// HasProgram reports whether program is declared in the embedded tools manifest.
+func (s *Service) HasProgram(program string) bool {
+	_, ok := s.specOf(program)
+	return ok
 }
 
 func (s *Service) status(spec Spec) Tool {

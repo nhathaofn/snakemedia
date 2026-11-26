@@ -106,8 +106,10 @@ func isOAuthOrLoginBounce(info awayTabInfo) bool {
 // Returns restrictDeadAccount when the redirect clearly indicates an inaccessible
 // or dead account rather than an ordinary sign-in prompt.
 func classifyAwayTab(info awayTabInfo) (accountRestriction, string) {
-	u, err := url.Parse(strings.TrimSpace(info.URL))
-	if err != nil || info.URL == "" || info.URL == "about:blank" || strings.HasPrefix(info.URL, "chrome://") {
+	rawURL := strings.TrimSpace(info.URL)
+	u, err := url.Parse(rawURL)
+	if err != nil || rawURL == "" || rawURL == "about:blank" ||
+		strings.HasPrefix(rawURL, "chrome://") || strings.HasPrefix(rawURL, "chrome-error://") {
 		return restrictNone, ""
 	}
 	if u.Scheme == "https" && (u.Host == "muse.ai" || u.Host == "www.muse.ai") {
@@ -115,22 +117,36 @@ func classifyAwayTab(info awayTabInfo) (accountRestriction, string) {
 	}
 	displayURL := sanitizeURL(u)
 	joined := strings.ToLower(displayURL + " " + info.Title + " " + info.Text)
+	// Anti-bot / CDN challenges and browser network error screens are transient,
+	// never permanent account bans.
+	for _, transientMarker := range []string{
+		"challenges.cloudflare.com", "/cdn-cgi/challenge", "just a moment",
+		"attention required!", "checking your browser", "cloudflare", "turnstile",
+		"hcaptcha", "recaptcha", "verify you are human",
+	} {
+		if strings.Contains(joined, transientMarker) {
+			return restrictNone, ""
+		}
+	}
 	for _, marker := range []string{
-		"banned", "suspended", "disabled", "terminated", "deactivated",
-		"blocked", "restricted", "couldn't find your", "account deleted",
+		"banned", "suspended", "terminated", "deactivated",
+		"account disabled", "account is disabled", "account has been disabled", "/disabled", "user disabled",
+		"account blocked", "account is blocked", "account has been blocked", "/blocked", "you have been blocked", "access blocked",
+		"account restricted", "account is restricted", "account has been restricted", "/restricted",
+		"couldn't find your", "account deleted",
 		"waitlist", "waiting list", "join the waitlist", "early access",
 		"verify your account", "verify your identity", "verification required",
 		"account verification", "phone verification", "identity verification",
-		"khóa", "vô hiệu", "bị cấm", "xác minh tài khoản", "danh sách chờ", "bị bắt xác minh",
-		"access denied", "403",
+		"bị khóa", "tài khoản khóa", "vô hiệu hóa", "tài khoản bị vô hiệu", "bị cấm",
+		"xác minh tài khoản", "danh sách chờ", "bị bắt xác minh",
+		"access denied", "403 forbidden", "error 403", "http 403", "status 403",
 	} {
 		if strings.Contains(joined, marker) {
 			return restrictDeadAccount, fmt.Sprintf("chuyển hướng sang %s (%s)", displayURL, firstNonEmpty(info.Title, marker))
 		}
 	}
 	// An ordinary sign-in screen (OAuth / login page) on an expired session is
-	// signed out, not necessarily dead; any other non-Muse destination means the
-	// account cannot open Muse at all.
+	// signed out, not necessarily dead. Unknown external redirects stay non-fatal.
 	for _, loginHint := range []string{"/login", "/signin", "/sign-in", "/oauth", "/api/auth", "accounts.google.com"} {
 		if strings.Contains(strings.ToLower(displayURL), loginHint) {
 			return restrictNone, displayURL
@@ -140,7 +156,7 @@ func classifyAwayTab(info awayTabInfo) (accountRestriction, string) {
 		strings.Contains(strings.ToLower(info.Title+" "+info.Text), "log in") {
 		return restrictNone, displayURL
 	}
-	return restrictDeadAccount, fmt.Sprintf("chuyển hướng khỏi muse.ai sang %s", displayURL)
+	return restrictNone, ""
 }
 
 func sanitizeURL(u *url.URL) string {
@@ -181,12 +197,44 @@ func classifyRestrictionForKind(kind MuseJobKind, reason string, diag *SendDiagn
 		return cKind, detail
 	}
 	if kind == MuseJobVideo {
-		allLower := strings.ToLower(strings.TrimSpace(reason + " " + diagText(diag) + " " + reply))
-		if matchesRegionRestriction(allLower) || matchesVideoCapabilityRestriction(allLower) {
-			return restrictVideoDisabled, firstNonEmpty(truncate(strings.TrimSpace(reply), 200), truncate(strings.TrimSpace(reason), 180))
+		sysLower := strings.ToLower(strings.TrimSpace(reason + " " + diagText(diag)))
+		replyLower := strings.ToLower(strings.TrimSpace(reply))
+		if matchesRegionRestriction(sysLower) || matchesVideoCapabilityRestriction(sysLower) {
+			return restrictVideoDisabled, firstNonEmpty(truncate(strings.TrimSpace(reason), 180), truncate(strings.TrimSpace(diagText(diag)), 180))
+		}
+		if matchesRegionRestriction(replyLower) || matchesExplicitVideoCapabilityReply(replyLower) {
+			return restrictVideoDisabled, truncate(strings.TrimSpace(reply), 200)
 		}
 	}
 	return restrictNone, ""
+}
+
+// matchesExplicitVideoCapabilityReply inspects free-form LLM assistant replies
+// using only unambiguous account/plan video capability phrases so ordinary
+// prompt-policy refusals ("video of this character is not allowed") or scene
+// commentary cannot permanently disable video on a healthy account (ADR 0012).
+func matchesExplicitVideoCapabilityReply(lower string) bool {
+	if lower == "" {
+		return false
+	}
+	for _, phrase := range []string{
+		"only generate images", "only create images", "can only generate images", "can only create images",
+		"image generation only", "images only", "chỉ tạo được ảnh", "chỉ hỗ trợ tạo ảnh",
+		"video_disabled", "video_banned", "feature_disabled",
+		"video generation is not enabled", "video creation is not enabled",
+		"video generation isn't enabled", "video creation isn't enabled",
+		"video generation is not supported", "video creation is not supported",
+		"video generation isn't supported", "video creation isn't supported",
+		"video feature is disabled", "video feature is unavailable",
+		"upgrade to create video", "upgrade to generate video",
+		"requires a paid plan to generate video", "requires a paid plan to create video",
+		"nâng cấp gói để tạo video", "tính năng tạo video tạm khóa", "tính năng tạo video chưa được bật",
+	} {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 func diagText(diag *SendDiagnostics) string {
@@ -280,18 +328,35 @@ func classifyText(sysMsg, quotaMsg, reply string, _ *MuseQuota) (accountRestrict
 	detail := firstNonEmpty(truncate(strings.TrimSpace(sysMsg), 180), truncate(strings.TrimSpace(quotaMsg), 180), truncate(strings.TrimSpace(reply), 200))
 
 	// 1. Account banned / suspended / dead / verification / waitlist.
+	// Explicit account notices match either system or reply text; ambiguous bare
+	// words ("waitlist", "verify") only match trusted system/quota metadata so
+	// LLM prompt refusals cannot disable healthy accounts.
 	for _, phrase := range []string{
 		"account banned", "account_banned", "account is banned", "account has been banned",
 		"account suspended", "account_suspended", "account is suspended", "account has been suspended",
 		"account disabled", "account_disabled", "account is disabled", "account has been disabled",
 		"account terminated", "account_terminated", "account deactivated", "permanently banned",
 		"your account has been", "tài khoản bị khóa", "tài khoản đã bị cấm",
-		"waitlist", "waitlisted", "waiting list", "on the waitlist", "join the waitlist", "you're on the waitlist",
-		"verify your account", "verify your identity", "verification required", "account verification",
-		"requires verification", "phone verification", "identity verification", "complete verification",
-		"xác minh tài khoản", "cần xác minh", "bắt xác minh", "danh sách chờ",
+		"on the waitlist", "join the waitlist", "you're on the waitlist",
+		"verify your account", "account verification",
+		"verification required for your account", "requires verification for your account",
+		"complete verification for your account",
+		"xác minh tài khoản", "danh sách chờ", "bắt xác minh",
 	} {
 		if strings.Contains(allLower, phrase) {
+			return restrictDeadAccount, detail
+		}
+	}
+	if strings.Contains(allLower, "your account") &&
+		(strings.Contains(allLower, "verification required") || strings.Contains(allLower, "complete verification")) {
+		return restrictDeadAccount, detail
+	}
+	for _, sysOnly := range []string{
+		"waitlist", "waitlisted", "waiting list",
+		"verify your identity", "verification required", "requires verification",
+		"phone verification", "identity verification", "complete verification", "cần xác minh",
+	} {
+		if strings.Contains(systemLower, sysOnly) {
 			return restrictDeadAccount, detail
 		}
 	}
@@ -304,20 +369,28 @@ func classifyText(sysMsg, quotaMsg, reply string, _ *MuseQuota) (accountRestrict
 
 	// 2. Daily video generation limit (24h).
 	for _, phrase := range []string{
-		"daily video", "daily_video", "videos per day", "video per day",
-		"daily limit", "daily_limit", "daily generation limit", "daily quota", "daily video cap",
-		"limit for today", "today's limit", "reached today",
-		"24 hours", "24-hour", "24 hour", "24h limit", "for the next 24", "within 24 hour", "wait 24",
-		"try again tomorrow", "come back tomorrow", "reached your daily",
-		"video_limit", "video generation limit", "too many videos",
+		"daily video", "daily_video", "daily_limit", "daily generation limit", "daily video cap",
+		"reached your daily", "you have reached your daily", "you've reached your daily",
+		"try again in 24", "try again tomorrow", "come back tomorrow",
+		"video_limit", "video generation limit",
 		"hết lượt tạo video", "hết hạn tạo video", "giới hạn tạo video trong ngày", "hết lượt video hôm nay",
 	} {
 		if strings.Contains(allLower, phrase) {
 			return restrictDailyVideo24h, detail
 		}
 	}
-	if strings.Contains(allLower, "limit") &&
-		(strings.Contains(allLower, "today") || strings.Contains(allLower, "24h") || strings.Contains(allLower, "24 hour") || strings.Contains(allLower, "per day")) {
+	for _, sysOnly := range []string{
+		"videos per day", "video per day", "daily limit", "daily quota",
+		"limit for today", "today's limit", "reached today",
+		"24 hours", "24-hour", "24 hour", "24h limit", "for the next 24", "within 24 hour", "wait 24",
+		"too many videos",
+	} {
+		if strings.Contains(systemLower, sysOnly) {
+			return restrictDailyVideo24h, detail
+		}
+	}
+	if strings.Contains(systemLower, "limit") &&
+		(strings.Contains(systemLower, "today") || strings.Contains(systemLower, "24h") || strings.Contains(systemLower, "24 hour") || strings.Contains(systemLower, "per day")) {
 		return restrictDailyVideo24h, detail
 	}
 

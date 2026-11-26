@@ -119,6 +119,51 @@ func made(id string) []GeneratedImageItem {
 	return []GeneratedImageItem{{JobID: id, ID: "img-" + id, LocalURL: "/flow-media/" + id + ".png"}}
 }
 
+func TestQueueHoldWinsBeforeClaim(t *testing.T) {
+	h := newQueueHarness(t)
+	task := h.submit("held during dispatch")[0]
+	const requestID = "11111111-1111-4111-8111-111111111111"
+	if _, err := h.q.journal.Update(task.ID, func(v *ImageTask) { v.RequestID = requestID }); err != nil {
+		t.Fatal(err)
+	}
+	original := h.q.requestPhase
+	h.q.requestPhase = func(id string) (string, bool, error) {
+		h.q.requestPhase = original
+		if got := h.s.HoldImageTasks([]string{task.ID}); !got.Success || got.Data != 1 {
+			t.Fatalf("hold failed: %+v", got)
+		}
+		return original(id)
+	}
+	h.onGen = func(_ context.Context, req GenerateImageRequest) models.Response[[]GeneratedImageItem] {
+		return models.SuccessResponse(made(req.RequestID))
+	}
+	h.q.pump()
+	h.q.wg.Wait()
+	got, _ := h.q.journal.Get(task.ID)
+	if len(h.generated) != 0 || !got.Held || got.Status != ImageTaskQueued {
+		t.Fatalf("held task dispatched: sends=%d task=%+v", len(h.generated), got)
+	}
+}
+
+func TestQueueResumesDuringFreshSendGap(t *testing.T) {
+	h := newQueueHarness(t)
+	tasks := h.submit("fresh first", "resume second")
+	const requestID = "22222222-2222-4222-8222-222222222222"
+	if _, err := h.q.journal.Update(tasks[1].ID, func(t *ImageTask) { t.RequestID = requestID }); err != nil {
+		t.Fatal(err)
+	}
+	h.setPhase(requestID, generationAccepted)
+	h.q.nextLaunch = h.clock.Add(time.Minute)
+	h.onResume = func(_ context.Context, id string) models.Response[[]GeneratedImageItem] {
+		return models.SuccessResponse(made(id))
+	}
+	h.q.pump()
+	h.q.wg.Wait()
+	if !slices.Equal(h.resumed, []string{requestID}) || len(h.generated) != 0 {
+		t.Fatalf("gap blocked reconciliation or allowed fresh send: resumed=%v, sends=%d", h.resumed, len(h.generated))
+	}
+}
+
 func TestQueueSendsSavesAndFreesTheRequestID(t *testing.T) {
 	h := newQueueHarness(t)
 	ref, err := h.s.media.Put("ref", "image/png", ".png", []byte("png-bytes"))

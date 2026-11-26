@@ -1,17 +1,27 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DragEvent, ReactNode } from 'react';
-import { FileUp, FolderOpen, Image as ImageIcon, X } from 'lucide-react';
+import '../../../components/batch/BatchForm.css';
+import '../../../components/studio/Studio.css';
+import './MuseAssetsPage.css';
+import { FileUp, FolderOpen, Images, X } from 'lucide-react';
 import { Button, Icon, Modal } from '../../../components/ui';
-import { api, unwrap } from '../../../services';
+import { api, thumbUrl, unwrap } from '../../../services';
 import { useAppStore } from '../../../stores';
 import {
   MuseAssetBatchConflict,
   MuseAssetBatchItem,
   MuseAssetBatchRequest,
+  MuseFolderImage,
   MuseRefRole,
 } from '../../../types';
-import type { MuseAsset, MuseFolderImage } from '../../../types';
-import { roleOrder, roles } from './assetRoles';
+import type { MuseAsset } from '../../../types';
+import {
+  ANGLE_SUGGESTIONS,
+  STATE_SUGGESTIONS,
+  VARIANT_SUGGESTIONS,
+  roleOrder,
+  roles,
+} from './assetRoles';
 import {
   buildBatchRows,
   parseAliasLines,
@@ -21,6 +31,8 @@ import {
   type BatchRowOverride,
   type LockSplitMode,
 } from './batchImport';
+import { BatchImportTable } from './BatchImportTable';
+import type { VaultImportSource } from './SaveToVaultDialog';
 
 const CONFLICT_OPTIONS: readonly { value: MuseAssetBatchConflict; label: string }[] = [
   { value: MuseAssetBatchConflict.Skip, label: 'Bỏ qua tag trùng' },
@@ -34,15 +46,6 @@ const LOCK_MODE_OPTIONS: readonly { value: LockSplitMode; label: string }[] = [
   { value: 'block', label: 'Theo đoạn' },
 ];
 
-const STATUS_LABELS: Record<BatchPreviewRow['status'], string> = {
-  ready: 'Mới',
-  rename: 'Đổi tên',
-  overwrite: 'Ghi đè',
-  skip: 'Bỏ qua',
-  excluded: 'Đã bỏ',
-  error: 'Lỗi',
-};
-
 function summaryMessage(added: number, updated: number, skipped: number): string {
   const parts: string[] = [];
   if (added > 0) parts.push(`thêm ${added}`);
@@ -51,33 +54,73 @@ function summaryMessage(added: number, updated: number, skipped: number): string
   return parts.length > 0 ? `Đã ${parts.join(', ')} tư liệu.` : 'Không có tư liệu nào được nhập.';
 }
 
+function initialImagesFromMediaSources(sources?: readonly VaultImportSource[]): MuseFolderImage[] {
+  if (!sources?.length) return [];
+  return sources.map((s, idx) =>
+    MuseFolderImage.createFrom({
+      path: '',
+      localUrl: s.localUrl,
+      fileName: s.suggestedName || `media_${idx + 1}.png`,
+      size: 0,
+      previewUrl: thumbUrl(s.localUrl),
+    }),
+  );
+}
+
 /**
- * Batch import dialog for adding a flat image folder + 3 top-to-bottom .txt
- * lists (alias/tag, role, lock prompt) with live preview and quick edits.
+ * Batch import dialog for adding images (folder with optional subfolders,
+ * multiple picked OS files, or in-app generated media URLs) into the Muse
+ * Asset Vault, auto-suggesting convention fields from filenames or 3 .txt lists.
  */
 export function BatchImportAssetsDialog({
   existingAssets,
+  initialMediaSources,
+  defaultProject: initialDefaultProject = '',
   onImported,
   onClose,
 }: {
   existingAssets: readonly MuseAsset[];
+  initialMediaSources?: readonly VaultImportSource[];
+  defaultProject?: string;
   onImported: () => Promise<void>;
   onClose: () => void;
 }) {
   const addToast = useAppStore((s) => s.addToast);
   const [picking, setPicking] = useState(false);
+  const [page, setPage] = useState(0);
+  const scanRequest = useRef<string | null>(null);
+  useEffect(
+    () => () => {
+      const id = scanRequest.current;
+      if (id) {
+        scanRequest.current = null;
+        void api.cancelGeneration(id);
+      }
+    },
+    [],
+  );
   const [importing, setImporting] = useState(false);
+  const [recursive, setRecursive] = useState(true);
   const [folderDir, setFolderDir] = useState('');
-  const [images, setImages] = useState<MuseFolderImage[]>([]);
+  const [images, setImages] = useState<MuseFolderImage[]>(() =>
+    initialImagesFromMediaSources(initialMediaSources),
+  );
   const [aliasText, setAliasText] = useState('');
   const [roleText, setRoleText] = useState('');
   const [lockText, setLockText] = useState('');
   const [lockMode, setLockMode] = useState<LockSplitMode>('line');
+  const [defaultProject, setDefaultProject] = useState(initialDefaultProject);
   const [defaultRole, setDefaultRole] = useState<MuseRefRole>(MuseRefRole.Character);
   const [conflict, setConflict] = useState<MuseAssetBatchConflict>(MuseAssetBatchConflict.Skip);
+  const [mergeByAlias, setMergeByAlias] = useState(true);
   const [overrides, setOverrides] = useState<Map<number, BatchRowOverride>>(() => new Map());
+
+  // Bulk assignment controls for checked rows
+  const [bulkProject, setBulkProject] = useState('');
+  const [bulkTag, setBulkTag] = useState('');
+  const [bulkAngle, setBulkAngle] = useState('');
+
   const lastClickedRow = useRef<number | null>(null);
-  const shiftHeld = useRef(false);
 
   const aliases = useMemo(() => parseAliasLines(aliasText), [aliasText]);
   const parsedRoles = useMemo(() => parseRoleLines(roleText), [roleText]);
@@ -90,12 +133,25 @@ export function BatchImportAssetsDialog({
         aliases,
         roles: parsedRoles,
         locks,
+        defaultProject,
         defaultRole,
         conflict,
+        mergeByAlias,
         existingAssets,
         overrides,
       }),
-    [images, aliases, parsedRoles, locks, defaultRole, conflict, existingAssets, overrides],
+    [
+      images,
+      aliases,
+      parsedRoles,
+      locks,
+      defaultProject,
+      defaultRole,
+      conflict,
+      mergeByAlias,
+      existingAssets,
+      overrides,
+    ],
   );
 
   const actionableRows = useMemo(
@@ -103,9 +159,16 @@ export function BatchImportAssetsDialog({
       rows.filter((r) => r.status === 'ready' || r.status === 'rename' || r.status === 'overwrite'),
     [rows],
   );
-  const errorCount = useMemo(() => rows.filter((r) => r.status === 'error').length, [rows]);
-  const skippedCount = useMemo(() => rows.filter((r) => r.status === 'skip').length, [rows]);
+  const errorCount = useMemo(
+    () => rows.filter((r) => !r.excluded && r.status === 'error').length,
+    [rows],
+  );
+  const skippedCount = useMemo(
+    () => rows.filter((r) => !r.excluded && r.status === 'skip').length,
+    [rows],
+  );
   const selectableRows = useMemo(() => rows.filter((r) => !r.image.error), [rows]);
+  const includedRows = useMemo(() => rows.filter((r) => !r.excluded && !r.image.error), [rows]);
   const allSelectableIncluded =
     selectableRows.length > 0 && selectableRows.every((r) => !r.excluded);
 
@@ -117,37 +180,61 @@ export function BatchImportAssetsDialog({
     });
   };
 
-  const clearOverrideField = (field: keyof BatchRowOverride) => {
+  const applyToIncludedRows = (patchFn: (row: BatchPreviewRow) => Partial<BatchRowOverride>) => {
     setOverrides((prev) => {
-      if (prev.size === 0) return prev;
-      const next = new Map<number, BatchRowOverride>();
-      for (const [idx, ov] of prev.entries()) {
-        const rest = { ...ov };
-        delete rest[field];
-        if (Object.keys(rest).length > 0) next.set(idx, rest);
+      const next = new Map(prev);
+      for (const r of includedRows) {
+        next.set(r.index, { ...next.get(r.index), ...patchFn(r) });
       }
       return next;
     });
   };
 
-  const pickFolder = async () => {
-    if (picking || importing) return;
+  const cancelScan = () => {
+    const id = scanRequest.current;
+    if (!id) return;
+    scanRequest.current = null;
+    setPicking(false);
+    void api.cancelGeneration(id);
+  };
+
+  const pickImages = async (fromFolder: boolean) => {
+    if (scanRequest.current || importing) return;
+    const id = crypto.randomUUID();
+    scanRequest.current = id;
     setPicking(true);
     try {
-      const scan = unwrap(await api.pickMuseAssetFolder());
-      if (scan.canceled) return;
+      const scan = unwrap(
+        await (fromFolder ? api.pickMuseAssetFolder(recursive, id) : api.pickMuseAssetFiles(id)),
+      );
+      if (scanRequest.current !== id || scan.canceled) return;
       setFolderDir(scan.dir);
       setImages(scan.images ?? []);
       setOverrides(new Map());
+      setPage(0);
       lastClickedRow.current = null;
       if ((scan.images ?? []).length === 0) {
-        addToast({ type: 'warning', message: 'Thư mục này không có ảnh nào Muse nhận.' });
+        addToast({ type: 'warning', message: 'Không tìm thấy ảnh nào Muse nhận.' });
       }
     } catch (cause) {
-      addToast({ type: 'error', message: cause instanceof Error ? cause.message : String(cause) });
+      if (scanRequest.current === id) {
+        addToast({
+          type: 'error',
+          message: cause instanceof Error ? cause.message : String(cause),
+        });
+      }
     } finally {
-      setPicking(false);
+      if (scanRequest.current === id) {
+        scanRequest.current = null;
+        setPicking(false);
+      }
     }
+  };
+
+  const closeDialog = () => {
+    if (importing) return;
+    cancelScan();
+    onClose();
   };
 
   const toggleRow = (index: number, shiftKey: boolean) => {
@@ -188,15 +275,26 @@ export function BatchImportAssetsDialog({
     try {
       const items = actionableRows.map((row) =>
         MuseAssetBatchItem.createFrom({
-          sourcePath: row.image.path,
-          tag: row.tag,
+          sourcePath: row.image.path || undefined,
+          sourceUrl: row.image.localUrl || undefined,
+          project: row.project,
+          type: row.type,
+          tag: row.resolvedTag || row.tag,
           name: row.name,
           role: row.role,
           lock: row.lock,
+          angle: row.angle,
+          variant: row.variant,
+          state: row.state,
+          version: row.version,
+          primary: row.primary,
+          rejected: row.rejected,
         }),
       );
       const res = unwrap(
-        await api.importMuseAssetBatch(MuseAssetBatchRequest.createFrom({ items, conflict })),
+        await api.importMuseAssetBatch(
+          MuseAssetBatchRequest.createFrom({ items, conflict, mergeByAlias }),
+        ),
       );
       await onImported();
       addToast({
@@ -213,57 +311,77 @@ export function BatchImportAssetsDialog({
 
   return (
     <Modal
-      title="Thêm nhanh tư liệu từ thư mục"
-      subtitle="Ảnh nằm chung 1 thư mục (tự xếp thứ tự như Windows Explorer) khớp từ trên xuống với 3 danh sách .txt"
+      title="Nhập hàng loạt vào Kho Tư liệu"
+      subtitle="Chọn thư mục hoặc nhiều ảnh; app tự nhận quy ước tên (hoặc dán .txt / gán nhanh) rồi tự chuẩn hoá tên khi lưu vào Kho"
       className="muse-batch-dialog"
-      onClose={onClose}
+      onClose={closeDialog}
       footer={
         <div className="muse-batch-footer">
           <span className="muse-batch-summary">
             {images.length === 0
-              ? 'Chọn thư mục ảnh để bắt đầu'
+              ? 'Chọn thư mục hoặc nhiều ảnh để bắt đầu'
               : `Sẵn sàng nhập ${actionableRows.length}/${images.length} ảnh${
                   skippedCount > 0 ? ` · bỏ qua ${skippedCount} trùng` : ''
                 }${errorCount > 0 ? ` · ${errorCount} lỗi` : ''}`}
           </span>
           <div className="muse-dialog-actions">
-            <Button onClick={onClose} disabled={importing}>
+            <Button onClick={closeDialog} disabled={importing}>
               Huỷ
             </Button>
             <Button
               variant="primary"
-              disabled={importing || actionableRows.length === 0}
+              disabled={picking || importing || actionableRows.length === 0}
               onClick={() => void submit()}
             >
-              {importing ? 'Đang nhập…' : `Nhập ${actionableRows.length} tư liệu`}
+              {importing ? 'Đang nhập…' : `Nhập ${actionableRows.length} ảnh vào Kho`}
             </Button>
           </div>
         </div>
       }
     >
       <div className="muse-batch-body">
-        <div className="muse-batch-folder-row">
-          <div className="batch-folder-control">
-            <output className={folderDir ? undefined : 'is-empty'} title={folderDir}>
-              {folderDir || 'Chưa chọn thư mục ảnh tư liệu'}
-            </output>
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              disabled={picking || importing}
-              onClick={() => void pickFolder()}
-            >
-              <Icon icon={FolderOpen} size="sm" />
-              <span>{picking ? 'Đang quét…' : 'Chọn thư mục…'}</span>
-            </Button>
+        {!initialMediaSources?.length && (
+          <div className="muse-batch-folder-row">
+            <div className="batch-folder-control">
+              <output className={folderDir ? undefined : 'is-empty'} title={folderDir}>
+                {folderDir || 'Chưa chọn thư mục hoặc ảnh bên ngoài'}
+              </output>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                disabled={picking || importing}
+                onClick={() => void pickImages(true)}
+              >
+                <Icon icon={FolderOpen} size="sm" />
+                <span>{picking ? 'Đang quét…' : 'Chọn thư mục…'}</span>
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                disabled={picking || importing}
+                onClick={() => void pickImages(false)}
+              >
+                <Icon icon={Images} size="sm" />
+                <span>Chọn nhiều ảnh…</span>
+              </Button>
+            </div>
+            <div className="muse-batch-folder-meta">
+              <label className="muse-check">
+                <input
+                  type="checkbox"
+                  checked={recursive}
+                  onChange={(e) => setRecursive(e.target.checked)}
+                />
+                <span>Quét cả thư mục con (lọc theo dự án / góc)</span>
+              </label>
+              {images.length > 0 && (
+                <span className="studio-field-hint">Tìm thấy {images.length} ảnh.</span>
+              )}
+            </div>
           </div>
-          {images.length > 0 && (
-            <span className="studio-field-hint">
-              Tìm thấy {images.length} ảnh theo thứ tự tên tự nhiên (1, 2, …, 10).
-            </span>
-          )}
-        </div>
+        )}
 
         <div className="muse-batch-txt-grid">
           <TxtInputBox
@@ -273,11 +391,7 @@ export function BatchImportAssetsDialog({
             value={aliasText}
             placeholder={'lan\nhop | Hộp quà Tết\nCô gái áo đỏ'}
             hint="Mỗi dòng 1 tag hoặc `tag | Tên`. Trống = lấy theo tên file."
-            onChange={(next) => {
-              setAliasText(next);
-              clearOverrideField('tag');
-              clearOverrideField('name');
-            }}
+            onChange={(next) => setAliasText(next)}
           />
           <TxtInputBox
             id="batch-role"
@@ -285,11 +399,8 @@ export function BatchImportAssetsDialog({
             count={parsedRoles.length}
             value={roleText}
             placeholder={'nhân vật\nsản phẩm\nkhuôn mặt'}
-            hint="Vd: nhân vật, mặt, sản phẩm, đạo cụ, bối cảnh, phong cách, storyboard."
-            onChange={(next) => {
-              setRoleText(next);
-              clearOverrideField('role');
-            }}
+            hint="Vd: nhân vật, mặt, thú, sản phẩm, đạo cụ, xe, tài liệu, bối cảnh, phong cách."
+            onChange={(next) => setRoleText(next)}
           />
           <TxtInputBox
             id="batch-lock"
@@ -303,10 +414,7 @@ export function BatchImportAssetsDialog({
                 aria-label="Kiểu tách prompt khoá"
                 className="batch-input batch-select muse-batch-mini-select"
                 value={lockMode}
-                onChange={(e) => {
-                  setLockMode(e.target.value as LockSplitMode);
-                  clearOverrideField('lock');
-                }}
+                onChange={(e) => setLockMode(e.target.value as LockSplitMode)}
               >
                 {LOCK_MODE_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>
@@ -315,16 +423,22 @@ export function BatchImportAssetsDialog({
                 ))}
               </select>
             }
-            onChange={(next) => {
-              setLockText(next);
-              clearOverrideField('lock');
-            }}
+            onChange={(next) => setLockText(next)}
           />
         </div>
 
         <div className="muse-batch-options">
           <label className="studio-field-group">
-            <span className="studio-field-label">Vai trò mặc định (khi dòng trống)</span>
+            <span className="studio-field-label">Dự án mặc định</span>
+            <input
+              className="batch-input"
+              value={defaultProject}
+              placeholder="Vd: OLIVA (để trống = _chung)"
+              onChange={(e) => setDefaultProject(e.target.value)}
+            />
+          </label>
+          <label className="studio-field-group">
+            <span className="studio-field-label">Vai trò mặc định</span>
             <select
               className="batch-input batch-select"
               value={defaultRole}
@@ -338,7 +452,7 @@ export function BatchImportAssetsDialog({
             </select>
           </label>
           <label className="studio-field-group">
-            <span className="studio-field-label">Khi trùng @tag</span>
+            <span className="studio-field-label">Khi trùng @tag (nếu không gộp)</span>
             <select
               className="batch-input batch-select"
               value={conflict}
@@ -353,139 +467,108 @@ export function BatchImportAssetsDialog({
           </label>
         </div>
 
+        <label className="muse-check">
+          <input
+            type="checkbox"
+            checked={mergeByAlias}
+            onChange={(e) => setMergeByAlias(e.target.checked)}
+          />
+          <span>
+            Gộp các ảnh cùng Dự án + @tag thành nhiều góc / biến thể của 1 tư liệu (khuyên dùng cho
+            bộ nhân vật / bối cảnh)
+          </span>
+        </label>
+
+        {includedRows.length > 0 && (
+          <div className="muse-batch-quick-bar">
+            <span className="studio-field-label">Gán nhanh {includedRows.length} ảnh đã chọn:</span>
+            <div className="muse-batch-quick-controls">
+              <input
+                className="batch-input muse-batch-quick-input"
+                placeholder="Dự án (OLIVA)"
+                value={bulkProject}
+                onChange={(e) => setBulkProject(e.target.value)}
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => applyToIncludedRows(() => ({ project: bulkProject }))}
+              >
+                Gán dự án
+              </Button>
+              <input
+                className="batch-input muse-batch-quick-input"
+                placeholder="Tag chung (jimena)"
+                value={bulkTag}
+                onChange={(e) => setBulkTag(e.target.value)}
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                disabled={!bulkTag.trim()}
+                onClick={() => applyToIncludedRows(() => ({ tag: bulkTag.trim() }))}
+              >
+                Gán @tag
+              </Button>
+              <input
+                className="batch-input muse-batch-quick-input"
+                placeholder="Góc (front/close)"
+                list="batch-angle-suggest"
+                value={bulkAngle}
+                onChange={(e) => setBulkAngle(e.target.value)}
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => applyToIncludedRows(() => ({ angle: bulkAngle }))}
+              >
+                Gán góc
+              </Button>
+            </div>
+          </div>
+        )}
+
+        <datalist id="batch-angle-suggest">
+          {ANGLE_SUGGESTIONS.map((s) => (
+            <option key={s} value={s} />
+          ))}
+        </datalist>
+        <datalist id="batch-variant-suggest">
+          {VARIANT_SUGGESTIONS.map((s) => (
+            <option key={s} value={s} />
+          ))}
+        </datalist>
+        <datalist id="batch-state-suggest">
+          {STATE_SUGGESTIONS.map((s) => (
+            <option key={s} value={s} />
+          ))}
+        </datalist>
+
         {warnings.length > 0 && (
           <div className="muse-alert muse-alert-warning" role="status">
             <span>{warnings.join(' ')}</span>
           </div>
         )}
 
-        {rows.length > 0 && (
-          <div className="muse-batch-table-wrap">
-            <table className="muse-batch-table">
-              <thead>
-                <tr>
-                  <th className="col-check">
-                    <input
-                      type="checkbox"
-                      aria-label="Chọn tất cả ảnh"
-                      checked={allSelectableIncluded}
-                      disabled={selectableRows.length === 0}
-                      onChange={toggleAllRows}
-                    />
-                  </th>
-                  <th className="col-num">#</th>
-                  <th className="col-img">Ảnh</th>
-                  <th className="col-tag">Tag</th>
-                  <th className="col-name">Tên (alias)</th>
-                  <th className="col-role">Vai trò</th>
-                  <th className="col-lock">Prompt khoá</th>
-                  <th className="col-status">Trạng thái</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr
-                    key={row.image.path}
-                    className={`muse-batch-row is-${row.status}${row.excluded ? ' is-excluded' : ''}`}
-                  >
-                    <td className="col-check">
-                      <input
-                        type="checkbox"
-                        aria-label={`Chọn ${row.image.fileName}`}
-                        checked={!row.excluded}
-                        disabled={Boolean(row.image.error)}
-                        onMouseDown={(e) => {
-                          shiftHeld.current = e.shiftKey;
-                        }}
-                        onKeyDown={(e) => {
-                          shiftHeld.current = e.shiftKey;
-                        }}
-                        onChange={() => {
-                          const shift = shiftHeld.current;
-                          shiftHeld.current = false;
-                          toggleRow(row.index, shift);
-                        }}
-                      />
-                    </td>
-                    <td className="col-num">{row.index + 1}</td>
-                    <td className="col-img">
-                      <div className="muse-batch-file" title={row.image.fileName}>
-                        {row.image.previewUrl ? (
-                          <img src={row.image.previewUrl} alt="" decoding="async" />
-                        ) : (
-                          <span className="muse-batch-thumb-fallback">
-                            <Icon icon={ImageIcon} size="sm" />
-                          </span>
-                        )}
-                        <span className="muse-batch-filename">{row.image.fileName}</span>
-                      </div>
-                    </td>
-                    <td className="col-tag">
-                      <div className="muse-tag-input">
-                        <span>@</span>
-                        <input
-                          className="batch-input muse-batch-cell-input"
-                          value={row.tag}
-                          aria-label={`Tag dòng ${row.index + 1}`}
-                          onChange={(e) => patchOverride(row.index, { tag: e.target.value })}
-                        />
-                      </div>
-                    </td>
-                    <td className="col-name">
-                      <input
-                        className="batch-input muse-batch-cell-input"
-                        value={row.name}
-                        placeholder="Tuỳ chọn"
-                        aria-label={`Tên dòng ${row.index + 1}`}
-                        onChange={(e) => patchOverride(row.index, { name: e.target.value })}
-                      />
-                    </td>
-                    <td className="col-role">
-                      <select
-                        className="batch-input batch-select muse-batch-cell-input"
-                        value={row.role}
-                        aria-label={`Vai trò dòng ${row.index + 1}`}
-                        onChange={(e) =>
-                          patchOverride(row.index, { role: e.target.value as MuseRefRole })
-                        }
-                      >
-                        {roleOrder.map((r) => (
-                          <option key={r} value={r}>
-                            {roles[r].label}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="col-lock">
-                      <input
-                        className="batch-input muse-batch-cell-input"
-                        value={row.lock}
-                        placeholder="Không khoá"
-                        aria-label={`Khoá dòng ${row.index + 1}`}
-                        onChange={(e) => patchOverride(row.index, { lock: e.target.value })}
-                      />
-                    </td>
-                    <td className="col-status">
-                      <span
-                        className={`muse-batch-badge is-${row.status}`}
-                        title={row.note ?? STATUS_LABELS[row.status]}
-                      >
-                        {row.note && row.status === 'rename'
-                          ? `→ @${row.resolvedTag}`
-                          : STATUS_LABELS[row.status]}
-                      </span>
-                      {row.note && row.status !== 'rename' && (
-                        <span className="muse-batch-note" title={row.note}>
-                          {row.note}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+        {picking && (
+          <Button size="sm" variant="secondary" onClick={cancelScan}>
+            Huỷ quét ảnh
+          </Button>
         )}
+
+        <BatchImportTable
+          rows={rows}
+          page={page}
+          setPage={setPage}
+          selectableCount={selectableRows.length}
+          allSelectableIncluded={allSelectableIncluded}
+          toggleRow={toggleRow}
+          toggleAllRows={toggleAllRows}
+          patchOverride={patchOverride}
+        />
       </div>
     </Modal>
   );
@@ -586,7 +669,7 @@ function TxtInputBox({
       <textarea
         id={id}
         className="batch-input batch-textarea"
-        rows={4}
+        rows={3}
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}

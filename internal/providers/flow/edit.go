@@ -155,15 +155,15 @@ func (s *Provider) editCandidates(ctx context.Context, accounts []session.Stored
 
 // readyEditAccount reserves an edit's credits on one of the candidates and
 // syncs its session, skipping accounts that signed out of Google.
-func (s *Provider) readyEditAccount(ctx context.Context, candidates []videoAccountCandidate) (*session.StoredAccount, func(), error) {
+func (s *Provider) readyEditAccount(ctx context.Context, candidates []videoAccountCandidate) (*session.StoredAccount, *accountLease, func(), error) {
 	if len(candidates) == 0 {
-		return nil, nil, errors.New("không có tài khoản nào dùng được model chỉnh sửa video")
+		return nil, nil, nil, errors.New("không có tài khoản nào dùng được model chỉnh sửa video")
 	}
-	_, synced, _, release, err := readyCandidate(ctx, s, candidates, candidateAccount, s.acquireVideoCandidate)
+	_, synced, lease, release, err := readyCandidate(ctx, s, candidates, candidateAccount, s.acquireVideoCandidate)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return &synced, release, nil
+	return &synced, lease, release, nil
 }
 
 // editAspect maps a video's size to the aspect Flow sends for it. A video of
@@ -263,7 +263,7 @@ func (s *Provider) UploadSourceVideo(ctx context.Context, localURL string) model
 	if err != nil {
 		return models.ErrorResponse[UploadedSourceVideo]("Không thể tải video lên Flow: "+err.Error(), models.CodeUnavailable)
 	}
-	acc, release, err := s.readyEditAccount(ctx, s.editCandidates(ctx, accounts))
+	acc, _, release, err := s.readyEditAccount(ctx, s.editCandidates(ctx, accounts))
 	if err != nil {
 		return models.ErrorResponse[UploadedSourceVideo]("Không thể tải video lên Flow: "+err.Error(), models.CodeUnavailable)
 	}
@@ -312,10 +312,17 @@ func (s *Provider) EditVideos(ctx context.Context, req EditVideoRequest) models.
 	if req.RequestID == "" {
 		req.RequestID = uuid.NewString()
 	}
+	req.RequestID = strings.ToLower(strings.TrimSpace(req.RequestID))
 	if _, err := uuid.Parse(req.RequestID); err != nil {
 		return models.ErrorResponse[[]GeneratedVideoItem]("Mã yêu cầu không hợp lệ.", models.CodeInvalidArgument)
 	}
-	jobPath, _ := s.statePath("jobs", req.RequestID)
+	if s.journalQuarantined("jobs", req.RequestID) {
+		return models.ErrorResponse[[]GeneratedVideoItem]("Bản ghi chỉnh sửa của yêu cầu này bị hỏng và đã được cất riêng; không tự gửi lại để tránh trừ credits lần hai.", models.CodeInternal)
+	}
+	jobPath, err := s.statePath("jobs", req.RequestID)
+	if err != nil {
+		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeInvalidArgument)
+	}
 	if _, err := os.Stat(jobPath); err == nil {
 		var saved editJob
 		if err := s.readState("jobs", req.RequestID, &saved); err != nil {
@@ -332,8 +339,18 @@ func (s *Provider) EditVideos(ctx context.Context, req EditVideoRequest) models.
 	if !ok {
 		return models.ErrorResponse[[]GeneratedVideoItem]("Yêu cầu đang được xử lý.", models.CodeUnavailable)
 	}
-	defer unlock()
-	// Recheck after locking: a completed concurrent submission must not be repeated.
+	unlocked := false
+	releaseJobLock := func() {
+		if !unlocked {
+			unlocked = true
+			unlock()
+		}
+	}
+	defer releaseJobLock()
+	// Recheck after locking: a concurrent submission must not be repeated.
+	if s.journalQuarantined("jobs", req.RequestID) {
+		return models.ErrorResponse[[]GeneratedVideoItem]("Bản ghi chỉnh sửa của yêu cầu này bị hỏng và đã được cất riêng; không tự gửi lại để tránh trừ credits lần hai.", models.CodeInternal)
+	}
 	if _, err := os.Stat(jobPath); err == nil {
 		var job editJob
 		if err := s.readState("jobs", req.RequestID, &job); err != nil {
@@ -342,7 +359,11 @@ func (s *Provider) EditVideos(ctx context.Context, req EditVideoRequest) models.
 		if !sameEditRequest(job.Request, req) {
 			return models.ErrorResponse[[]GeneratedVideoItem]("Mã yêu cầu đã được dùng cho nội dung khác.", models.CodeInvalidArgument)
 		}
-		return models.SuccessResponse(job.items())
+		if job.Complete {
+			return models.SuccessResponse(job.items())
+		}
+		releaseJobLock()
+		return s.ResumeVideoEdit(ctx, req.RequestID)
 	}
 	record, err := s.loadSource(req)
 	if err != nil {
@@ -358,7 +379,8 @@ func (s *Provider) EditVideos(ctx context.Context, req EditVideoRequest) models.
 		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeInvalidArgument)
 	}
 	// Reserve the edit's credits up front, so parallel video work cannot spend
-	// them first; the exact cost is recorded once Flow accepts the edit.
+	// them first; commit the lease once Flow accepts the edit and refresh live
+	// credits after release() clears videoReserved.
 	accounts, err := s.GetValidConnectedAccounts()
 	if err != nil {
 		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeUnavailable)
@@ -369,10 +391,16 @@ func (s *Provider) EditVideos(ctx context.Context, req EditVideoRequest) models.
 			return models.ErrorResponse[[]GeneratedVideoItem]("Tài khoản sở hữu nguồn/job không còn kết nối. Hãy kết nối lại tài khoản đó.", models.CodeUnavailable)
 		}
 	}
-	acc, release, err := s.readyEditAccount(ctx, s.editCandidates(ctx, accounts))
+	acc, lease, release, err := s.readyEditAccount(ctx, s.editCandidates(ctx, accounts))
 	if err != nil {
 		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeUnavailable)
 	}
+	calledLive := false
+	defer func() {
+		if calledLive && s.refreshLiveCredits != nil {
+			s.refreshLiveCredits(ctx, acc.ID)
+		}
+	}()
 	defer release()
 
 	families, defaultID, err := s.videoFamiliesFor(ctx, *acc)
@@ -394,10 +422,9 @@ func (s *Provider) EditVideos(ctx context.Context, req EditVideoRequest) models.
 	}
 	family := families[slices.IndexFunc(families, func(f videoFamily) bool { return f.id == req.ModelID })]
 
+	req.onAccepted = lease.commitVideoSpend
+	calledLive = true
 	videos, err := s.editLiveVideos(ctx, *acc, req, source, family)
-	if s.refreshLiveCredits != nil {
-		s.refreshLiveCredits(ctx, acc.ID)
-	}
 	if err != nil {
 		s.forgetProject(acc.ID)
 		return models.ErrorResponse[[]GeneratedVideoItem](
@@ -405,6 +432,7 @@ func (s *Provider) EditVideos(ctx context.Context, req EditVideoRequest) models.
 			models.CodeUnavailable,
 		)
 	}
+	lease.commitVideoSpend()
 	for i := range videos {
 		videos[i].ModelName = model.Name
 	}
@@ -639,8 +667,12 @@ func (s *Provider) editVideosFromAccount(ctx context.Context, acc session.Stored
 	if err != nil {
 		return nil, fmt.Errorf("không đóng gói được payload chỉnh sửa video: %w", err)
 	}
-	if cost, ok := usage.creditCost(accountTier(acc)); ok {
-		req.onAccepted = func() { s.recordVideoSpend(acc, cost) }
+	// If EditVideos already bound lease.commitVideoSpend to req.onAccepted, keep
+	// it so reserved credits are converted instead of double-counted.
+	if req.onAccepted == nil {
+		if cost, ok := usage.creditCost(accountTier(acc)); ok {
+			req.onAccepted = func() { s.recordVideoSpend(acc, cost) }
+		}
 	}
 	quality := ""
 	for name, code := range FlowVideoResolution {

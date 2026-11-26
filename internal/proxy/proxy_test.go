@@ -1,13 +1,18 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -51,11 +56,19 @@ func TestParse(t *testing.T) {
 		},
 		{
 			raw:      "shoplike: sl-key-789",
-			wantType: TypeRotating, wantProv: "shoplike", wantKey: "shoplike: sl-key-789",
+			wantType: TypeRotating, wantProv: "shoplike", wantKey: "sl-key-789",
 		},
 		{
-			raw:      "https://proxyxoay.shop/api/get.php?key=xyz",
-			wantType: TypeRotating, wantProv: "proxyvn",
+			raw:      "https://proxyxoay.shop/api/get.php?key=xyz&nhamang=viettel",
+			wantType: TypeRotating, wantProv: "proxyvn", wantKey: "xyz",
+		},
+		{
+			raw:      "https://proxy.shoplike.vn/Api/getCurrentProxy?access_token=sl-token-99",
+			wantType: TypeRotating, wantProv: "shoplike", wantKey: "sl-token-99",
+		},
+		{
+			raw:      "https://api.tmproxy.com/api/proxy/get-current-proxy?api_key=tm-token-88",
+			wantType: TypeRotating, wantProv: "tmproxy", wantKey: "tm-token-88",
 		},
 	}
 
@@ -82,6 +95,52 @@ func TestParse(t *testing.T) {
 		if tc.wantPass != "" && p.Pass != tc.wantPass {
 			t.Errorf("Parse(%q).Pass = %v, want %v", tc.raw, p.Pass, tc.wantPass)
 		}
+		if tc.wantKey != "" && p.Key != tc.wantKey {
+			t.Errorf("Parse(%q).Key = %q, want %q", tc.raw, p.Key, tc.wantKey)
+		}
+	}
+}
+
+func TestRotatingProviderURLUsesExtractedKeyAndURL(t *testing.T) {
+	// Shoplike URL extracts access_token so getCurrentProxy/getNewProxy receive the real key.
+	var gotPath, gotToken string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotToken = r.URL.Query().Get("access_token")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"status":"success","data":{"proxy":"10.20.30.40:8080"}}`)
+	}))
+	defer srv.Close()
+	oldShoplike := shoplikeAPI
+	shoplikeAPI = srv.URL + "/Api/"
+	t.Cleanup(func() { shoplikeAPI = oldShoplike })
+
+	p := Parse("https://proxy.shoplike.vn/Api/getCurrentProxy?access_token=secret-sl-token")
+	res := fetchRotating(context.Background(), p, true, 5*time.Second)
+	if !res.OK || res.IP != "10.20.30.40" || res.Port != 8080 {
+		t.Fatalf("shoplike URL fetch failed: %+v", res)
+	}
+	if gotPath != "/Api/getNewProxy" || gotToken != "secret-sl-token" {
+		t.Fatalf("shoplike request = (%q, %q), want (/Api/getNewProxy, secret-sl-token)", gotPath, gotToken)
+	}
+
+	// proxyvn URL preserves custom endpoint and query parameters (and keeps key redacted on error).
+	var gotProxyVNQuery string
+	pvnSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotProxyVNQuery = r.URL.RawQuery
+		_, _ = io.WriteString(w, `{"status":100,"proxyhttp":"20.30.40.50:9090"}`)
+	}))
+	defer pvnSrv.Close()
+	pvn := Parse(pvnSrv.URL + "/proxyxoay/api/get.php?key=pvn-secret&nhamang=viettel")
+	if pvn == nil || pvn.Provider != "proxyvn" || pvn.Key != "pvn-secret" {
+		t.Fatalf("unexpected proxyvn parse: %+v", pvn)
+	}
+	pvnRes := fetchRotating(context.Background(), pvn, false, 5*time.Second)
+	if !pvnRes.OK || pvnRes.IP != "20.30.40.50" || pvnRes.Port != 9090 {
+		t.Fatalf("proxyvn URL fetch failed: %+v", pvnRes)
+	}
+	if gotProxyVNQuery != "key=pvn-secret&nhamang=viettel" {
+		t.Fatalf("proxyvn query = %q, want original query preserved", gotProxyVNQuery)
 	}
 }
 
@@ -157,16 +216,16 @@ func TestSecretsAreRedacted(t *testing.T) {
 }
 
 // A signed-in account waits for its pinned line instead of moving to another
-// IP while that line is dead; it moves only once the line leaves the list.
-func TestKeptPinIsNotMovedWhileDead(t *testing.T) {
+// IP while that line is dead or after it leaves the list.
+func TestKeptPinIsNotMovedWhileDeadOrRemoved(t *testing.T) {
 	now := time.Now()
 	dead := map[string]time.Time{"1.2.3.4:8080": now.Add(time.Minute)}
 	a := Assignment{Account: "a", Name: "A", Auto: "1.2.3.4:8080", Keep: true}
 	if p, _, err := pick(a, nil, "1.2.3.4:8080\n2.3.4.5:8080", dead, now); err == nil || p != nil {
 		t.Fatalf("kept pin moved: %v %v", p, err)
 	}
-	if _, line, err := pick(a, nil, "2.3.4.5:8080", dead, now); err != nil || line != "2.3.4.5:8080" {
-		t.Fatalf("a removed pin must be replaced: %v %v", line, err)
+	if p, _, err := pick(a, nil, "2.3.4.5:8080", dead, now); err == nil || p != nil {
+		t.Fatalf("a removed pin must require an explicit assignment: %v %v", p, err)
 	}
 	a.Keep = false
 	if _, line, err := pick(a, nil, "1.2.3.4:8080\n2.3.4.5:8080", dead, now); err != nil || line != "2.3.4.5:8080" {
@@ -476,5 +535,83 @@ func TestUsableEachMatchesUsable(t *testing.T) {
 	}
 	if len(m.UsableEach(nil, as)) != 0 {
 		t.Fatal("no accounts, no answers")
+	}
+}
+
+func TestBridgePreservesCoalescedConnectPayloadAndHalfCloseResponse(t *testing.T) {
+	// Upstream mock proxy implementing HTTP CONNECT tunnel that echoes request bytes after EOF.
+	upstreamLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstreamLn.Close()
+	go func() {
+		for {
+			c, err := upstreamLn.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				r := bufio.NewReader(conn)
+				req, err := http.ReadRequest(r)
+				if err != nil || req.Method != http.MethodConnect {
+					return
+				}
+				_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n")
+				body, _ := io.ReadAll(r)
+				time.Sleep(40 * time.Millisecond)
+				_, _ = conn.Write(append([]byte("ECHO:"), body...))
+			}(c)
+		}
+	}()
+
+	uHost, uPort, _ := net.SplitHostPort(upstreamLn.Addr().String())
+	portNum, err := strconv.Atoi(uPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bm := newBridges(func() time.Duration { return 3 * time.Second })
+	t.Cleanup(bm.Close)
+	bridgePort, err := bm.GetBridge(&Parsed{Scheme: "http", Host: uHost, Port: portNum})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clientConn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", bridgePort), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientConn.Close()
+	_ = clientConn.SetDeadline(time.Now().Add(3 * time.Second))
+
+	// Coalesce CONNECT + early payload in the same buffer, then half-close write side.
+	_, err = io.WriteString(clientConn, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\nCOALESCED_HELLO")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tc, ok := clientConn.(*net.TCPConn); ok {
+		_ = tc.CloseWrite()
+	}
+	rawResp, err := io.ReadAll(clientConn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := string(rawResp)
+	if !strings.Contains(resp, "200 Connection Established") || !strings.Contains(resp, "ECHO:COALESCED_HELLO") {
+		t.Fatalf("bridge lost coalesced payload or half-closed response: %q", resp)
+	}
+}
+
+func TestCheckCustomURLControlCharReturnsErrorInsteadOfPanic(t *testing.T) {
+	p := &Parsed{
+		Type:     TypeRotating,
+		Provider: "custom_url",
+		URL:      "http://127.0.0.1:1/bad\x7fpath",
+		Raw:      "custom_url|bad",
+	}
+	res := fetchRotatingRaw(context.Background(), p, false, 2*time.Second)
+	if res.OK || res.Status != StatusDead || !strings.Contains(res.Message, "URL") {
+		t.Fatalf("expected invalid URL dead CheckResult without panic, got %+v", res)
 	}
 }

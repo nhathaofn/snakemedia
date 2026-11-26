@@ -2,13 +2,15 @@ package media
 
 import (
 	"bytes"
-	"encoding/base64"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"image"
 	"image/jpeg"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	xdraw "golang.org/x/image/draw"
@@ -57,7 +59,34 @@ func (s *Store) serveThumb(w http.ResponseWriter, r *http.Request, name string) 
 		}
 	}
 	w.Header().Set("Content-Type", "image/jpeg")
-	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.Header().Set("Cache-Control", "private, no-cache")
+	http.ServeFile(w, r, thumb)
+	return true
+}
+
+func (s *Store) serveVaultThumb(w http.ResponseWriter, r *http.Request, relPath, src string, info os.FileInfo) bool {
+	if !imageExts[strings.ToLower(filepath.Ext(src))] {
+		return false
+	}
+	s.mu.Lock()
+	cacheDir := s.vaultThumbDir
+	s.mu.Unlock()
+	if cacheDir == "" {
+		cacheDir = filepath.Join(s.dir, thumbDir, "vault")
+	}
+	sum := sha256.Sum256([]byte(relPath))
+	key := hex.EncodeToString(sum[:12])
+	thumb := filepath.Join(cacheDir, fmt.Sprintf("%s-%d-%d.jpg", key, info.Size(), info.ModTime().UnixNano()))
+	if _, err := os.Stat(thumb); err != nil {
+		if made, err := makeThumb(src, thumb); err != nil {
+			logger.Get().Debug("vault thumbnail not made, serving original", "file", relPath, "error", err)
+			return false
+		} else if !made {
+			return false
+		}
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "private, no-cache")
 	http.ServeFile(w, r, thumb)
 	return true
 }
@@ -88,21 +117,6 @@ func makeThumb(src, dst string) (bool, error) {
 	return true, utils.WriteFileAtomic(dst, data, 0o600)
 }
 
-// PreviewDataURL decodes src, scales its longest side down to maxSide when
-// larger, and returns a JPEG data URL for lightweight previews without storing
-// a copy in the media folder. Returns "" when the file cannot be decoded.
-func PreviewDataURL(src string, maxSide, quality int) string {
-	img, err := decodeImage(src)
-	if err != nil {
-		return ""
-	}
-	data, err := encodeScaledJPEG(img, maxSide, quality)
-	if err != nil {
-		return ""
-	}
-	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data)
-}
-
 func encodeScaledJPEG(img image.Image, maxSide, quality int) ([]byte, error) {
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()
@@ -115,10 +129,10 @@ func encodeScaledJPEG(img image.Image, maxSide, quality int) ([]byte, error) {
 	}
 	var src image.Image
 	if w == b.Dx() && h == b.Dy() {
-		src = opaque(img)
+		src = Opaque(img)
 	} else {
 		small := image.NewRGBA(image.Rect(0, 0, w, h))
-		xdraw.ApproxBiLinear.Scale(small, small.Bounds(), opaque(img), b, xdraw.Src, nil)
+		xdraw.ApproxBiLinear.Scale(small, small.Bounds(), Opaque(img), b, xdraw.Src, nil)
 		src = small
 	}
 	var buf bytes.Buffer
@@ -127,6 +141,8 @@ func encodeScaledJPEG(img image.Image, maxSide, quality int) ([]byte, error) {
 	}
 	return buf.Bytes(), nil
 }
+
+var thumbSuffixRe = regexp.MustCompile(`^-\d+-\d+\.jpg$`)
 
 // removeThumbs deletes cached thumbnails generated for name.
 func (s *Store) removeThumbs(name string) {
@@ -139,10 +155,10 @@ func (s *Store) removeThumbs(name string) {
 	if err != nil {
 		return
 	}
-	prefix := stem + "-"
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), prefix) {
-			_ = os.Remove(filepath.Join(dir, e.Name()))
+		en := e.Name()
+		if len(en) > len(stem) && strings.HasPrefix(en, stem) && thumbSuffixRe.MatchString(en[len(stem):]) {
+			_ = os.Remove(filepath.Join(dir, en))
 		}
 	}
 }

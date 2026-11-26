@@ -165,3 +165,29 @@ func TestUpdatesOffWithoutARepository(t *testing.T) {
 		t.Fatalf("Check = %v, want ErrDisabled", err)
 	}
 }
+
+func TestUpdaterClientTimeoutDowngradeGuardAndChecksumScannerErr(t *testing.T) {
+	u := New("Demo", "1.0.0", "owner/repo", t.TempDir())
+	if u.client == nil || u.client.Timeout <= 0 {
+		t.Fatalf("expected finite updater HTTP timeout, got %+v", u.client)
+	}
+	if u.client.CheckRedirect == nil {
+		t.Fatal("expected CheckRedirect on updater client")
+	}
+	httpsReq, _ := http.NewRequest(http.MethodGet, "https://github.com/a", nil)
+	httpReq, _ := http.NewRequest(http.MethodGet, "http://mirror.example.com/a", nil)
+	if err := u.client.CheckRedirect(httpReq, []*http.Request{httpsReq}); err == nil {
+		t.Fatal("expected CheckRedirect to refuse https -> http downgrade")
+	}
+
+	// Simulate an overlong checksum line exceeding bufio.MaxScanTokenSize so scanner.Scan fails with ErrTooLong.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("a", 70*1024)))
+	}))
+	defer srv.Close()
+	u.client = srv.Client()
+	_, err := u.checksum(context.Background(), srv.URL+"/sums", "Demo-1.2.0-windows-amd64-setup.exe")
+	if err == nil || strings.Contains(err.Error(), "không có dòng") {
+		t.Fatalf("expected underlying scanner error instead of missing-line error, got: %v", err)
+	}
+}

@@ -167,3 +167,28 @@ func TestFlowClientFetchMedia(t *testing.T) {
 		}
 	}
 }
+
+func TestFlowClientDoWithLimitExceedsDefaultMaxResponseBytes(t *testing.T) {
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	payload := `)]}'` + "\n" + strings.Repeat("A", (5<<20))
+	http.DefaultTransport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(payload)), Request: r}, nil
+	})
+	policy := config.DefaultFlowPagePolicy()
+	policy.MaxResponseBytes = 4 << 20
+	client, err := NewFlowClient(flowTestCredentials(), policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Do(context.Background(), "SPrCad", "[]", time.Second); err == nil {
+		t.Fatal("expected Do() to enforce 4 MiB default MaxResponseBytes")
+	}
+	body, err := client.DoWithLimit(context.Background(), "SPrCad", "[]", time.Second, 8<<20)
+	if err != nil {
+		t.Fatalf("DoWithLimit(8 MiB) failed on 5 MiB body: %v", err)
+	}
+	if len(body) != len(payload) {
+		t.Fatalf("DoWithLimit returned %d bytes, want %d", len(body), len(payload))
+	}
+}

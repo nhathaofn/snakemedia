@@ -1,9 +1,9 @@
 import { thumbUrl } from '../../../services';
 import { memo } from 'react';
-import { Play } from 'lucide-react';
+import { BookmarkPlus, Play } from 'lucide-react';
 import { QueuePrompt, QueueProgress } from '../../../components/batch';
 import type { QueueTone } from '../../../components/batch';
-import { Icon } from '../../../components/ui';
+import { Icon, IconAction, VideoThumbnail } from '../../../components/ui';
 import { MuseJobKind, MuseJobStatus } from '../../../types';
 import type { MuseJob } from '../../../types';
 import { isEnded, jobNote, jobStatusLabels } from '../shared/format';
@@ -18,6 +18,7 @@ interface JobRowProps {
   actions: JobActions;
   onToggle: (id: string) => void;
   onPreview: (job: MuseJob, url: string) => void;
+  onSaveToVault?: (job: MuseJob) => void;
 }
 
 /** References shown in the row; the rest are counted. */
@@ -40,10 +41,14 @@ export const JobRow = memo(function JobRow({
   actions,
   onToggle,
   onPreview,
+  onSaveToVault,
 }: JobRowProps) {
   const ended = isEnded(job);
   const busy = job.status === MuseJobStatus.Processing;
   const paused = job.status === MuseJobStatus.Queued && !!job.paused;
+  const waitingBoard = Boolean(job.after && (!job.frames || job.frames.length === 0));
+  const queuedOnHold =
+    job.status === MuseJobStatus.Queued && !!job.held && !paused && !waitingBoard;
   const shownRefs = job.references.slice(0, SHOWN_REFERENCES);
   const moreRefs = job.references.length - shownRefs.length;
   // What the job asked Muse for besides the prompt: "9:16 · 8s".
@@ -95,52 +100,61 @@ export const JobRow = memo(function JobRow({
 
       <div className="queue-table-results" role="cell">
         {job.files.length > 0 ? (
-          job.files.map((url) => (
-            <button
-              type="button"
-              key={url}
-              className="queue-result"
-              title="Xem lớn"
-              aria-label="Xem kết quả"
-              onClick={() => onPreview(job, url)}
-            >
-              {job.kind === MuseJobKind.Video ? (
-                <>
-                  <video className="queue-result-thumb" src={url} preload="metadata" muted />
-                  <span className="queue-result-play" aria-hidden="true">
-                    <Icon icon={Play} size="sm" />
-                  </span>
-                </>
-              ) : (
-                <img
-                  className="queue-result-thumb"
-                  src={thumbUrl(url)}
-                  alt=""
-                  loading="lazy"
-                  decoding="async"
-                />
-              )}
-            </button>
-          ))
+          <>
+            {job.files.map((url) => (
+              <button
+                type="button"
+                key={url}
+                className="queue-result"
+                title="Xem lớn"
+                aria-label="Xem kết quả"
+                onClick={() => onPreview(job, url)}
+              >
+                {job.kind === MuseJobKind.Video ? (
+                  <>
+                    <VideoThumbnail className="queue-result-thumb" src={url} />
+                    <span className="queue-result-play" aria-hidden="true">
+                      <Icon icon={Play} size="sm" />
+                    </span>
+                  </>
+                ) : (
+                  <img
+                    className="queue-result-thumb"
+                    src={thumbUrl(url)}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                  />
+                )}
+              </button>
+            ))}
+            {onSaveToVault && job.kind === MuseJobKind.Image && (
+              <IconAction
+                icon={BookmarkPlus}
+                label="Lưu vào Kho Tư liệu Muse"
+                onClick={() => onSaveToVault(job)}
+              />
+            )}
+          </>
         ) : (
           <span className="queue-muted">—</span>
         )}
       </div>
 
       <QueueProgress
-        tone={paused ? 'held' : tones[job.status]}
+        tone={paused || queuedOnHold ? 'held' : tones[job.status]}
         label={
           paused
             ? 'Tạm dừng'
-            : job.saveError
-              ? 'Đã tạo, lưu file thất bại'
-              : jobStatusLabels[job.status]
+            : queuedOnHold
+              ? 'Chờ bấm Chạy'
+              : job.saveError
+                ? 'Đã tạo, lưu file thất bại'
+                : jobStatusLabels[job.status]
         }
         title={[accountName, format].filter(Boolean).join(' · ') || undefined}
         detail={
-          busy || (job.status === MuseJobStatus.Queued && !job.held && job.step)
-            ? job.step
-            : format || undefined
+          busy || (job.status === MuseJobStatus.Queued && job.step) ? job.step : format || undefined
         }
         error={ended ? job.error : undefined}
         warning={[job.saveError, jobNote(job)].filter(Boolean).join(' ') || undefined}

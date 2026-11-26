@@ -30,11 +30,15 @@ export function mergeSnapshot(
   snapshot: readonly MuseJob[],
   touched: ReadonlyMap<string, MuseJob | null>,
 ): MuseJob[] {
-  let jobs = snapshot.slice();
-  touched.forEach((job, id) => {
-    jobs = job ? upsertJob(jobs, job) : jobs.filter((item) => item.id !== id);
-  });
-  return jobs;
+  if (touched.size === 0) return snapshot.slice();
+  const previous = new Map(snapshot.map((job) => [job.id, job]));
+  const added: MuseJob[] = [];
+  for (const [id, job] of touched) {
+    if (job === null) previous.delete(id);
+    else if (previous.has(id)) previous.set(id, job);
+    else added.push(job);
+  }
+  return [...added.reverse(), ...previous.values()];
 }
 
 /**

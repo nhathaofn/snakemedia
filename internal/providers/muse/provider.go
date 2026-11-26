@@ -35,14 +35,21 @@ const (
 	apiCapacityRetryCooldown = 5 * time.Second
 )
 
+type pendingSubmission struct {
+	hash  string
+	fresh []MuseJob
+	out   []MuseJob
+}
+
 // Provider owns the Muse job queue; accounts and their browsers belong to
 // the accounts service.
 type Provider struct {
-	submitMu sync.Mutex // serializes submission IDs and batch numbering
-	saveMu   sync.Mutex // serializes output retries with collection
-	assetMu  sync.Mutex // serializes asset tag uniqueness and bulk changes
-	cfg      *config.Manager
-	media    *media.Store
+	submitMu          sync.Mutex // serializes submission IDs and batch numbering
+	failedSubmissions map[string]pendingSubmission
+	saveMu            sync.Mutex // serializes output retries with collection
+	assetMu           sync.Mutex // serializes asset tag uniqueness and bulk changes
+	cfg               *config.Manager
+	media             *media.Store
 	// tools finds ffprobe for videos whose header Go cannot read; nil in tests.
 	tools    *tools.Service
 	root     string // Muse's data folder
@@ -56,6 +63,8 @@ type Provider struct {
 	templates *jobs.Journal[MusePromptTemplate]
 	// defaultOutputDir is the batch folder until the user picks one.
 	defaultOutputDir string
+	// defaultVaultDir is the default AppData Asset Vault folder until the user chooses one.
+	defaultVaultDir string
 
 	// Seams for tests.
 	pageFor  func(context.Context, accounts.Record) (Page, error)
@@ -64,46 +73,36 @@ type Provider struct {
 	sleep    func(context.Context, time.Duration) error
 	gap      func(config.MuseConfig) time.Duration
 
-	mu       sync.Mutex
+	mu sync.Mutex
+	// vaultMu coordinates Vault directory migration (Lock) against concurrent
+	// job submission snapshots reading from the Vault (RLock).
+	// Lock order: vaultMu -> assetMu.
+	vaultMu  sync.RWMutex
 	emit     func(events.Event, any)
 	ctx      context.Context
 	stop     context.CancelFunc
 	running  map[string]string // job ID -> account ID
 	lastMode MuseJobMode       // last newly assigned screen; next mode gets a turn
-	// Cached muse2api worker capacity (guarded by mu).
+	// cleaning holds the accounts "Dọn đoạn chat phụ" is working on; they
+	// take no job meanwhile (cleanup.go).
+	cleaning       map[string]bool
+	cancels        map[string]context.CancelFunc
+	journalWarning string // moved-aside corrupt journal notice shown once
+
+	tabs     *tabPool
+	attCache *attachmentCache
+	slots    *accountSlots
+	acct     accountRuntime
+
+	// Cached muse2api worker capacity (guarded by mu). Do not alter API state unless requested.
 	apiEndpoint    string
 	apiCap         apiCapacity
 	apiCheckedAt   time.Time
 	apiAttemptedAt time.Time
 	apiChecking    bool
-	// cleaning holds the accounts "Dọn đoạn chat phụ" is working on; they
-	// take no job meanwhile (cleanup.go).
-	cleaning map[string]bool
-	cancels  map[string]context.CancelFunc
-	// sendSlots (one per account) lets one send at a time through, gap
-	// included; navs (one per account) guards its tab against navigation.
-	// journalWarning says the job journal could not be read on start and was
-	// moved aside, so the user checks jobs that may have been sent.
-	journalWarning     string
-	sendSlots          map[string]chan struct{}
-	downloadSlots      map[string]chan struct{}
-	imageDownloadSlots map[string]chan struct{}
-	quotaSlots         map[string]chan struct{}
-	loginSlots         map[string]chan struct{}
-	quotaPending       map[string]int
-	navs               map[string]*sync.RWMutex
-	tabs               *tabPool
-	verifiedPorts      map[string]verifiedSession
-	sessionEpoch       map[string]int64
-	lastRefresh        map[string]refreshOutcome
-	stateRefreshSeen   map[string]string
-	stateRefreshBusy   map[string]bool
-	accountBackoff     map[string]time.Time
-	quotaAttempt       map[string]time.Time
-	recycleBrowser     map[string]bool
-	attCache           *attachmentCache
-	wake               chan struct{}
-	wg                 sync.WaitGroup
+
+	wake chan struct{}
+	wg   sync.WaitGroup
 }
 
 // New prepares the provider over the Muse accounts of accts; Start loads the
@@ -113,40 +112,31 @@ func New(dataDir, outputDir string, cfg *config.Manager, store *media.Store, acc
 	root := filepath.Join(dataDir, "muse")
 	p := &Provider{
 		cfg: cfg, media: store, root: root, accounts: accts, defaultOutputDir: outputDir,
-		now:                time.Now,
-		sleep:              sleepContext,
-		gap:                sendGap,
-		emit:               func(events.Event, any) {},
-		running:            make(map[string]string),
-		cleaning:           make(map[string]bool),
-		cancels:            make(map[string]context.CancelFunc),
-		sendSlots:          make(map[string]chan struct{}),
-		downloadSlots:      make(map[string]chan struct{}),
-		imageDownloadSlots: make(map[string]chan struct{}),
-		quotaSlots:         make(map[string]chan struct{}),
-		loginSlots:         make(map[string]chan struct{}),
-		quotaPending:       make(map[string]int),
-		navs:               make(map[string]*sync.RWMutex),
-		tabs:               newTabPool(),
-		verifiedPorts:      make(map[string]verifiedSession),
-		sessionEpoch:       make(map[string]int64),
-		lastRefresh:        make(map[string]refreshOutcome),
-		stateRefreshSeen:   make(map[string]string),
-		stateRefreshBusy:   make(map[string]bool),
-		accountBackoff:     make(map[string]time.Time),
-		quotaAttempt:       make(map[string]time.Time),
-		recycleBrowser:     make(map[string]bool),
-		attCache:           newAttachmentCache(),
-		wake:               make(chan struct{}, 1),
+		defaultVaultDir: filepath.Join(root, "assets-vault"),
+		now:             time.Now,
+		sleep:           sleepContext,
+		gap:             sendGap,
+		emit:            func(events.Event, any) {},
+		running:         make(map[string]string),
+		cleaning:        make(map[string]bool),
+		cancels:         make(map[string]context.CancelFunc),
+		tabs:            newTabPool(),
+		attCache:        newAttachmentCache(),
+		slots:           newAccountSlots(),
+		acct:            newAccountRuntime(),
+		wake:            make(chan struct{}, 1),
 	}
 	p.tabs.navLock = p.tabNavLock
-	// The folders Muse saves results to are the app's own: the default, the
-	// one the batch form remembers, and those queued batches still save into.
+	p.tabs.routeLock = p.tabRouteLock
+	// The folders Muse saves results and vault assets to are the app's own:
+	// defaults, folders remembered in config, and queued batch folders.
 	store.AllowRoot(outputDir)
+	store.AllowRoot(p.defaultVaultDir)
+	store.SetVaultDir(p.vaultDir, p.vaultThumbDir())
 	// Muse makes its images as WebP; they are saved in the format the user picked.
 	store.ConvertImages("muse-", func() string { return string(p.cfg.Get().Muse.ImageFormat) })
 	store.AllowRootsFrom(func() []string {
-		dirs := []string{p.cfg.Get().Muse.OutputDir}
+		dirs := []string{p.cfg.Get().Muse.OutputDir, p.cfg.Get().Muse.AssetVaultDir}
 		if p.jobs == nil {
 			return dirs
 		}
@@ -203,6 +193,14 @@ func (p *Provider) Start(ctx context.Context, emit func(events.Event, any)) {
 	p.loadLibrary()
 	p.loadStudio()
 	for _, job := range p.jobs.list() {
+		if job.Status == MuseJobCancelled && job.Sending {
+			p.jobs.update(job.ID, func(j *MuseJob) {
+				j.Sending, j.PreSendTracked, j.PreSendSessions = false, false, nil
+				j.SendUnknown = true
+				j.Error = "Đã huỷ khi đang gửi (chưa rõ Muse đã nhận chưa)"
+			})
+			continue
+		}
 		if job.Status != MuseJobProcessing {
 			continue
 		}
@@ -288,8 +286,13 @@ func (p *Provider) loop() {
 	defer p.wg.Done()
 	timer := time.NewTimer(pumpInterval)
 	defer timer.Stop()
+	var nextMaintenance time.Time
 	for {
 		p.safePump()
+		if now := p.now(); !now.Before(nextMaintenance) {
+			p.maintainIdleTabs()
+			nextMaintenance = now.Add(pumpInterval)
+		}
 		if !timer.Stop() {
 			select {
 			case <-timer.C:
@@ -310,9 +313,9 @@ func (p *Provider) nextWakeDelay() time.Duration {
 	d := pumpInterval
 	now := p.now()
 	p.mu.Lock()
-	for id, until := range p.accountBackoff {
+	for id, until := range p.acct.backoff {
 		if !now.Before(until) {
-			delete(p.accountBackoff, id)
+			delete(p.acct.backoff, id)
 			p.mu.Unlock()
 			return 250 * time.Millisecond
 		}
@@ -322,7 +325,7 @@ func (p *Provider) nextWakeDelay() time.Duration {
 	}
 	p.mu.Unlock()
 	if p.jobs != nil {
-		for _, job := range p.jobs.list() {
+		for _, job := range p.jobs.listActive() {
 			if job.Held || (job.Status != MuseJobQueued && job.Status != MuseJobProcessing) || job.NextCheckAt == "" {
 				continue
 			}
@@ -356,49 +359,51 @@ func (p *Provider) trigger() {
 	}
 }
 
+func (p *Provider) maintainIdleTabs() {
+	defer logger.Recover("bảo trì tab Muse")
+	cfg := p.cfg.Get()
+	if p.ctx.Err() == nil && p.tabs != nil && p.tabs.hasExcess(cfg.Muse.ThreadsPerAccount) {
+		p.tabs.reconcileIdle(p.ctx, cfg.Muse.ThreadsPerAccount, cfg.Accounts)
+	}
+}
+
 func (p *Provider) pump() {
-	if p.accounts != nil {
-		p.accounts.ResumeExpired()
+	cfg := p.cfg.Get().Muse
+	if !cfg.UseAPI && !hasPendingWorkForRefresh(p.jobs.listActive()) {
+		return
 	}
 	records, err := p.accounts.Records(accounts.ProviderMuse)
 	if err != nil {
 		return
 	}
 	views := make([]MuseAccount, len(records))
+	routeErrors := p.accounts.RouteErrors(records)
 	for i, rec := range records {
 		views[i] = museView(rec)
-		if err := p.accounts.RouteError(rec); err != nil {
+		if err := routeErrors[i]; err != nil {
 			views[i].NoRoute = err.Error()
 		}
 	}
 	now := p.now()
-	fullCfg := p.cfg.Get()
-	cfg := fullCfg.Muse
-	p.mu.Lock()
-	pumpCtx := p.ctx
-	p.mu.Unlock()
-	if pumpCtx != nil && pumpCtx.Err() == nil && p.tabs != nil && p.tabs.hasExcess(cfg.ThreadsPerAccount) {
-		p.tabs.reconcileIdle(pumpCtx, cfg.ThreadsPerAccount, fullCfg.Accounts)
-	}
 	apiCap := p.apiCapacityFor(cfg, now)
 	p.mu.Lock()
 	if p.ctx == nil || p.ctx.Err() != nil {
 		p.mu.Unlock()
 		return
 	}
-	// Listed under the lock: a run ends by saving its job and only then leaving
-	// running, so no ended job is seen here as still to run.
-	jobs := p.jobs.list()
+	// Listed from the active index under the lock: a run ends by saving its
+	// job and only then leaving running, so no ended job is seen here as still to run.
+	jobs := p.jobs.listActive()
 	started := make(map[string]bool)
 	free := slices.DeleteFunc(slices.Clone(views), func(v MuseAccount) bool {
 		if p.cleaning[v.ID] {
 			return true
 		}
-		if until, ok := p.accountBackoff[v.ID]; ok {
+		if until, ok := p.acct.backoff[v.ID]; ok {
 			if now.Before(until) {
 				return true
 			}
-			delete(p.accountBackoff, v.ID)
+			delete(p.acct.backoff, v.ID)
 		}
 		return false
 	})
@@ -550,13 +555,13 @@ func (p *Provider) claimQuotaAttempt(accountID string, cooldown time.Duration) b
 	now := p.now()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.quotaAttempt == nil {
-		p.quotaAttempt = make(map[string]time.Time)
+	if p.acct.quotaAttempt == nil {
+		p.acct.quotaAttempt = make(map[string]time.Time)
 	}
-	if last, ok := p.quotaAttempt[accountID]; ok && now.Sub(last) < cooldown {
+	if last, ok := p.acct.quotaAttempt[accountID]; ok && now.Sub(last) < cooldown {
 		return false
 	}
-	p.quotaAttempt[accountID] = now
+	p.acct.quotaAttempt[accountID] = now
 	return true
 }
 
@@ -566,10 +571,10 @@ func (p *Provider) recordQuotaAttempt(accountID string) {
 	}
 	now := p.now()
 	p.mu.Lock()
-	if p.quotaAttempt == nil {
-		p.quotaAttempt = make(map[string]time.Time)
+	if p.acct.quotaAttempt == nil {
+		p.acct.quotaAttempt = make(map[string]time.Time)
 	}
-	p.quotaAttempt[accountID] = now
+	p.acct.quotaAttempt[accountID] = now
 	p.mu.Unlock()
 }
 
@@ -578,10 +583,10 @@ func (p *Provider) markRecycleBrowser(accountID string) {
 		return
 	}
 	p.mu.Lock()
-	if p.recycleBrowser == nil {
-		p.recycleBrowser = make(map[string]bool)
+	if p.acct.recycleBrowser == nil {
+		p.acct.recycleBrowser = make(map[string]bool)
 	}
-	p.recycleBrowser[accountID] = true
+	p.acct.recycleBrowser[accountID] = true
 	p.mu.Unlock()
 }
 
@@ -590,17 +595,17 @@ func (p *Provider) clearRecycleBrowser(accountID string) {
 		return
 	}
 	p.mu.Lock()
-	delete(p.recycleBrowser, accountID)
+	delete(p.acct.recycleBrowser, accountID)
 	p.mu.Unlock()
 }
 
 func (p *Provider) takeRecycleBrowser(accountID string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if !p.recycleBrowser[accountID] {
+	if !p.acct.recycleBrowser[accountID] {
 		return false
 	}
-	delete(p.recycleBrowser, accountID)
+	delete(p.acct.recycleBrowser, accountID)
 	return true
 }
 
@@ -610,11 +615,11 @@ func (p *Provider) backoffAccount(accountID string, d time.Duration) {
 	}
 	until := p.now().Add(d)
 	p.mu.Lock()
-	if p.accountBackoff == nil {
-		p.accountBackoff = make(map[string]time.Time)
+	if p.acct.backoff == nil {
+		p.acct.backoff = make(map[string]time.Time)
 	}
-	if cur := p.accountBackoff[accountID]; until.After(cur) {
-		p.accountBackoff[accountID] = until
+	if cur := p.acct.backoff[accountID]; until.After(cur) {
+		p.acct.backoff[accountID] = until
 	}
 	p.mu.Unlock()
 }
@@ -630,9 +635,9 @@ func (p *Provider) backedOffAccountsSnapshot(now time.Time) (cleaning, backedOff
 			}
 		}
 	}
-	for id, until := range p.accountBackoff {
+	for id, until := range p.acct.backoff {
 		if !now.Before(until) {
-			delete(p.accountBackoff, id)
+			delete(p.acct.backoff, id)
 			continue
 		}
 		if backedOff == nil {
@@ -670,15 +675,27 @@ func (p *Provider) hasOtherUsableAccount(excludeID string, kind MuseJobKind, cfg
 	return false
 }
 
+func (p *Provider) ensureSlots() *accountSlots {
+	p.mu.Lock()
+	if p.slots == nil {
+		p.slots = newAccountSlots()
+	}
+	s := p.slots
+	p.mu.Unlock()
+	return s
+}
+
 // sendSlot waits for the account's single send slot; release frees it.
 func (p *Provider) sendSlot(ctx context.Context, accountID string) (release func(), err error) {
-	return p.accountSlot(ctx, accountID, p.sendSlots)
+	s := p.ensureSlots()
+	return s.acquireCap(ctx, &s.send, accountID, 1)
 }
 
 // downloadSlot keeps only one result Blob open per account, even when several
 // generations run together. Other accounts can still download in parallel.
 func (p *Provider) downloadSlot(ctx context.Context, accountID string) (func(), error) {
-	return p.accountSlotCap(ctx, accountID, &p.downloadSlots, 1)
+	s := p.ensureSlots()
+	return s.acquireCap(ctx, &s.download, accountID, 1)
 }
 
 const collectImageConcurrency = 3
@@ -686,52 +703,25 @@ const collectImageConcurrency = 3
 // imageDownloadSlot allows bounded concurrent small-image downloads on one
 // account (such as storyboard frames) while video jobs stay serialized by downloadSlot.
 func (p *Provider) imageDownloadSlot(ctx context.Context, accountID string) (func(), error) {
-	return p.accountSlotCap(ctx, accountID, &p.imageDownloadSlots, collectImageConcurrency)
+	s := p.ensureSlots()
+	return s.acquireCap(ctx, &s.imageDownload, accountID, collectImageConcurrency)
 }
 
-func (p *Provider) accountSlot(ctx context.Context, accountID string, slots map[string]chan struct{}) (release func(), err error) {
-	return p.accountSlotCap(ctx, accountID, &slots, 1)
-}
-
-func (p *Provider) accountSlotCap(ctx context.Context, accountID string, slotsPtr *map[string]chan struct{}, cap int) (release func(), err error) {
-	if cap <= 0 {
-		cap = 1
-	}
-	p.mu.Lock()
-	if *slotsPtr == nil {
-		*slotsPtr = make(map[string]chan struct{})
-	}
-	slots := *slotsPtr
-	slot := slots[accountID]
-	if slot == nil {
-		slot = make(chan struct{}, cap)
-		slots[accountID] = slot
-	}
-	p.mu.Unlock()
-	select {
-	case slot <- struct{}{}:
-		return func() { <-slot }, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+func (p *Provider) quotaSlot(ctx context.Context, accountID string) (func(), error) {
+	s := p.ensureSlots()
+	return s.acquireCap(ctx, &s.quota, accountID, 1)
 }
 
 // loginSlot serializes initial Chrome login checks per account so concurrent
 // threads on one fresh Chrome verify sign-in at most once.
 func (p *Provider) loginSlot(ctx context.Context, accountID string) (func(), error) {
-	return p.accountSlotCap(ctx, accountID, &p.loginSlots, 1)
+	s := p.ensureSlots()
+	return s.acquireCap(ctx, &s.login, accountID, 1)
 }
 
 // navLock is the account tab's navigation guard.
 func (p *Provider) navLock(key string) *sync.RWMutex {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	nav := p.navs[key]
-	if nav == nil {
-		nav = &sync.RWMutex{}
-		p.navs[key] = nav
-	}
-	return nav
+	return p.ensureSlots().nav(key)
 }
 
 func (p *Provider) tabNavLock(accountID, targetID string) *sync.RWMutex {
@@ -739,6 +729,18 @@ func (p *Provider) tabNavLock(accountID, targetID string) *sync.RWMutex {
 		return p.navLock(accountID + ":" + targetID)
 	}
 	return p.navLock(accountID)
+}
+
+// routeLock serializes route-mutating React/Next.js operations (Send/SendTo/Login/Home) per tab.
+func (p *Provider) routeLock(key string) *sync.Mutex {
+	return p.ensureSlots().route(key)
+}
+
+func (p *Provider) tabRouteLock(accountID, targetID string) *sync.Mutex {
+	if targetID != "" {
+		return p.routeLock(accountID + ":" + targetID)
+	}
+	return p.routeLock(accountID)
 }
 
 // errRunStopping refuses to queue a job again while its cancelled run is
@@ -886,7 +888,7 @@ func (p *Provider) closeIdleBrowserIfDone(accountID string) {
 	}
 	p.mu.Lock()
 	stopped := p.ctx == nil || p.ctx.Err() != nil
-	stillRunning := p.quotaPending[accountID] > 0
+	stillRunning := p.acct.quotaPending[accountID] != nil
 	for _, runningAcc := range p.running {
 		if runningAcc == accountID {
 			stillRunning = true
@@ -923,19 +925,19 @@ func (p *Provider) updateJob(id string, change func(*MuseJob)) (MuseJob, error) 
 // under the journal's lock and reports whether it changed the job, so it
 // re-checks the job's state itself. Each changed job is emitted as updateJob
 // would; on a failed write nothing is emitted, like a failed updateJob.
-func (p *Provider) updateJobs(ids []string, change func(*MuseJob) bool) []MuseJob {
+func (p *Provider) updateJobs(ids []string, change func(*MuseJob) bool) ([]MuseJob, error) {
 	if len(ids) == 0 {
-		return nil
+		return nil, nil
 	}
 	changed, err := p.jobs.updateMany(ids, change)
 	if err != nil {
 		logger.Get().Warn("cannot save muse jobs", "jobs", len(ids), "error", err)
-		return nil
+		return nil, err
 	}
 	for _, job := range changed {
 		p.emit(events.EventMuseJobUpdated, job)
 	}
-	return changed
+	return changed, nil
 }
 
 // updateAccount changes an account's shared fields and Muse data together,
@@ -961,14 +963,9 @@ func (p *Provider) dropBrowserState(accountID string) {
 	if p.tabs != nil {
 		p.tabs.dropAccount(accountID)
 	}
-	prefix := accountID + ":"
-	p.mu.Lock()
-	for k := range p.navs {
-		if k == accountID || strings.HasPrefix(k, prefix) {
-			delete(p.navs, k)
-		}
+	if p.slots != nil {
+		p.slots.dropAccount(accountID)
 	}
-	p.mu.Unlock()
 }
 
 func (p *Provider) accountBrowserClosed(rec accounts.Record) {
@@ -985,16 +982,10 @@ func (p *Provider) accountRemoved(rec accounts.Record) {
 		return
 	}
 	p.dropBrowserState(rec.ID)
-	p.clearRecycleBrowser(rec.ID)
 	p.mu.Lock()
-	delete(p.accountBackoff, rec.ID)
-	delete(p.quotaAttempt, rec.ID)
-	delete(p.sessionEpoch, rec.ID)
-	delete(p.lastRefresh, rec.ID)
-	delete(p.stateRefreshSeen, rec.ID)
-	delete(p.stateRefreshBusy, rec.ID)
+	p.acct.removeAccount(rec.ID)
 	p.mu.Unlock()
-	for _, job := range p.jobs.list() {
+	for _, job := range p.jobs.listActive() {
 		if job.Status == MuseJobProcessing && job.AccountID == rec.ID {
 			p.updateJob(job.ID, func(j *MuseJob) {
 				j.Status, j.Step, j.FinishedAt = MuseJobFailed, "", p.now().UTC().Format(time.RFC3339)
@@ -1017,6 +1008,7 @@ func (p *Provider) openPage(ctx context.Context, rec accounts.Record) (Page, err
 		callTimeout: time.Duration(cfg.Accounts.RequestTimeoutSeconds*4) * time.Second,
 		sendTimeout: time.Duration(cfg.Muse.SendTimeoutSeconds) * time.Second,
 		nav:         p.navLock(rec.ID),
+		routeMu:     p.routeLock(rec.ID),
 	}, nil
 }
 

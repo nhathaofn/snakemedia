@@ -204,7 +204,7 @@ func discoverRPCs(ctx context.Context, conn *websocket.Conn, build string, polic
 		}
 		// Fallback: evaluate fetch from browser page (serves directly from browser cache)
 		var text string
-		fetchExpr := fmt.Sprintf("(async()=>{const r=await fetch(%q);return await r.text();})()", source)
+		fetchExpr := fmt.Sprintf("(async()=>{const r=await fetch(%q);return JSON.stringify(await r.text());})()", source)
 		id := nextID
 		nextID++
 		if err := evaluate(ctx, conn, id, fetchExpr, &text); err == nil && len(text) > 0 {
@@ -340,6 +340,55 @@ func (r RPCRegistry) Has(methods ...string) bool {
 		}
 	}
 	return true
+}
+
+// Merge fills any RPC ID missing from r with the value from base, so a partial
+// discovery or account check never clobbers studio RPCs already known for the
+// same Flow build.
+func (r RPCRegistry) Merge(base RPCRegistry) RPCRegistry {
+	if r.VideoStatus == "" {
+		r.VideoStatus = base.VideoStatus
+	}
+	if r.Models == "" {
+		r.Models = base.Models
+	}
+	if r.Projects == "" {
+		r.Projects = base.Projects
+	}
+	if r.CreateProject == "" {
+		r.CreateProject = base.CreateProject
+	}
+	if r.ProjectContents == "" {
+		r.ProjectContents = base.ProjectContents
+	}
+	if r.Media == "" {
+		r.Media = base.Media
+	}
+	if r.UploadImage == "" {
+		r.UploadImage = base.UploadImage
+	}
+	if r.GenerateImages == "" {
+		r.GenerateImages = base.GenerateImages
+	}
+	if r.UpsampleImage == "" {
+		r.UpsampleImage = base.UpsampleImage
+	}
+	if r.GenerateVideoText == "" {
+		r.GenerateVideoText = base.GenerateVideoText
+	}
+	if r.GenerateVideoReferences == "" {
+		r.GenerateVideoReferences = base.GenerateVideoReferences
+	}
+	if r.EditVideo == "" {
+		r.EditVideo = base.EditVideo
+	}
+	if r.Credits == "" {
+		r.Credits = base.Credits
+	}
+	if r.Availability == "" {
+		r.Availability = base.Availability
+	}
+	return r
 }
 
 // DiscoverFlowRPCs reads descriptors from the account's currently loaded scripts.

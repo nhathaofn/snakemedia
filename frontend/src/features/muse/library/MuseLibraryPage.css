@@ -1,7 +1,13 @@
+.muse-lib-heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
 .muse-lib-layout {
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
+  gap: var(--space-6);
 }
 
 .muse-lib-toolbar {
@@ -9,93 +15,197 @@
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 1rem;
-  padding: 0.75rem 1rem;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
   background-color: var(--bg-elevated);
-  border-radius: 0.5rem;
-  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  border: var(--border-width) solid var(--border-color);
 }
 
 .muse-lib-filters {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: var(--space-3);
   flex-wrap: wrap;
+}
+
+.muse-lib-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 210px;
+  height: 32px;
+  padding: 0 var(--space-4);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-muted);
+}
+
+.muse-lib-search:focus-within {
+  border-color: var(--primary);
+  color: var(--text-primary);
+}
+
+.muse-lib-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--font-size-small);
+  outline: none;
+}
+
+.muse-lib-search-clear {
+  display: grid;
+  place-items: center;
+  padding: var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.muse-lib-search-clear:hover {
+  color: var(--text-primary);
+}
+
+.muse-lib-sort {
+  height: 32px;
+  padding: 0 var(--space-4);
+  font-size: var(--font-size-small);
 }
 
 .muse-lib-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(236px, 1fr));
+  gap: var(--space-6);
 }
 
 .muse-lib-item {
   position: relative;
   display: flex;
   flex-direction: column;
-  border-radius: 0.5rem;
+  border-radius: var(--radius-lg);
   background-color: var(--bg-secondary);
-  border: 1px solid var(--border-color);
+  border: var(--border-width) solid var(--border-color);
   overflow: hidden;
-  transition:
-    transform 0.15s ease,
-    border-color 0.15s ease;
-}
-
-.muse-lib-item {
   content-visibility: auto;
   contain-intrinsic-size: auto var(--muse-lib-item-placeholder-height);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .muse-lib-item:hover {
   border-color: var(--primary);
+  box-shadow: var(--shadow-md);
 }
 
 .muse-lib-preview-box {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 9;
-  background: var(--media-letterbox);
+  aspect-ratio: 16 / 10;
+  background: var(--surface-media);
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
 }
 
+.muse-lib-open {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.muse-lib-open:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
 .muse-lib-media {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+}
+
+.muse-lib-play {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-full);
+  background: var(--media-overlay);
+  color: var(--text-on-media);
+  pointer-events: none;
+  transition: background var(--transition-fast);
+}
+
+.muse-lib-open:hover .muse-lib-play {
+  background: var(--media-overlay-strong);
 }
 
 .muse-lib-badge {
   position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
+  top: var(--space-3);
+  left: var(--space-3);
+  z-index: 1;
   background: var(--media-overlay);
-  padding: 0.15rem 0.4rem;
-  border-radius: 0.25rem;
-  font-size: 0.7rem;
-  font-weight: 600;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
   color: var(--text-on-media);
+  pointer-events: none;
 }
 
 .muse-lib-meta {
-  padding: 0.75rem;
+  padding: var(--space-4) var(--space-5);
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: var(--space-3);
+  border-top: var(--border-width) solid var(--border-color);
 }
 
 .muse-lib-title {
-  font-size: 0.8125rem;
-  font-weight: 500;
-  white-space: nowrap;
+  display: -webkit-box;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.4;
+  color: var(--text-primary);
   overflow: hidden;
-  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.muse-lib-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.muse-lib-submeta {
+  font-size: var(--font-size-caption);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .muse-lib-actions {
   display: flex;
-  gap: 0.375rem;
+  align-items: center;
+  gap: var(--space-1);
 }

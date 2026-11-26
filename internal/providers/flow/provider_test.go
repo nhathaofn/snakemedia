@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"SnakeMedia/internal/models"
 	"SnakeMedia/internal/providers/flow/chrome"
@@ -63,6 +64,35 @@ func TestFlowServiceRequiresAccounts(t *testing.T) {
 	}
 	if res := service.GenerateImages(context.Background(), validGenerateRequest()); res.Success || res.Code != models.CodeUnavailable {
 		t.Fatalf("generation without accounts: %+v", res)
+	}
+}
+
+func TestGenerateImagesReadsChromeEvenWhenStoredCookiesExpired(t *testing.T) {
+	accounts := testAccountService(t)
+	acc := seedFlowAccount(t, accounts, "rotated@example.invalid", true)
+	accounts.mu.Lock()
+	for i := range accounts.list[0].Credentials.Cookies {
+		accounts.list[0].Credentials.Cookies[i].Expires = float64(time.Now().Add(-time.Hour).Unix())
+	}
+	accounts.mu.Unlock()
+	s := testFlowService(accounts)
+	s.fetchLiveModels = func(context.Context, session.StoredAccount) ([]FlowModel, error) {
+		return []FlowModel{{ID: "BELUGA", Name: "Test image model"}}, nil
+	}
+	syncs := 0
+	s.syncSession = func(_ context.Context, current session.StoredAccount) (session.StoredAccount, error) {
+		syncs++
+		current.Credentials.AtToken = "fresh-from-chrome"
+		return current, nil
+	}
+	s.generateLiveImages = func(_ context.Context, current session.StoredAccount, _ GenerateImageRequest) ([]GeneratedImageItem, error) {
+		if current.ID != acc.ID || current.Credentials.AtToken != "fresh-from-chrome" {
+			t.Fatal("generation used the stored session instead of Chrome's current session")
+		}
+		return []GeneratedImageItem{{ID: "result", LocalURL: "/flow-media/result.png"}}, nil
+	}
+	if res := s.GenerateImages(context.Background(), validGenerateRequest()); !res.Success || syncs != 1 {
+		t.Fatalf("generation did not recover after cookie rotation: %+v, syncs=%d", res, syncs)
 	}
 }
 
@@ -327,6 +357,8 @@ func TestModelsRetryOnceAfterStaleSession(t *testing.T) {
 	syncs := 0
 	service.syncSession = func(_ context.Context, acc session.StoredAccount) (session.StoredAccount, error) {
 		syncs++
+		acc.Credentials.AtToken = "new-csrf"
+		acc.Credentials.RPCs.Models = "newModels"
 		return acc, nil
 	}
 	original := http.DefaultTransport
@@ -337,7 +369,10 @@ func TestModelsRetryOnceAfterStaleSession(t *testing.T) {
 		if calls == 1 {
 			return &http.Response{StatusCode: http.StatusUnauthorized, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
 		}
-		return flowReply(r, RPCGetModels, `"`+strings.ReplaceAll(getModelsPayload, `"`, `\"`)+`"`), nil
+		if r.URL.Query().Get("rpcids") != "newModels" {
+			t.Error("read was retried with the old runtime method ID")
+		}
+		return flowReply(r, "newModels", `"`+strings.ReplaceAll(getModelsPayload, `"`, `\"`)+`"`), nil
 	})
 	res := service.GetImageModels(context.Background())
 	if !res.Success || len(res.Data) == 0 || syncs != 1 || calls != 2 {

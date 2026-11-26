@@ -16,5 +16,9 @@ func OpenFolder(dir string) error {
 	default:
 		cmd = exec.Command("xdg-open", dir)
 	}
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
 }

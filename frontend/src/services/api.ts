@@ -1,5 +1,5 @@
 import * as Backend from '../../wailsjs/go/main/App';
-import { ResponseCode } from '../types';
+import { MuseJobKind, ResponseCode } from '../types';
 import type {
   Account,
   AccountProvider,
@@ -26,17 +26,20 @@ import type {
   MediaDirectoryResult,
   MuseAPIStatus,
   MuseJob,
-  MuseJobKind,
   MuseJobMode,
   MuseJobRequest,
+  MuseJobsConfigRequest,
   MuseJobsFormatRequest,
   MuseLibraryItem,
+  MuseMediaAssetImportRequest,
   MuseCleanResult,
   MuseAsset,
   MuseAssetBatchRequest,
   MuseAssetBatchResult,
   MuseAssetFolderScan,
+  MuseAssetItemPatch,
   MusePromptCheck,
+  MusePromptPreview,
   MusePromptTemplate,
   MuseOptions,
   MuseReference,
@@ -128,6 +131,8 @@ export const api = {
   listTools: () => invoke<Tool[]>('ListTools', Backend.ListTools),
   getToolActivity: () => invoke<ToolActivity>('GetToolActivity', Backend.GetToolActivity),
   installTool: (id: string) => invoke<Tool>('InstallTool', () => Backend.InstallTool(id)),
+  pickToolPath: (program: string) =>
+    invoke<string>('PickToolPath', () => Backend.PickToolPath(program)),
   postponeTool: (id: string) => invoke<boolean>('PostponeTool', () => Backend.PostponeTool(id)),
   removeTool: (id: string) => invoke<boolean>('RemoveTool', () => Backend.RemoveTool(id)),
   getConfig: () => invoke<AppConfig>('GetConfig', Backend.GetConfig),
@@ -262,6 +267,8 @@ export const api = {
   runMuseJobs: (ids: string[]) => invoke<number>('RunMuseJobs', () => Backend.RunMuseJobs(ids)),
   updateMuseJobsFormat: (req: MuseJobsFormatRequest) =>
     invoke<number>('UpdateMuseJobsFormat', () => Backend.UpdateMuseJobsFormat(req)),
+  updateMuseJobsConfig: (req: MuseJobsConfigRequest) =>
+    invoke<number>('UpdateMuseJobsConfig', () => Backend.UpdateMuseJobsConfig(req)),
   holdMuseQueued: (kind: MuseJobKind, mode: MuseJobMode) =>
     invoke<number>('HoldMuseQueued', () => Backend.HoldMuseQueued(kind, mode)),
   retryMuseFailed: (kind: MuseJobKind, mode: MuseJobMode) =>
@@ -283,16 +290,46 @@ export const api = {
     invoke<number>('RemoveMuseAssets', () => Backend.RemoveMuseAssets(ids)),
   updateMuseAssetsRole: (ids: string[], role: MuseAsset['role']) =>
     invoke<number>('UpdateMuseAssetsRole', () => Backend.UpdateMuseAssetsRole(ids, role)),
-  pickMuseAssetFolder: () =>
-    invoke<MuseAssetFolderScan>('PickMuseAssetFolder', Backend.PickMuseAssetFolder),
+  pickMuseAssetFolder: (recursive: boolean, requestId: string) =>
+    invoke<MuseAssetFolderScan>('PickMuseAssetFolder', () =>
+      Backend.PickMuseAssetFolder(recursive, requestId),
+    ),
+  pickMuseAssetFiles: (requestId: string) =>
+    invoke<MuseAssetFolderScan>('PickMuseAssetFiles', () => Backend.PickMuseAssetFiles(requestId)),
+  scanMuseAssetPaths: (paths: string[]) =>
+    invoke<MuseAssetFolderScan>('ScanMuseAssetPaths', () => Backend.ScanMuseAssetPaths(paths)),
   importMuseAssetBatch: (req: MuseAssetBatchRequest) =>
     invoke<MuseAssetBatchResult>('ImportMuseAssetBatch', () => Backend.ImportMuseAssetBatch(req)),
+  importMuseAssetFromMedia: (req: MuseMediaAssetImportRequest) =>
+    invoke<MuseAsset>('ImportMuseAssetFromMedia', () => Backend.ImportMuseAssetFromMedia(req)),
+  updateMuseAssetItem: (assetId: string, itemId: string, patch: MuseAssetItemPatch) =>
+    invoke<MuseAsset>('UpdateMuseAssetItem', () =>
+      Backend.UpdateMuseAssetItem(assetId, itemId, patch),
+    ),
+  getMuseAssetVaultDirectory: () =>
+    invoke<string>('GetMuseAssetVaultDirectory', Backend.GetMuseAssetVaultDirectory),
+  pickMuseAssetVaultDirectoryPath: () =>
+    invoke<string>('PickMuseAssetVaultDirectoryPath', Backend.PickMuseAssetVaultDirectoryPath),
+  setMuseAssetVaultDirectory: (dir: string, migrate: boolean) =>
+    invoke<string>('SetMuseAssetVaultDirectory', () =>
+      Backend.SetMuseAssetVaultDirectory(dir, migrate),
+    ),
+  openMuseAssetVaultFolder: () =>
+    invoke<boolean>('OpenMuseAssetVaultFolder', Backend.OpenMuseAssetVaultFolder),
   pickMuseAssetImages: () =>
     invoke<MuseReference[]>('PickMuseAssetImages', Backend.PickMuseAssetImages),
-  pickMuseSourceVideo: () =>
-    invoke<MuseReference>('PickMuseSourceVideo', Backend.PickMuseSourceVideo),
-  checkMusePrompt: (prompt: string, assetIds: string[]) =>
-    invoke<MusePromptCheck>('CheckMusePrompt', () => Backend.CheckMusePrompt(prompt, assetIds)),
+  checkMusePrompt: (
+    prompt: string,
+    assetIds: string[],
+    project = '',
+    kind: MuseJobKind = MuseJobKind.Video,
+    boardFrames = 0,
+  ) =>
+    invoke<MusePromptCheck>('CheckMusePrompt', () =>
+      Backend.CheckMusePrompt(prompt, project, assetIds, kind, boardFrames),
+    ),
+  previewMuseMessages: (req: MuseJobRequest) =>
+    invoke<MusePromptPreview[]>('PreviewMuseMessages', () => Backend.PreviewMuseMessages(req)),
   listMuseTemplates: () =>
     invoke<MusePromptTemplate[]>('ListMuseTemplates', Backend.ListMuseTemplates),
   saveMuseTemplate: (template: MusePromptTemplate) =>

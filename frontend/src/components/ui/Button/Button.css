@@ -8,9 +8,30 @@
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   cursor: pointer;
+  user-select: none;
   transition: all var(--transition-fast);
-  outline: none;
   white-space: nowrap;
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.btn-spinner {
+  display: inline-block;
+  letter-spacing: 1px;
+  animation: btn-pulse 1s ease-in-out infinite;
+}
+
+@keyframes btn-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .btn:disabled {

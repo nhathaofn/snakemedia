@@ -7,3 +7,6 @@ export * from './Icon/Icon';
 export * from './Tabs/Tabs';
 export * from './RevealList/RevealList';
 export * from './Modal/Modal';
+export * from './ConfirmModal/ConfirmModal';
+export * from './VideoThumbnail/VideoThumbnail';
+export * from './Pagination/Pagination';

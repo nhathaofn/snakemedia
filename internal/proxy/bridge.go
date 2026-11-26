@@ -31,6 +31,7 @@ type localBridge struct {
 	// active counts open client connections; lastUsed (guarded by bridges.mu)
 	// is the last time a route asked for the bridge.
 	active   atomic.Int32
+	holds    int // guarded by bridges.mu
 	lastUsed time.Time
 }
 
@@ -57,8 +58,16 @@ func bridgeKey(p *Parsed) string {
 
 // GetBridge returns a 127.0.0.1 port that forwards traffic to upstream p.
 func (m *bridges) GetBridge(p *Parsed) (int, error) {
+	b, _, err := m.getBridge(p, false)
+	if err != nil {
+		return 0, err
+	}
+	return b.port, nil
+}
+
+func (m *bridges) getBridge(p *Parsed, hold bool) (*localBridge, func(), error) {
 	if p == nil || p.Host == "" || p.Port == 0 {
-		return 0, fmt.Errorf("invalid upstream proxy")
+		return nil, nil, fmt.Errorf("invalid upstream proxy")
 	}
 
 	key := bridgeKey(p)
@@ -67,12 +76,12 @@ func (m *bridges) GetBridge(p *Parsed) (int, error) {
 
 	if b, ok := m.bridges[key]; ok {
 		b.lastUsed = m.now()
-		return b.port, nil
+		return b, m.holdLocked(b, hold), nil
 	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return 0, fmt.Errorf("local bridge listen error: %w", err)
+		return nil, nil, fmt.Errorf("local bridge listen error: %w", err)
 	}
 
 	port := ln.Addr().(*net.TCPAddr).Port
@@ -87,7 +96,19 @@ func (m *bridges) GetBridge(p *Parsed) (int, error) {
 	m.bridges[key] = b
 
 	go b.serve()
-	return port, nil
+	return b, m.holdLocked(b, hold), nil
+}
+
+func (m *bridges) holdLocked(b *localBridge, hold bool) func() {
+	if !hold {
+		return func() {}
+	}
+	b.holds++
+	return sync.OnceFunc(func() {
+		m.mu.Lock()
+		b.holds--
+		m.mu.Unlock()
+	})
 }
 
 // Prune closes bridges no route uses any more: not on a port in keep, no open
@@ -98,7 +119,7 @@ func (m *bridges) Prune(keep map[int]bool) int {
 	defer m.mu.Unlock()
 	closed := 0
 	for key, b := range m.bridges {
-		if keep[b.port] || b.active.Load() > 0 || m.now().Sub(b.lastUsed) < bridgeGrace {
+		if keep[b.port] || b.holds > 0 || b.active.Load() > 0 || m.now().Sub(b.lastUsed) < bridgeGrace {
 			continue
 		}
 		b.close()
@@ -174,18 +195,21 @@ func (b *localBridge) handleClient(client net.Conn) {
 		if target.User != "" || target.Pass != "" {
 			auth = &xproxy.Auth{User: target.User, Password: target.Pass}
 		}
-		dialer, err := xproxy.SOCKS5("tcp", net.JoinHostPort(target.Host, strconv.Itoa(target.Port)), auth, &net.Dialer{Timeout: timeout})
+		// Enforce timeout across both TCP connect and SOCKS5 handshake so a
+		// stalled SOCKS5 server cannot block handleClient indefinitely.
+		dialer, err := xproxy.SOCKS5("tcp", net.JoinHostPort(target.Host, strconv.Itoa(target.Port)), auth, deadlineDialer{timeout: timeout})
 		if err != nil {
 			return
 		}
 		dest := req.Host
-		if !strings.Contains(dest, ":") {
-			dest = net.JoinHostPort(dest, "80")
+		if _, _, splitErr := net.SplitHostPort(dest); splitErr != nil {
+			dest = net.JoinHostPort(strings.Trim(dest, "[]"), "80")
 		}
 		upstream, err = dialer.Dial("tcp", dest)
 		if err != nil {
 			return
 		}
+		_ = upstream.SetDeadline(time.Time{})
 	} else {
 		// HTTP proxy
 		var err error
@@ -197,9 +221,10 @@ func (b *localBridge) handleClient(client net.Conn) {
 	defer upstream.Close()
 
 	if req.Method == http.MethodConnect {
+		var upstreamConn net.Conn = upstream
 		if target.Scheme != "socks5" {
 			connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n", req.Host, req.Host)
-			if target.User != "" {
+			if target.User != "" || target.Pass != "" {
 				connectReq += "Proxy-Authorization: " + basicAuth(target) + "\r\n"
 			}
 			connectReq += "\r\n"
@@ -214,17 +239,20 @@ func (b *localBridge) handleClient(client net.Conn) {
 				return
 			}
 			_ = resp.Body.Close()
-			if resp.StatusCode != http.StatusOK || upReader.Buffered() > 0 {
+			if resp.StatusCode != http.StatusOK {
 				return
 			}
 			_ = upstream.SetDeadline(time.Time{})
+			if upReader.Buffered() > 0 {
+				upstreamConn = bufferedConn{Conn: upstream, r: upReader}
+			}
 		}
 
 		if _, err := client.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 			return
 		}
 
-		pipe(client, upstream)
+		pipe(bufferedConn{Conn: client, r: reader}, upstreamConn)
 		return
 	}
 
@@ -238,7 +266,7 @@ func (b *localBridge) handleClient(client net.Conn) {
 		err = req.Write(upstream)
 	} else {
 		// An HTTP proxy needs the absolute URL (and its credentials).
-		if target.User != "" {
+		if target.User != "" || target.Pass != "" {
 			req.Header.Set("Proxy-Authorization", basicAuth(target))
 		}
 		err = req.WriteProxy(upstream)
@@ -246,11 +274,49 @@ func (b *localBridge) handleClient(client net.Conn) {
 	if err != nil {
 		return
 	}
-	pipe(client, upstream)
+	pipe(bufferedConn{Conn: client, r: reader}, upstream)
 }
 
 func basicAuth(p *Parsed) string {
 	return "Basic " + base64.StdEncoding.EncodeToString([]byte(p.User+":"+p.Pass))
+}
+
+// bufferedConn serves pre-read bytes from r before falling back to Conn.Read.
+type bufferedConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c bufferedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
+
+// deadlineDialer bounds both TCP dial and subsequent SOCKS5 negotiation so a
+// stalled upstream proxy cannot hang a goroutine indefinitely.
+type deadlineDialer struct {
+	timeout time.Duration
+}
+
+func (d deadlineDialer) Dial(network, addr string) (net.Conn, error) {
+	conn, err := net.DialTimeout(network, addr, d.timeout)
+	if err != nil {
+		return nil, err
+	}
+	if d.timeout > 0 {
+		_ = conn.SetDeadline(time.Now().Add(d.timeout))
+	}
+	return conn, nil
+}
+
+func (c bufferedConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
+func closeWrite(c net.Conn) {
+	if cw, ok := c.(interface{ CloseWrite() error }); ok {
+		_ = cw.CloseWrite()
+	}
 }
 
 func pipe(c1, c2 net.Conn) {
@@ -259,12 +325,12 @@ func pipe(c1, c2 net.Conn) {
 	go func() {
 		defer wg.Done()
 		_, _ = io.Copy(c1, c2)
-		_ = c1.SetDeadline(time.Now())
+		closeWrite(c1)
 	}()
 	go func() {
 		defer wg.Done()
 		_, _ = io.Copy(c2, c1)
-		_ = c2.SetDeadline(time.Now())
+		closeWrite(c2)
 	}()
 	wg.Wait()
 }

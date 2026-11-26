@@ -237,6 +237,7 @@ export namespace config {
 	    useTopup: boolean;
 	    usagePauseMinutes: number;
 	    outputDir: string;
+	    assetVaultDir?: string;
 	    setupMessage: string;
 	    cleanupMessage: string;
 	    imageFormat: ImageFormat;
@@ -265,6 +266,7 @@ export namespace config {
 	        this.useTopup = source["useTopup"];
 	        this.usagePauseMinutes = source["usagePauseMinutes"];
 	        this.outputDir = source["outputDir"];
+	        this.assetVaultDir = source["assetVaultDir"];
 	        this.setupMessage = source["setupMessage"];
 	        this.cleanupMessage = source["cleanupMessage"];
 	        this.imageFormat = source["imageFormat"];
@@ -2069,42 +2071,6 @@ export namespace models {
 		    return a;
 		}
 	}
-	export class Response_SnakeMedia_internal_providers_muse_MuseReference_ {
-	    success: boolean;
-	    data: muse.MuseReference;
-	    error?: string;
-	    code: Code;
-	
-	    static createFrom(source: any = {}) {
-	        return new Response_SnakeMedia_internal_providers_muse_MuseReference_(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.success = source["success"];
-	        this.data = this.convertValues(source["data"], muse.MuseReference);
-	        this.error = source["error"];
-	        this.code = source["code"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
 	export class Response_SnakeMedia_internal_proxy_CheckResult_ {
 	    success: boolean;
 	    data: proxy.CheckResult;
@@ -2897,6 +2863,42 @@ export namespace models {
 		    return a;
 		}
 	}
+	export class Response___SnakeMedia_internal_providers_muse_MusePromptPreview_ {
+	    success: boolean;
+	    data: muse.MusePromptPreview[];
+	    error?: string;
+	    code: Code;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response___SnakeMedia_internal_providers_muse_MusePromptPreview_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.data = this.convertValues(source["data"], muse.MusePromptPreview);
+	        this.error = source["error"];
+	        this.code = source["code"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Response___SnakeMedia_internal_providers_muse_MusePromptTemplate_ {
 	    success: boolean;
 	    data: muse.MusePromptTemplate[];
@@ -3105,6 +3107,15 @@ export namespace muse {
 	    Rename = "rename",
 	    Skip = "skip",
 	}
+	export enum MuseAssetType {
+	    Anim = "ANIM",
+	    Char = "CHAR",
+	    Doc = "DOC",
+	    Loc = "LOC",
+	    Prop = "PROP",
+	    Style = "STYLE",
+	    Veh = "VEH",
+	}
 	export enum MuseJobKind {
 	    Image = "image",
 	    Video = "video",
@@ -3126,7 +3137,9 @@ export namespace muse {
 	    Shared = "shared",
 	}
 	export enum MuseRefRole {
+	    Animal = "animal",
 	    Character = "character",
+	    Document = "document",
 	    Face = "face",
 	    None = "",
 	    Product = "product",
@@ -3134,6 +3147,7 @@ export namespace muse {
 	    Setting = "setting",
 	    Storyboard = "storyboard",
 	    Style = "style",
+	    Vehicle = "vehicle",
 	}
 	export class MuseAPIStatus {
 	    ok: boolean;
@@ -3157,13 +3171,48 @@ export namespace muse {
 	        this.message = source["message"];
 	    }
 	}
+	export class MuseAssetItem {
+	    id: string;
+	    url: string;
+	    vaultRelPath?: string;
+	    fileName?: string;
+	    angle?: string;
+	    variant?: string;
+	    state?: string;
+	    version?: number;
+	    primary?: boolean;
+	    rejected?: boolean;
+	    lock?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseAssetItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.url = source["url"];
+	        this.vaultRelPath = source["vaultRelPath"];
+	        this.fileName = source["fileName"];
+	        this.angle = source["angle"];
+	        this.variant = source["variant"];
+	        this.state = source["state"];
+	        this.version = source["version"];
+	        this.primary = source["primary"];
+	        this.rejected = source["rejected"];
+	        this.lock = source["lock"];
+	    }
+	}
 	export class MuseAsset {
 	    id: string;
+	    project?: string;
+	    type?: MuseAssetType;
 	    tag: string;
 	    name: string;
 	    role: MuseRefRole;
 	    lock?: string;
 	    images: string[];
+	    items?: MuseAssetItem[];
 	    createdAt: string;
 	
 	    static createFrom(source: any = {}) {
@@ -3173,20 +3222,50 @@ export namespace muse {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
+	        this.project = source["project"];
+	        this.type = source["type"];
 	        this.tag = source["tag"];
 	        this.name = source["name"];
 	        this.role = source["role"];
 	        this.lock = source["lock"];
 	        this.images = source["images"];
+	        this.items = this.convertValues(source["items"], MuseAssetItem);
 	        this.createdAt = source["createdAt"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class MuseAssetBatchItem {
-	    sourcePath: string;
+	    sourcePath?: string;
+	    sourceUrl?: string;
+	    project?: string;
+	    type?: MuseAssetType;
 	    tag: string;
 	    name: string;
 	    role: MuseRefRole;
 	    lock: string;
+	    angle?: string;
+	    variant?: string;
+	    state?: string;
+	    version?: number;
+	    primary?: boolean;
+	    rejected?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new MuseAssetBatchItem(source);
@@ -3195,15 +3274,25 @@ export namespace muse {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.sourcePath = source["sourcePath"];
+	        this.sourceUrl = source["sourceUrl"];
+	        this.project = source["project"];
+	        this.type = source["type"];
 	        this.tag = source["tag"];
 	        this.name = source["name"];
 	        this.role = source["role"];
 	        this.lock = source["lock"];
+	        this.angle = source["angle"];
+	        this.variant = source["variant"];
+	        this.state = source["state"];
+	        this.version = source["version"];
+	        this.primary = source["primary"];
+	        this.rejected = source["rejected"];
 	    }
 	}
 	export class MuseAssetBatchRequest {
 	    items: MuseAssetBatchItem[];
 	    conflict: MuseAssetBatchConflict;
+	    mergeByAlias?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new MuseAssetBatchRequest(source);
@@ -3213,6 +3302,7 @@ export namespace muse {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.items = this.convertValues(source["items"], MuseAssetBatchItem);
 	        this.conflict = source["conflict"];
+	        this.mergeByAlias = source["mergeByAlias"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -3251,11 +3341,44 @@ export namespace muse {
 	        this.savedIds = source["savedIds"];
 	    }
 	}
+	export class ParsedAssetName {
+	    project?: string;
+	    type: MuseAssetType;
+	    role: MuseRefRole;
+	    alias: string;
+	    angle?: string;
+	    variant?: string;
+	    state?: string;
+	    version?: number;
+	    rejected?: boolean;
+	    hint?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ParsedAssetName(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.project = source["project"];
+	        this.type = source["type"];
+	        this.role = source["role"];
+	        this.alias = source["alias"];
+	        this.angle = source["angle"];
+	        this.variant = source["variant"];
+	        this.state = source["state"];
+	        this.version = source["version"];
+	        this.rejected = source["rejected"];
+	        this.hint = source["hint"];
+	    }
+	}
 	export class MuseFolderImage {
 	    path: string;
+	    localUrl?: string;
 	    fileName: string;
+	    relPath?: string;
 	    size: number;
 	    previewUrl?: string;
+	    parsed?: ParsedAssetName;
 	    error?: string;
 	
 	    static createFrom(source: any = {}) {
@@ -3265,11 +3388,32 @@ export namespace muse {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
+	        this.localUrl = source["localUrl"];
 	        this.fileName = source["fileName"];
+	        this.relPath = source["relPath"];
 	        this.size = source["size"];
 	        this.previewUrl = source["previewUrl"];
+	        this.parsed = this.convertValues(source["parsed"], ParsedAssetName);
 	        this.error = source["error"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class MuseAssetFolderScan {
 	    canceled: boolean;
@@ -3305,6 +3449,31 @@ export namespace muse {
 		    return a;
 		}
 	}
+	
+	export class MuseAssetItemPatch {
+	    angle?: string;
+	    variant?: string;
+	    state?: string;
+	    version?: number;
+	    primary?: boolean;
+	    rejected?: boolean;
+	    lock?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseAssetItemPatch(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.angle = source["angle"];
+	        this.variant = source["variant"];
+	        this.state = source["state"];
+	        this.version = source["version"];
+	        this.primary = source["primary"];
+	        this.rejected = source["rejected"];
+	        this.lock = source["lock"];
+	    }
+	}
 	export class MuseCleanResult {
 	    accountId: string;
 	    account: string;
@@ -3328,6 +3497,7 @@ export namespace muse {
 	    tag?: string;
 	    role?: MuseRefRole;
 	    lock?: string;
+	    type?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new MuseRefInfo(source);
@@ -3338,6 +3508,7 @@ export namespace muse {
 	        this.tag = source["tag"];
 	        this.role = source["role"];
 	        this.lock = source["lock"];
+	        this.type = source["type"];
 	    }
 	}
 	export class MuseJob {
@@ -3354,7 +3525,6 @@ export namespace muse {
 	    after?: string;
 	    frames?: string[];
 	    review?: boolean;
-	    sourceVideo?: string;
 	    outputDir?: string;
 	    index?: number;
 	    ratio?: string;
@@ -3407,7 +3577,6 @@ export namespace muse {
 	        this.after = source["after"];
 	        this.frames = source["frames"];
 	        this.review = source["review"];
-	        this.sourceVideo = source["sourceVideo"];
 	        this.outputDir = source["outputDir"];
 	        this.index = source["index"];
 	        this.ratio = source["ratio"];
@@ -3486,10 +3655,10 @@ export namespace muse {
 	    outputDir: string;
 	    ratio: string;
 	    duration: number;
+	    project?: string;
 	    refMode?: MuseRefMode;
 	    assets?: string[];
 	    storyboard?: MuseStoryboard;
-	    sourceVideo?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new MuseJobRequest(source);
@@ -3508,10 +3677,10 @@ export namespace muse {
 	        this.outputDir = source["outputDir"];
 	        this.ratio = source["ratio"];
 	        this.duration = source["duration"];
+	        this.project = source["project"];
 	        this.refMode = source["refMode"];
 	        this.assets = source["assets"];
 	        this.storyboard = this.convertValues(source["storyboard"], MuseStoryboard);
-	        this.sourceVideo = source["sourceVideo"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -3531,6 +3700,32 @@ export namespace muse {
 		    }
 		    return a;
 		}
+	}
+	export class MuseJobsConfigRequest {
+	    kind: MuseJobKind;
+	    mode: MuseJobMode;
+	    outputDir?: string;
+	    syncRefs?: boolean;
+	    references?: string[];
+	    refMode?: MuseRefMode;
+	    project?: string;
+	    assets?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseJobsConfigRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.mode = source["mode"];
+	        this.outputDir = source["outputDir"];
+	        this.syncRefs = source["syncRefs"];
+	        this.references = source["references"];
+	        this.refMode = source["refMode"];
+	        this.project = source["project"];
+	        this.assets = source["assets"];
+	    }
 	}
 	export class MuseJobsFormatRequest {
 	    kind: MuseJobKind;
@@ -3580,6 +3775,44 @@ export namespace muse {
 	        this.createdAt = source["createdAt"];
 	    }
 	}
+	export class MuseMediaAssetImportRequest {
+	    sourceUrl: string;
+	    targetAssetId?: string;
+	    mergeIfTagExists?: boolean;
+	    project?: string;
+	    type?: MuseAssetType;
+	    tag: string;
+	    name?: string;
+	    role: MuseRefRole;
+	    lock?: string;
+	    angle?: string;
+	    variant?: string;
+	    state?: string;
+	    primary?: boolean;
+	    itemLock?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MuseMediaAssetImportRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sourceUrl = source["sourceUrl"];
+	        this.targetAssetId = source["targetAssetId"];
+	        this.mergeIfTagExists = source["mergeIfTagExists"];
+	        this.project = source["project"];
+	        this.type = source["type"];
+	        this.tag = source["tag"];
+	        this.name = source["name"];
+	        this.role = source["role"];
+	        this.lock = source["lock"];
+	        this.angle = source["angle"];
+	        this.variant = source["variant"];
+	        this.state = source["state"];
+	        this.primary = source["primary"];
+	        this.itemLock = source["itemLock"];
+	    }
+	}
 	export class MuseModel {
 	    id: string;
 	    name: string;
@@ -3623,6 +3856,7 @@ export namespace muse {
 	    clipSeconds: number;
 	    maxBoardFrames: number;
 	    maxAssetImages: number;
+	    inlineBudgetBytes: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new MuseOptions(source);
@@ -3642,6 +3876,7 @@ export namespace muse {
 	        this.clipSeconds = source["clipSeconds"];
 	        this.maxBoardFrames = source["maxBoardFrames"];
 	        this.maxAssetImages = source["maxAssetImages"];
+	        this.inlineBudgetBytes = source["inlineBudgetBytes"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -3666,6 +3901,8 @@ export namespace muse {
 	    tags: string[];
 	    images: number;
 	    warnings: string[];
+	    estimatedBytes?: number;
+	    budgetBytes?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new MusePromptCheck(source);
@@ -3676,6 +3913,34 @@ export namespace muse {
 	        this.tags = source["tags"];
 	        this.images = source["images"];
 	        this.warnings = source["warnings"];
+	        this.estimatedBytes = source["estimatedBytes"];
+	        this.budgetBytes = source["budgetBytes"];
+	    }
+	}
+	export class MusePromptPreview {
+	    prompt: string;
+	    message: string;
+	    storyboardMessage?: string;
+	    tags: string[];
+	    images: number;
+	    warnings: string[];
+	    estimatedBytes?: number;
+	    budgetBytes?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new MusePromptPreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.prompt = source["prompt"];
+	        this.message = source["message"];
+	        this.storyboardMessage = source["storyboardMessage"];
+	        this.tags = source["tags"];
+	        this.images = source["images"];
+	        this.warnings = source["warnings"];
+	        this.estimatedBytes = source["estimatedBytes"];
+	        this.budgetBytes = source["budgetBytes"];
 	    }
 	}
 	export class MusePromptTemplate {
@@ -3714,6 +3979,7 @@ export namespace muse {
 	        this.size = source["size"];
 	    }
 	}
+	
 
 }
 

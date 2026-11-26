@@ -16,6 +16,22 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func TestFlowSignInRedirectRequiresFlowReturnURL(t *testing.T) {
+	for _, tc := range []struct {
+		url  string
+		want bool
+	}{
+		{"https://accounts.google.com/v3/signin/identifier?continue=https%3A%2F%2Fflow.google.com%2F", true},
+		{"https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fflow.google.com%2F", true},
+		{"https://accounts.google.com/v3/signin/identifier?continue=https%3A%2F%2Fmail.google.com%2F", false},
+		{"https://accounts.google.com/AccountChooser?continue=https%3A%2F%2Fflow.google.com%2F", false},
+	} {
+		if got := (pageEntry{Type: "page", URL: tc.url}).flowSignInPage(); got != tc.want {
+			t.Errorf("flowSignInPage(%s) = %t, want %t", tc.url, got, tc.want)
+		}
+	}
+}
+
 const creditsRPC = "nzlxg" // reference fixture only; production resolves this ID
 const availabilityRPC = "testAvailability"
 

@@ -189,3 +189,37 @@ func secureEncrypts() bool {
 	sealed, err := secure.Protect([]byte("x"))
 	return err == nil && string(sealed) != "x"
 }
+
+func TestStoreCorruptSingleRecordQuarantinesOnlyBadRecordNotIndex(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "accounts.dat")
+	s := newStore(path)
+	for _, r := range []Record{
+		{Account: Account{ID: "acc-1", Name: "One"}},
+		{Account: Account{ID: "acc-2", Name: "Two"}},
+	} {
+		if err := s.add(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	badPath := filepath.Join(dir, "records", "acc-2.dat")
+	if err := os.WriteFile(badPath, []byte("not encrypted json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := newStore(path)
+	if _, err := reloaded.list(); err == nil {
+		t.Fatal("expected error listing store with corrupt record")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("healthy index accounts.dat was quarantined or removed: %v", err)
+	}
+	if indexQuarantines, _ := filepath.Glob(path + ".corrupt-*"); len(indexQuarantines) != 0 {
+		t.Fatalf("accounts.dat should not be quarantined: %v", indexQuarantines)
+	}
+	if badQuarantines, _ := filepath.Glob(badPath + ".corrupt-*"); len(badQuarantines) != 1 {
+		t.Fatalf("expected only acc-2 record to be quarantined, got: %v", badQuarantines)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "records", "acc-1.dat")); err != nil {
+		t.Fatalf("healthy record acc-1 missing: %v", err)
+	}
+}

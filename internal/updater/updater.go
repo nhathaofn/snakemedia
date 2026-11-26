@@ -89,12 +89,27 @@ type Updater struct {
 	latest *githubRelease
 }
 
+func newUpdaterHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 15 * time.Minute,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("quá nhiều lần chuyển hướng")
+			}
+			if len(via) > 0 && via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
+				return errors.New("từ chối chuyển hướng xuống HTTP không mã hóa")
+			}
+			return nil
+		},
+	}
+}
+
 // New returns an updater for app name at version current, reading releases of
 // repo ("owner/name", empty for none) and downloading into dir.
 func New(name, current, repo, dir string) *Updater {
 	return &Updater{
 		name: name, current: current, repo: repo, dir: dir,
-		api: githubAPI, client: &http.Client{}, executable: os.Executable,
+		api: githubAPI, client: newUpdaterHTTPClient(), executable: os.Executable,
 	}
 }
 
@@ -266,6 +281,9 @@ func (u *Updater) checksum(ctx context.Context, url, file string) (string, error
 		if len(fields) == 2 && strings.TrimPrefix(fields[1], "*") == file && len(fields[0]) == sha256.Size*2 {
 			return strings.ToLower(fields[0]), nil
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("Không đọc được %s: %w", checksumsAsset, err)
 	}
 	return "", fmt.Errorf("%s không có dòng cho %s.", checksumsAsset, file)
 }

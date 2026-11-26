@@ -76,10 +76,12 @@ func (g *flightGroup) do(key string, fn func() (any, error)) (any, error) {
 	c := &flightCall{done: make(chan struct{})}
 	g.calls[key] = c
 	g.mu.Unlock()
+	defer func() {
+		g.mu.Lock()
+		delete(g.calls, key)
+		g.mu.Unlock()
+		close(c.done)
+	}()
 	c.val, c.err = fn()
-	g.mu.Lock()
-	delete(g.calls, key)
-	g.mu.Unlock()
-	close(c.done)
 	return c.val, c.err
 }

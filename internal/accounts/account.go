@@ -148,8 +148,12 @@ type Record struct {
 	Account
 	ProfileDir string `json:"profileDir"`
 	// ProxyAuto is the list line an automatic pick pinned to the account.
-	ProxyAuto string           `json:"proxyAuto,omitempty"`
-	Cookies   []browser.Cookie `json:"cookies,omitempty"`
+	ProxyAuto string `json:"proxyAuto,omitempty"`
+	// SignedInOnce remembers that this account established a session at least
+	// once, so accounts without a site-provided Identity (e.g. Muse) still keep
+	// their pinned proxy instead of silently moving to another IP.
+	SignedInOnce bool             `json:"signedInOnce,omitempty"`
+	Cookies      []browser.Cookie `json:"cookies,omitempty"`
 	// CookieVersion changes on every import, so a profile is seeded once.
 	CookieVersion string `json:"cookieVersion,omitempty"`
 	// Data is the provider's own runtime data (session values, quota).

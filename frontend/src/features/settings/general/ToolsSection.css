@@ -7,3 +7,17 @@
 .tools-row-control .tool-progress {
   width: var(--tools-progress-width);
 }
+
+.tools-path-control {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  max-width: 28rem;
+}
+
+.tools-path-input {
+  flex: 1;
+  min-width: 0;
+  cursor: default;
+}

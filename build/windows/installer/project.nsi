@@ -32,6 +32,7 @@ Unicode true
 # Installed per user (no admin prompt), so the app's updater can run the next
 # installer silently over the current install.
 !define REQUEST_EXECUTION_LEVEL "user"
+!define WAILS_INSTALL_SCOPE "user"
 ####
 ## Include the wails tools
 ####

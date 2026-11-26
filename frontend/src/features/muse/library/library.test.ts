@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MuseJobKind } from '../../../types';
 import type { MuseLibraryItem } from '../../../types';
-import { filterLibrary, libraryTitle } from './library';
+import { filterAndSortLibrary, filterLibrary, libraryTitle } from './library';
 
 const item = (id: string, kind: MuseJobKind, label = ''): MuseLibraryItem =>
   ({
@@ -30,5 +30,24 @@ describe('muse library', () => {
   it('titles a tile by label, else prompt', () => {
     expect(libraryTitle(item('a', MuseJobKind.Image, 'Mèo'))).toBe('Mèo');
     expect(libraryTitle(item('b', MuseJobKind.Image))).toBe('p-b');
+  });
+
+  it('filters by query and sorts newest, oldest, or by title', () => {
+    const labeled = [
+      item('1', MuseJobKind.Image, 'Zebra'),
+      item('2', MuseJobKind.Video, 'Alpha'),
+      item('3', MuseJobKind.Image, 'Beta'),
+    ];
+    expect(filterAndSortLibrary(labeled, 'all', 'alp', 'newest').map((i) => i.id)).toEqual(['2']);
+    expect(filterAndSortLibrary(labeled, 'all', '', 'oldest').map((i) => i.id)).toEqual([
+      '3',
+      '2',
+      '1',
+    ]);
+    expect(filterAndSortLibrary(labeled, 'all', '', 'title').map((i) => i.id)).toEqual([
+      '2',
+      '3',
+      '1',
+    ]);
   });
 });

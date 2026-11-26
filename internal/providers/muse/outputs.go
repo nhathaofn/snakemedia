@@ -39,7 +39,7 @@ func (p *Provider) writeOutputs(job MuseJob, files []string) (MuseJob, error) {
 			}
 			delete(paths, url)
 		}
-		path, err := p.media.SaveTo(url, job.OutputDir, media.OutputName(job.Index, "muse"))
+		path, err := p.media.SaveToOnce(url, job.OutputDir, media.PlannedOutputName(job.Index, "muse", job.ID, url))
 		if err != nil {
 			failures = append(failures, err.Error())
 		} else {
@@ -69,12 +69,13 @@ func (p *Provider) RetrySave(id string) models.Response[MuseJob] {
 	p.saveMu.Lock()
 	defer p.saveMu.Unlock()
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	job, ok := p.jobs.get(id)
+	_, active := p.running[id]
+	p.mu.Unlock()
 	if !ok {
 		return fail[MuseJob](errJobNotFound, models.CodeNotFound)
 	}
-	if _, active := p.running[id]; active || !job.finished() || job.Status == MuseJobCancelled || job.OutputDir == "" || len(job.Files) == 0 {
+	if active || !job.finished() || job.Status == MuseJobCancelled || job.OutputDir == "" || len(job.Files) == 0 {
 		return fail[MuseJob](fmt.Errorf("Tác vụ chưa sẵn sàng để lưu lại."), models.CodeInvalidArgument)
 	}
 	job, err := p.writeOutputs(job, job.Files)

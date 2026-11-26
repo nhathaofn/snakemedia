@@ -221,12 +221,9 @@ type MuseCapabilities struct {
 	MaxFileBytes int64          `json:"maxFileBytes"`
 	MaxFiles     int            `json:"maxFiles"`
 	ImageTypes   []MuseFileType `json:"imageTypes"`
-	// VideoTypes are the videos the composer takes (a sample video);
-	// limits read before they were kept have none.
-	VideoTypes []MuseFileType `json:"videoTypes,omitempty"`
-	Models     []MuseModel    `json:"models"`
-	Model      string         `json:"model"`
-	CheckedAt  string         `json:"checkedAt"`
+	Models       []MuseModel    `json:"models"`
+	Model        string         `json:"model"`
+	CheckedAt    string         `json:"checkedAt"`
 }
 
 // rawCapabilities is what the page script returns.
@@ -261,16 +258,12 @@ func parseCapabilities(raw rawCapabilities, now time.Time) *MuseCapabilities {
 		CheckedAt: now.UTC().Format(time.RFC3339),
 	}
 	for _, t := range raw.Upload.SupportedMimeTypes {
-		if (t.Category == "image" || t.Category == "video") && len(t.Extensions) > 0 {
+		if t.Category == "image" && len(t.Extensions) > 0 {
 			exts := make([]string, len(t.Extensions))
 			for i, e := range t.Extensions {
 				exts[i] = strings.ToLower(e)
 			}
-			if t.Category == "image" {
-				c.ImageTypes = append(c.ImageTypes, MuseFileType{Mime: t.MimeType, Extensions: exts})
-			} else {
-				c.VideoTypes = append(c.VideoTypes, MuseFileType{Mime: t.MimeType, Extensions: exts})
-			}
+			c.ImageTypes = append(c.ImageTypes, MuseFileType{Mime: t.MimeType, Extensions: exts})
 		}
 	}
 	if raw.Models != nil {
@@ -290,14 +283,6 @@ func (c *MuseCapabilities) imageMime(ext string) (string, bool) {
 	return mimeFor(c.ImageTypes, ext)
 }
 
-// videoMime returns the MIME type Muse lists for a video file extension.
-func (c *MuseCapabilities) videoMime(ext string) (string, bool) {
-	if c == nil {
-		return "", false
-	}
-	return mimeFor(c.VideoTypes, ext)
-}
-
 // mimeFor returns the MIME type of the first of types listing ext.
 func mimeFor(types []MuseFileType, ext string) (string, bool) {
 	ext = strings.ToLower(ext)
@@ -307,14 +292,6 @@ func mimeFor(types []MuseFileType, ext string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-// videoExtensions lists every accepted video extension, sorted.
-func (c *MuseCapabilities) videoExtensions() []string {
-	if c == nil {
-		return nil
-	}
-	return extensionsOf(c.VideoTypes)
 }
 
 // extensions lists every accepted image extension, sorted.

@@ -21,35 +21,25 @@ func TestLongVideoMessage(t *testing.T) {
 	msg := buildMessage(MuseJob{Kind: MuseJobVideo, Prompt: "a fox hunts in the snow", Ratio: "9:16", Duration: 30})
 	for _, want := range []string{
 		"Aspect ratio: 9:16 (portrait)\nDuration: 30 seconds\nLong video:",
-		"Make it as 3 clips",
+		"generate 3 sequential clips",
 		"clip 1: 0-10s, clip 2: 10-20s, clip 3: 20-30s",
+		"do not chain from the previous clip's last frame",
 		"STATUS: DONE",
-		"The prompt is the plan:",
-		"opens as a cut to a new camera angle",
+		"STATUS: INCOMPLETE",
 		"\nprompt:\na fox hunts in the snow",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("message lacks %q:\n%s", want, msg)
 		}
 	}
-	// Muse does not plan its own beats, clips never chain from the last frame
-	// (the join looked shifted and stalled), and no genre's words (a soldier's
-	// rank) slip into a guide every prompt gets.
-	for _, unwanted := range []string{"beat", "extract the last frame", "Resume from the previous clip", "rank", "insignia", "name tape"} {
+	for _, unwanted := range []string{"The prompt is the plan", "TOO SHORT", "Before clip 1, make", "extract the last frame", "Resume from the previous clip", "rank", "insignia", "name tape"} {
 		if strings.Contains(msg, unwanted) {
 			t.Errorf("message still has %q:\n%s", unwanted, msg)
 		}
 	}
-	// One clip needs no guide; attached images replace the generated anchors.
+	// One clip needs no long-video guide.
 	if short := buildMessage(MuseJob{Kind: MuseJobVideo, Prompt: "p", Duration: 10}); strings.Contains(short, "Long video") {
 		t.Errorf("a 10-second video got the guide:\n%s", short)
-	}
-	if oneClip := strings.Join(shortVideoLines(MuseJob{Kind: MuseJobVideo}), "\n"); strings.Contains(oneClip, "rank") || strings.Contains(oneClip, "insignia") {
-		t.Errorf("the one-clip guide names a genre's details:\n%s", oneClip)
-	}
-	withRefs := buildMessage(MuseJob{Kind: MuseJobVideo, Prompt: "p", Duration: 20, References: []string{"r"}})
-	if !strings.Contains(withRefs, "Use the attached images as anchors") || strings.Contains(withRefs, "Before clip 1, make") {
-		t.Errorf("a video with images got generated anchors:\n%s", withRefs)
 	}
 }
 

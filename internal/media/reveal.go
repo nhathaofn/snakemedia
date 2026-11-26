@@ -23,6 +23,10 @@ func (s *Store) Reveal(target string) models.Response[bool] {
 		if real, err := s.Path(target); err == nil {
 			target = real
 		}
+	} else if strings.HasPrefix(target, VaultRoute) {
+		if real, err := s.VaultPath(target); err == nil {
+			target = real
+		}
 	}
 	checked, err := s.CheckFile(target)
 	if err != nil {

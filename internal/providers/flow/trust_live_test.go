@@ -51,7 +51,7 @@ func TestLiveTrust(t *testing.T) {
 		if i < 0 {
 			connected, _ := accounts.GetConnectedStoredAccounts()
 			for _, a := range connected {
-				t.Logf("connected %s %s cookies=%d valid=%v", a.ID, a.Email, len(a.Credentials.Cookies), ValidateAccountCookies(a.Credentials.Cookies))
+				t.Logf("connected %s %s cookies=%d", a.ID, a.Email, len(a.Credentials.Cookies))
 			}
 			t.Fatalf("account %s is not valid", id)
 		}

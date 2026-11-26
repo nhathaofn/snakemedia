@@ -105,7 +105,10 @@ func (p *Provider) CleanChats(ctx context.Context) models.Response[[]MuseCleanRe
 // reply. Deleting many chats can take Muse a while, so it waits as long as a
 // video.
 func (p *Provider) cleanAccount(ctx context.Context, rec accounts.Record, text string, minutes int) (string, error) {
-	release := p.accounts.Acquire(rec.ID)
+	release, err := p.accounts.AcquireWork(ctx, rec.ID)
+	if err != nil {
+		return "", err
+	}
 	defer release()
 	page, err := p.pageFor(ctx, rec)
 	if err != nil {
@@ -115,7 +118,7 @@ func (p *Provider) cleanAccount(ctx context.Context, rec accounts.Record, text s
 	if err := p.waitSignedIn(ctx, page, time.Duration(p.cfg.Get().Accounts.PageReadySeconds)*time.Second); err != nil {
 		return "", err
 	}
-	reply, _, err := sendNote(ctx, page, text, time.Duration(minutes)*time.Minute, p.cfg.Get().Muse, p.sleep, p.now)
+	reply, _, err := sendNoteWithLabel(ctx, page, text, "dọn chat", time.Duration(minutes)*time.Minute, p.cfg.Get().Muse, p.sleep, p.now)
 	return reply, err
 }
 
@@ -132,7 +135,7 @@ func (p *Provider) reserveForClean(accountID string) bool {
 			return false
 		}
 	}
-	for _, job := range p.jobs.list() {
+	for _, job := range p.jobs.listActive() {
 		if job.Status == MuseJobProcessing && job.AccountID == accountID {
 			return false
 		}

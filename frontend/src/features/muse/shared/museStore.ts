@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { create } from 'zustand';
+import { collectByIdOnNextFrame } from '../../../hooks';
 import { api, unwrap, unwrapList } from '../../../services';
 import { shownForRun, usePreviousRunStore } from '../../../stores';
 import type { MuseJob, MuseOptions } from '../../../types';
@@ -10,6 +11,7 @@ interface MuseState {
   options: MuseOptions | null;
   loaded: boolean;
   loadError: string | null;
+  optionsError: string | null;
   /** Loads jobs and options; later calls reload them. */
   load: () => Promise<void>;
   /** Reloads the jobs only (bulk changes); calls made meanwhile share one reload. */
@@ -23,26 +25,15 @@ interface MuseState {
   dropJob: (id: string) => void;
   /** Drops jobs the backend removed at once (MuseJobsRemoved). */
   dropJobs: (ids: readonly string[] | null) => void;
+  applyEvents: (changes: ReadonlyMap<string, MuseJob | null>) => void;
 }
 
 const errorText = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 
-// Jobs events changed while a list call is in flight, applied over its
-// snapshot when it lands (null: removed). Cleared once no call is in flight.
+// Job events applied over the next list until its state is committed.
 const touched = new Map<string, MuseJob | null>();
-let listsInFlight = 0;
 let jobsReload: Promise<void> | null = null;
 let optionsReload: Promise<void> | null = null;
-
-async function listJobs(): Promise<MuseJob[]> {
-  listsInFlight++;
-  try {
-    const snapshot = unwrapList(await api.listMuseJobs());
-    return mergeSnapshot(snapshot, touched);
-  } finally {
-    if (--listsInFlight === 0) touched.clear();
-  }
-}
 
 /**
  * Shared Muse queue state, kept current by backend events (see useMuseLive).
@@ -53,23 +44,25 @@ export const useMuseStore = create<MuseState>((set, get) => ({
   options: null,
   loaded: false,
   loadError: null,
+  optionsError: null,
   load: async () => {
-    // A failed call must surface as loadError: showing "no jobs" when the
-    // backend failed would mislead the user.
-    try {
-      const [jobs, options] = await Promise.all([listJobs(), api.getMuseOptions().then(unwrap)]);
-      set({ jobs, options, loaded: true, loadError: null });
-    } catch (cause) {
-      set({ loaded: true, loadError: errorText(cause) });
-    }
+    await Promise.all([get().loadJobs(), get().loadOptions()]);
   },
   loadJobs: () => {
     jobsReload ??= (async () => {
+      // Flush events already queued before the RPC so pre-snapshot updates cannot
+      // land in touched or roll back the fresher snapshot on the next frame.
+      queueMuseEvent.flush();
+      touched.clear();
       try {
-        set({ jobs: await listJobs(), loaded: true, loadError: null });
+        const snapshot = unwrapList(await api.listMuseJobs());
+        // Flush any events that arrived during listMuseJobs into touched before merging.
+        queueMuseEvent.flush();
+        set({ jobs: mergeSnapshot(snapshot, touched), loaded: true, loadError: null });
       } catch (cause) {
         set({ loaded: true, loadError: errorText(cause) });
       } finally {
+        touched.clear();
         jobsReload = null;
       }
     })();
@@ -78,9 +71,9 @@ export const useMuseStore = create<MuseState>((set, get) => ({
   loadOptions: () => {
     optionsReload ??= (async () => {
       try {
-        set({ options: unwrap(await api.getMuseOptions()) });
-      } catch {
-        // The jobs are unaffected; the next account update tries again.
+        set({ options: unwrap(await api.getMuseOptions()), optionsError: null });
+      } catch (cause) {
+        set({ optionsError: errorText(cause) });
       } finally {
         optionsReload = null;
       }
@@ -90,20 +83,35 @@ export const useMuseStore = create<MuseState>((set, get) => ({
   setJob: (job) => {
     // Events can carry no job (bulk removals use MuseJobsRemoved); ignore them.
     if (!job?.id) return;
-    if (listsInFlight > 0) touched.set(job.id, job);
+    queueMuseEvent.clear(job.id);
+    if (jobsReload) touched.set(job.id, job);
     set((state) => ({ jobs: upsertJob(state.jobs, job) }));
   },
   dropJob: (id) => {
-    if (listsInFlight > 0) touched.set(id, null);
+    queueMuseEvent.clear(id);
+    if (jobsReload) touched.set(id, null);
     set({ jobs: get().jobs.filter((job) => job.id !== id) });
   },
   dropJobs: (ids) => {
     if (!ids?.length) return;
     const gone = new Set(ids);
-    if (listsInFlight > 0) gone.forEach((id) => touched.set(id, null));
+    gone.forEach((id) => queueMuseEvent.clear(id));
+    if (jobsReload) gone.forEach((id) => touched.set(id, null));
     set({ jobs: get().jobs.filter((job) => !gone.has(job.id)) });
   },
+  applyEvents: (changes) => {
+    if (jobsReload) changes.forEach((value, id) => touched.set(id, value));
+    set((state) => ({ jobs: mergeSnapshot(state.jobs, changes) }));
+  },
 }));
+
+/**
+ * Coalesces backend Muse job events to at most one store update per animation
+ * frame, synchronized with direct RPC mutations and snapshot reloads.
+ */
+export const queueMuseEvent = collectByIdOnNextFrame<MuseJob | null>((changes) =>
+  useMuseStore.getState().applyEvents(changes),
+);
 
 /**
  * The jobs the Muse screens list: of the run before this one, only each

@@ -261,18 +261,29 @@ func (m *Manager) UsableEach(as []Assignment, others []Assignment) []error {
 // Route picks the account's proxy and prepares its local bridge. Any failure
 // is returned: an account is never silently sent out directly.
 func (m *Manager) Route(ctx context.Context, a Assignment, others []Assignment) (Route, error) {
+	route, _, err := m.route(ctx, a, others, false)
+	return route, err
+}
+
+// AcquireRoute holds a new local bridge until the caller registers the browser
+// on that route or finishes a standalone HTTP request.
+func (m *Manager) AcquireRoute(ctx context.Context, a Assignment, others []Assignment) (Route, func(), error) {
+	return m.route(ctx, a, others, true)
+}
+
+func (m *Manager) route(ctx context.Context, a Assignment, others []Assignment, hold bool) (Route, func(), error) {
 	text, err := m.Text()
 	if err != nil {
-		return Route{}, err
+		return Route{}, nil, err
 	}
 	parsed, auto, err := pick(a, others, text, m.deadSet(), m.now())
 	if err != nil {
 		logger.Get().Warn("no proxy route", "account", a.Account, "error", err)
-		return Route{}, err
+		return Route{}, nil, err
 	}
 	if parsed == nil {
 		logger.Get().Info("proxy route", "account", a.Account, "proxy", "direct")
-		return Route{Key: DirectRoute, Args: PrivacyArgs}, nil
+		return Route{Key: DirectRoute, Args: PrivacyArgs}, func() {}, nil
 	}
 	logger.Get().Info("proxy route", "account", a.Account, "proxy", Mask(parsed.Raw), "newPick", auto != "" && auto != a.Auto)
 	route := Route{Key: parsed.Raw, Auto: auto}
@@ -280,18 +291,18 @@ func (m *Manager) Route(ctx context.Context, a Assignment, others []Assignment) 
 		res := fetchRotating(ctx, parsed, false, m.requestTimeout())
 		if !res.OK {
 			m.MarkDead(parsed.Raw)
-			return Route{}, fmt.Errorf("Proxy xoay lỗi: %s", res.Message)
+			return Route{}, nil, fmt.Errorf("Proxy xoay lỗi: %s", res.Message)
 		}
 		parsed.Host, parsed.Port, parsed.Scheme = res.IP, res.Port, "http"
 	}
-	port, err := m.bridges.GetBridge(parsed)
+	bridge, release, err := m.bridges.getBridge(parsed, hold)
 	if err != nil {
-		return Route{}, err
+		return Route{}, nil, err
 	}
 	route.IP = parsed.Host
-	route.URL = &url.URL{Scheme: "http", Host: fmt.Sprintf("127.0.0.1:%d", port)}
+	route.URL = &url.URL{Scheme: "http", Host: fmt.Sprintf("127.0.0.1:%d", bridge.port)}
 	route.Args = append([]string{"--proxy-server=" + route.URL.String()}, PrivacyArgs...)
-	return route, nil
+	return route, release, nil
 }
 
 // pick selects the account's proxy:
@@ -299,8 +310,8 @@ func (m *Manager) Route(ctx context.Context, a Assignment, others []Assignment) 
 //   - an explicit line uses that proxy;
 //   - otherwise the pinned automatic line is kept while it works, or the least
 //     shared live line is picked (and returned to be pinned);
-//   - an account that must keep its pin (Keep) waits for that line rather
-//     than move to another one while it is still listed;
+//   - an account that must keep its pin (Keep) requires an explicit choice
+//     if its line was removed, and waits if the line is dead;
 //   - an empty list, or every proxy dead, fails rather than fall back to the
 //     real IP: only None means direct.
 func pick(a Assignment, others []Assignment, text string, dead map[string]time.Time, now time.Time) (*Parsed, string, error) {
@@ -318,13 +329,25 @@ func pick(a Assignment, others []Assignment, text string, dead map[string]time.T
 	if len(lines) == 0 {
 		return nil, "", fmt.Errorf("Danh sách proxy đang trống nên %s không có proxy để chạy. Thêm proxy ở Trang chủ → Proxy, hoặc chọn \"Không dùng proxy\" cho tài khoản này.", a.Name)
 	}
-	if a.Keep && a.Auto != "" && slices.Contains(lines, a.Auto) {
+	var validLines []string
+	for _, line := range lines {
+		if p := Parse(line); p != nil && p.Error == "" {
+			validLines = append(validLines, line)
+		}
+	}
+	if len(validLines) == 0 {
+		return nil, "", fmt.Errorf("Danh sách proxy không có dòng hợp lệ cho %s. Kiểm tra lại ở Trang chủ → Proxy.", a.Name)
+	}
+	if a.Keep && a.Auto != "" {
+		if !slices.Contains(validLines, a.Auto) {
+			return nil, "", fmt.Errorf("Proxy đã ghim của %s không còn trong danh sách. Hãy chọn lại proxy cho tài khoản.", a.Name)
+		}
 		if until, ok := dead[a.Auto]; ok && until.After(now) {
 			return nil, "", fmt.Errorf("Proxy %s của %s đang không phản hồi. App không tự chuyển tài khoản đã đăng nhập sang IP khác; hãy kiểm tra proxy, chờ vài phút rồi thử lại, hoặc chọn proxy khác cho tài khoản.", Mask(a.Auto), a.Name)
 		}
 	}
 	var live []string
-	for _, line := range lines {
+	for _, line := range validLines {
 		if until, ok := dead[line]; !ok || !until.After(now) {
 			live = append(live, line)
 		}

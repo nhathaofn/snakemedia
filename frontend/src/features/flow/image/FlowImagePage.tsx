@@ -3,12 +3,16 @@ import { StudioLayout } from '../../../components/studio';
 import { IMAGE_MODES } from './modes';
 import { FlowImageWorkspace } from './workspace/FlowImageWorkspace';
 import { AllWorkspace } from './all/AllWorkspace';
+import { useImageQueueLive } from './all/useImageQueueLive';
 
 /** FlowImagePage - Image studio: mode tabs (Đơn / Hàng loạt) on the left, gallery on the right. */
-export const FlowImagePage: React.FC = () => (
-  <StudioLayout
-    label="Image"
-    modes={IMAGE_MODES}
-    renderWorkspace={(mode) => (mode === 'all' ? <AllWorkspace /> : <FlowImageWorkspace />)}
-  />
-);
+export const FlowImagePage: React.FC = () => {
+  useImageQueueLive();
+  return (
+    <StudioLayout
+      label="Image"
+      modes={IMAGE_MODES}
+      renderWorkspace={(mode) => (mode === 'all' ? <AllWorkspace /> : <FlowImageWorkspace />)}
+    />
+  );
+};

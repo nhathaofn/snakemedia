@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MuseAsset, MuseAssetBatchConflict, MuseRefRole } from '../../../types';
-import type { MuseFolderImage } from '../../../types';
+import { MuseAsset, MuseAssetBatchConflict, MuseFolderImage, MuseRefRole } from '../../../types';
 import {
   buildBatchRows,
   parseAliasLines,
@@ -9,13 +8,14 @@ import {
   sanitizeTag,
 } from './batchImport';
 
-const makeImage = (fileName: string, error = ''): MuseFolderImage => ({
-  path: `C:\\imgs\\${fileName}`,
-  fileName,
-  size: 1024,
-  previewUrl: '',
-  error,
-});
+const makeImage = (fileName: string, error = ''): MuseFolderImage =>
+  MuseFolderImage.createFrom({
+    path: `C:\\imgs\\${fileName}`,
+    fileName,
+    size: 1024,
+    previewUrl: '',
+    error,
+  });
 
 describe('batchImport helpers', () => {
   it('parses alias lines with @tag, delimiter, and spaces', () => {
@@ -109,5 +109,31 @@ describe('batchImport helpers', () => {
     });
     expect(overRes.rows[0].status).toBe('overwrite');
     expect(overRes.rows[1].status).toBe('overwrite');
+  });
+
+  it('preserves raw draft input with trailing underscores/spaces while keeping canonical output normalized', () => {
+    const images = [makeImage('1.png')];
+    const overrides = new Map([
+      [0, { project: 'oliva_', angle: 'front ', variant: 'young_', state: 'wet ' }],
+    ]);
+    const { rows } = buildBatchRows({
+      images,
+      aliases: [],
+      roles: [],
+      locks: [],
+      defaultRole: MuseRefRole.Character,
+      conflict: MuseAssetBatchConflict.Rename,
+      existingAssets: [],
+      overrides,
+    });
+    expect(rows[0].projectInput).toBe('oliva_');
+    expect(rows[0].angleInput).toBe('front ');
+    expect(rows[0].variantInput).toBe('young_');
+    expect(rows[0].stateInput).toBe('wet ');
+    expect(rows[0].project).toBe('OLIVA');
+    expect(rows[0].angle).toBe('front');
+    expect(rows[0].variant).toBe('young');
+    expect(rows[0].state).toBe('wet');
+    expect(rows[0].canonicalName).toContain('OLIVA_CHAR_');
   });
 });

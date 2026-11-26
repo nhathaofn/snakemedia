@@ -12,6 +12,10 @@ func Plugin() providers.Plugin {
 		Site: func(cfg *config.Manager) accounts.Site { return NewSite(cfg) },
 		New: func(d providers.Deps) providers.Provider {
 			p := New(d.Paths.DataDir, d.Paths.MuseOutputDir, d.Config, d.Media, d.Accounts)
+			if d.Paths.MuseAssetsDir != "" {
+				p.defaultVaultDir = d.Paths.MuseAssetsDir
+				d.Media.AllowRoot(d.Paths.MuseAssetsDir)
+			}
 			p.tools = d.Tools
 			return p
 		},

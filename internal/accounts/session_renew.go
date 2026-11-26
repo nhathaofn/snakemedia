@@ -146,8 +146,15 @@ func (s *Service) renewOneSession(ctx context.Context, rec Record, refresher Ses
 	}
 	// Do not overwrite live Chrome state if Chrome opened or a job started in
 	// the meantime.
+	lock := s.openLock(rec.ID)
+	lock.Lock()
+	defer lock.Unlock()
 	if s.InUse(rec.ID) || s.pool.Running(rec.ProfileDir) != nil {
 		return
+	}
+	unchanged := func(r *Record) bool {
+		return r.Status == StatusSignedIn && r.CookieVersion == rec.CookieVersion &&
+			r.Proxy == rec.Proxy && (rec.ProxyAuto == "" || r.ProxyAuto == rec.ProxyAuto)
 	}
 	nowUTC := now.UTC().Format(time.RFC3339)
 	if res.SignedOut {
@@ -156,7 +163,7 @@ func (s *Service) renewOneSession(ctx context.Context, rec Record, refresher Ses
 			msg = "Phiên đăng nhập đã hết hạn. Bấm Mở Chrome để đăng nhập lại."
 		}
 		_, _ = s.Update(rec.ID, func(r *Record) {
-			if r.Status != StatusSignedIn {
+			if !unchanged(r) {
 				return
 			}
 			r.Status = StatusSignedOut
@@ -168,13 +175,14 @@ func (s *Service) renewOneSession(ctx context.Context, rec Record, refresher Ses
 	if len(res.Cookies) == 0 {
 		return
 	}
-	persisted := browser.PersistSessionCookies(res.Cookies, now, browser.DefaultSessionCookieTTL)
+	merged := preserveSessionCookieExpiry(rec.Cookies, res.Cookies, now)
+	persisted := browser.PersistSessionCookies(merged, now, browser.DefaultSessionCookieTTL)
 	if cookiesEqual(rec.Cookies, persisted) && cookiesExpiryEqual(rec.Cookies, persisted) {
 		return
 	}
 	version := uuid.NewString()
 	_, _ = s.Update(rec.ID, func(r *Record) {
-		if r.Status != StatusSignedIn {
+		if !unchanged(r) {
 			return
 		}
 		r.Cookies = persisted
@@ -185,7 +193,7 @@ func (s *Service) renewOneSession(ctx context.Context, rec Record, refresher Ses
 }
 
 func (s *Service) httpClientForAccount(ctx context.Context, rec Record) (*http.Client, func(), error) {
-	route, err := s.route(ctx, rec)
+	route, release, err := s.acquireRoute(ctx, rec)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -202,6 +210,7 @@ func (s *Service) httpClientForAccount(ctx context.Context, rec Record) (*http.C
 	}
 	if route.Key != proxy.DirectRoute {
 		if route.URL == nil {
+			release()
 			s.pruneBridges()
 			return nil, nil, errors.New("proxy route missing URL")
 		}
@@ -209,6 +218,7 @@ func (s *Service) httpClientForAccount(ctx context.Context, rec Record) (*http.C
 	}
 	cleanup := func() {
 		transport.CloseIdleConnections()
+		release()
 		if s.pool.Running(rec.ProfileDir) == nil {
 			s.pruneBridges()
 		}
@@ -221,6 +231,28 @@ func sessionRenewJitter(id string) time.Duration {
 	_, _ = h.Write([]byte(id))
 	minutes := h.Sum32() % uint32(sessionRenewJitterMax/time.Minute)
 	return time.Duration(minutes) * time.Minute
+}
+
+// preserveSessionCookieExpiry keeps existing synthetic expiration timestamps
+// on session cookies (Expires <= 0 in incoming) when the value is unchanged and
+// still comfortably outside sessionRenewNearExpiryWindow, avoiding noisy
+// CookieVersion churn during quiet HTTP renewals.
+func preserveSessionCookieExpiry(existing, incoming []browser.Cookie, now time.Time) []browser.Cookie {
+	out := make([]browser.Cookie, len(incoming))
+	minKeep := float64(now.Add(sessionRenewNearExpiryWindow).Unix())
+	for i, c := range incoming {
+		if c.Expires <= 0 {
+			for _, old := range existing {
+				if old.Name == c.Name && old.Domain == c.Domain && old.Path == c.Path &&
+					old.Value == c.Value && old.Expires > minKeep {
+					c.Expires = old.Expires
+					break
+				}
+			}
+		}
+		out[i] = c
+	}
+	return out
 }
 
 func earliestAuthCookieExpiry(cookies []browser.Cookie) (time.Time, bool) {

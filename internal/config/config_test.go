@@ -248,6 +248,34 @@ func TestManager_NewerConfigIsReadOnlyAndKept(t *testing.T) {
 	}
 }
 
+func TestManager_UpdateErrorPathsCloneToolsPaths(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	m, err := NewManager(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := m.Get()
+	origPath := filepath.Join(t.TempDir(), "ffmpeg.exe")
+	mutPath := filepath.Join(t.TempDir(), "mutated.exe")
+	cfg.Tools.Paths = map[string]string{"ffmpeg": origPath}
+	saved, err := m.Update(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Trigger ErrConflict with stale revision and mutate returned Tools.Paths.
+	stale := saved
+	stale.Revision = saved.Revision + 99
+	conflictCfg, err := m.Update(stale)
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("Update(stale) err = %v, want ErrConflict", err)
+	}
+	conflictCfg.Tools.Paths["ffmpeg"] = mutPath
+	if got := m.Get().Tools.Paths["ffmpeg"]; got != origPath {
+		t.Fatalf("mutating ErrConflict return mutated manager state: got %q, want %q", got, origPath)
+	}
+}
+
 func TestMigrate_MovesFlowFFmpegPathsToTools(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	ffmpeg := filepath.Join(t.TempDir(), "bin", "ffmpeg.exe")
@@ -294,5 +322,37 @@ func TestDefaultIdleBrowserMinutesIsTenAndOnChangeFires(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("OnChange should not fire on failed Update: calls = %d", calls)
+	}
+}
+
+func TestMigrate_ClearsLegacyDefaultMuseSetupMessage(t *testing.T) {
+	if got := DefaultMuseConfig().SetupMessage; got != "" {
+		t.Fatalf("DefaultMuseConfig().SetupMessage = %q, want empty", got)
+	}
+	for i, legacy := range legacyMuseSetupMessages {
+		path := filepath.Join(t.TempDir(), "config.json")
+		raw, _ := json.Marshal(map[string]any{"muse": map[string]any{"setupMessage": legacy}})
+		if err := os.WriteFile(path, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		m, err := NewManager(path)
+		if err != nil {
+			t.Fatalf("case %d: %v", i, err)
+		}
+		if got := m.Get().Muse.SetupMessage; got != "" {
+			t.Fatalf("case %d: legacy setupMessage not cleared: %q", i, got)
+		}
+	}
+	customPath := filepath.Join(t.TempDir(), "custom.json")
+	rawCustom, _ := json.Marshal(map[string]any{"muse": map[string]any{"setupMessage": "Custom note"}})
+	if err := os.WriteFile(customPath, rawCustom, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := NewManager(customPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Get().Muse.SetupMessage; got != "Custom note" {
+		t.Fatalf("custom setupMessage = %q, want Custom note", got)
 	}
 }

@@ -25,28 +25,14 @@ const maxBoardFrames = 6
 // boardImageLines ask for the storyboard frames of a video.
 func boardImageLines(job MuseJob) []string {
 	return []string{
-		fmt.Sprintf("Storyboard: make exactly %d separate images, one per scene of the video the prompt describes, in scene order (image 1 shows scene 1).", job.BoardFrames),
-		"Match the medium, visual style and mood requested for the finished video; do not default to photorealism. Keep recurring people, faces, hair, clothing, places and products consistent wherever they appear, except for changes the prompt explicitly describes. Show only the people and objects called for in each scene. A product reference keeps its text and colors. If scene boundaries are unspecified, divide the existing content into the requested number of frames without inventing events.",
-		"Make only these separate images, no video yet. Add no storyboard labels, captions, panel numbers, grids or decorative logos. Preserve required product markings and text explicitly requested in the scene.",
+		fmt.Sprintf("Storyboard: create %d separate scene images in order (image 1 is scene 1), keeping characters, outfits, settings, and product markings consistent across scenes, no video yet.", job.BoardFrames),
 	}
 }
 
 // boardVideoLines tell the video job how to use its storyboard frames.
 func boardVideoLines(job MuseJob) []string {
-	n := len(job.Frames)
 	return []string{
-		fmt.Sprintf("Storyboard: image 1 to image %d show the video's scenes in order (image k is scene k). Use each as the reference for its scene's people, wardrobe, setting, light, products and composition, subject to reference roles and locks; follow the prompt's entrances, exits and changes. They are references, not frames to show.", n),
-	}
-}
-
-// sampleLines tell a job to remake an attached sample video. Muse has no
-// video-to-video: its agent reads the file, looks at a few stills from it and
-// writes a new prompt, passing at most a still to the video tool; it does not
-// listen to the sound (TestLiveConsole, 2026-11-11). So the result is a
-// similar new video, and lines must come from the prompt.
-func sampleLines(job MuseJob) []string {
-	return []string{
-		fmt.Sprintf("Sample video: video 1 is a sample to remake as a new, similar %s. Look at it and follow its shots, camera movement, timing and actions, except what the prompt changes; appearance follows the prompt and any reference roles and locks. Speech comes only from the prompt. Do not copy the sample's identities, brands, captions or music unless asked.", kindWord[job.Kind]),
+		fmt.Sprintf("Storyboard: image 1 to image %d are scene references in order (image k is scene k); keep each scene's people, setting, and composition while taking motion from the prompt.", len(job.Frames)),
 	}
 }
 
@@ -56,18 +42,26 @@ func sampleLines(job MuseJob) []string {
 // frames, so it fails instead of waiting forever; one whose storyboard failed
 // keeps waiting for that storyboard to be retried.
 func (p *Provider) releaseWaiting() {
-	all := p.jobs.list()
-	byID := make(map[string]MuseJob, len(all))
-	for _, j := range all {
-		byID[j.ID] = j
+	active := p.jobs.listActive()
+	var afterIDs []string
+	seenAfter := map[string]bool{}
+	for _, j := range active {
+		if waitsForBoard(j) && j.Status == MuseJobQueued && !j.mayBePaid() && !seenAfter[j.After] {
+			seenAfter[j.After] = true
+			afterIDs = append(afterIDs, j.After)
+		}
 	}
+	if len(afterIDs) == 0 {
+		return
+	}
+	byID := p.jobs.snapshot(afterIDs)
 	// reasons holds the jobs to fail and why; the other listed jobs show
 	// boardFailedStep. All are changed in one journal write.
 	reasons := map[string]string{}
 	var ids []string
 	var boards []MuseJob
 	released := map[string]bool{}
-	for _, j := range all {
+	for _, j := range active {
 		if !waitsForBoard(j) || j.Status != MuseJobQueued || j.mayBePaid() {
 			continue
 		}
@@ -77,6 +71,8 @@ func (p *Provider) releaseWaiting() {
 			reasons[j.ID] = "Storyboard đã bị xoá; tạo lại video để làm storyboard mới."
 		case board.Status == MuseJobSucceeded && len(board.Files) == 0:
 			reasons[j.ID] = "Storyboard không có ảnh; tạo lại video để làm storyboard mới."
+		case board.Status == MuseJobSucceeded && j.BoardFrames > 0 && len(board.Files) < j.BoardFrames:
+			reasons[j.ID] = fmt.Sprintf("Storyboard chỉ tạo được %d/%d ảnh; tạo lại video để làm storyboard mới.", len(board.Files), j.BoardFrames)
 		case board.Status == MuseJobSucceeded:
 			if !released[board.ID] {
 				released[board.ID] = true
@@ -124,15 +120,18 @@ func waitsForBoard(job MuseJob) bool {
 
 // releaseAfter gives the video jobs waiting for a storyboard that just
 // succeeded its images. Jobs already sent keep the frames they were sent with.
+// A storyboard that finished with missing or partial frames fails its waiting
+// video jobs consistently with releaseWaiting so they never attach broken
+// frames or stall indefinitely.
 func (p *Provider) releaseAfter(board MuseJob) {
-	if board.Status != MuseJobSucceeded || len(board.Files) == 0 {
+	if board.Status != MuseJobSucceeded {
 		return
 	}
 	waiting := func(j MuseJob) bool {
 		return j.After == board.ID && j.Status == MuseJobQueued && !j.mayBePaid()
 	}
 	var ids []string
-	for _, j := range p.jobs.list() {
+	for _, j := range p.jobs.listActive() {
 		if waiting(j) {
 			ids = append(ids, j.ID)
 		}
@@ -140,6 +139,20 @@ func (p *Provider) releaseAfter(board MuseJob) {
 	p.updateJobs(ids, func(v *MuseJob) bool {
 		if !waiting(*v) {
 			return false
+		}
+		if len(board.Files) == 0 {
+			v.Status = MuseJobFailed
+			v.Error = "Storyboard không có ảnh; tạo lại video để làm storyboard mới."
+			v.Step = ""
+			v.FinishedAt = p.now().UTC().Format(time.RFC3339)
+			return true
+		}
+		if v.BoardFrames > 0 && len(board.Files) < v.BoardFrames {
+			v.Status = MuseJobFailed
+			v.Error = fmt.Sprintf("Storyboard chỉ tạo được %d/%d ảnh; tạo lại video để làm storyboard mới.", len(board.Files), v.BoardFrames)
+			v.Step = ""
+			v.FinishedAt = p.now().UTC().Format(time.RFC3339)
+			return true
 		}
 		frames := slices.Clone(board.Files)
 		if len(frames) > v.BoardFrames && v.BoardFrames > 0 {

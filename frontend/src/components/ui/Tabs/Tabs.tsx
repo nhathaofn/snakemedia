@@ -1,4 +1,4 @@
-import { useId, useRef } from 'react';
+import { Activity, useId, useRef } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import './Tabs.css';
 import type { IconComponent } from '../../../types';
@@ -85,7 +85,7 @@ export function Tabs<T extends string>({
           className="tabs-panel"
           hidden={item.value !== value}
         >
-          {item.content}
+          <Activity mode={item.value === value ? 'visible' : 'hidden'}>{item.content}</Activity>
         </div>
       ))}
     </div>

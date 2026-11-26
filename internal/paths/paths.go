@@ -14,6 +14,7 @@ const (
 	mediaDirName       = "media"
 	imageOutputDirName = "generated-images"
 	museOutputDirName  = "muse-output"
+	museAssetsDirName  = "assets-vault"
 	accountsDirName    = "accounts"
 	updatesDirName     = "updates"
 	toolsDirName       = "tools"
@@ -30,6 +31,8 @@ type Paths struct {
 	ImageOutputDir string
 	// MuseOutputDir is the default folder finished Muse files are copied to.
 	MuseOutputDir string
+	// MuseAssetsDir is the default managed Muse Asset Vault folder.
+	MuseAssetsDir string
 	// AccountsDir holds every provider's accounts, their Chrome profiles and
 	// the proxy list.
 	AccountsDir string
@@ -77,6 +80,7 @@ func ForRoot(dataDir string) Paths {
 		MediaDir:       filepath.Join(dataDir, mediaDirName),
 		ImageOutputDir: filepath.Join(dataDir, imageOutputDirName),
 		MuseOutputDir:  filepath.Join(dataDir, museOutputDirName),
+		MuseAssetsDir:  filepath.Join(dataDir, "muse", museAssetsDirName),
 		AccountsDir:    filepath.Join(dataDir, accountsDirName),
 		UpdatesDir:     filepath.Join(dataDir, updatesDirName),
 		ToolsDir:       filepath.Join(dataDir, toolsDirName),

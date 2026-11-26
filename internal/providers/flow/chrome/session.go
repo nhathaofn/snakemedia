@@ -80,6 +80,22 @@ func (p pageEntry) projectPage() bool {
 	return ok && strings.HasPrefix(u.Path, "/project/")
 }
 
+func (p pageEntry) flowSignInPage() bool {
+	if p.Type != "page" {
+		return false
+	}
+	u, err := url.Parse(p.URL)
+	if err != nil || u.Scheme != "https" || u.Host != "accounts.google.com" || !googleSignInPath(u.Path) {
+		return false
+	}
+	returnTo, err := url.Parse(u.Query().Get("continue"))
+	return err == nil && returnTo.Scheme == "https" && returnTo.Host == FlowHost
+}
+
+func googleSignInPath(path string) bool {
+	return path == "/ServiceLogin" || strings.HasPrefix(path, "/signin/") || strings.HasPrefix(path, "/v3/signin/")
+}
+
 // InspectFlowIdentity detects the authenticated page identity without waiting on
 // optional balance/capability APIs. A failure there must not hide the account.
 func InspectFlowIdentity(ctx context.Context, port int, policy config.AccountConfig) (*FlowSessionDetails, error) {
@@ -113,6 +129,11 @@ func inspectFlowSession(ctx context.Context, port int, policy config.AccountConf
 		}
 	}
 	if target == "" {
+		for _, page := range pages {
+			if page.flowSignInPage() {
+				return nil, ErrLoginRequired
+			}
+		}
 		return nil, ErrPageNotReady
 	}
 	if !localWebSocket(target, port) {
@@ -131,10 +152,14 @@ func inspectFlowSession(ctx context.Context, port int, policy config.AccountConf
 		Email       string      `json:"email"`
 		GaiaID      string      `json:"gaiaId"`
 		Title       string      `json:"title"`
+		SignInURL   string      `json:"signInUrl"`
+		Ready       bool        `json:"ready"`
 		Credentials Credentials `json:"credentials"`
 	}
 	err = evaluate(ctx, conn, 1, `JSON.stringify({
 		origin:location.origin,email:String(window.WIZ_global_data?.oPEP7c||''),gaiaId:String(window.WIZ_global_data?.S06Grb||''),title:document.title,
+		ready:document.readyState==='complete',signInUrl:[...document.links].find(a=>a.origin==='https://accounts.google.com'&&
+		  (a.pathname==='/ServiceLogin'||a.pathname.startsWith('/signin/')||a.pathname.startsWith('/v3/signin/'))&&a.getClientRects().length)?.href||'',
 		credentials:{atToken:window.WIZ_global_data?.SNlM0e||'',sessionId:window.WIZ_global_data?.f_sid||window.WIZ_global_data?.FdrFJe||'',
 		buildLabel:window.WIZ_global_data?.cfb2h||'',language:document.documentElement.lang||navigator.language,
 		userAgent:navigator.userAgent,sourcePath:location.pathname,authUser:new URL(location.href).searchParams.get('authuser')||''}
@@ -147,7 +172,10 @@ func inspectFlowSession(ctx context.Context, port int, policy config.AccountConf
 	}
 	details = &FlowSessionDetails{Email: identity.Email, GaiaID: identity.GaiaID, Title: identity.Title, Credentials: identity.Credentials}
 	if identity.Email == "" || identity.GaiaID == "" {
-		return details, nil
+		if identity.Ready && identity.Email == "" && identity.GaiaID == "" && identity.SignInURL != "" {
+			return nil, ErrLoginRequired
+		}
+		return nil, ErrPageNotReady
 	}
 	details.IsLoggedIn = true
 	var cookies struct {
@@ -269,6 +297,9 @@ func (c Credentials) validate() error {
 	}
 	return c.validateSession()
 }
+
+// HasRuntime reports whether the browser supplied the current session fields.
+func (c Credentials) HasRuntime() bool { return c.validateSession() == nil }
 
 // validateSession checks the runtime values every batchexecute call sends.
 func (c Credentials) validateSession() error {

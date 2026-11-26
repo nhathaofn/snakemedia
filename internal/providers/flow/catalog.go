@@ -597,24 +597,19 @@ func (s *Provider) videoFamiliesFor(ctx context.Context, acc session.StoredAccou
 }
 
 // fetchModelsPayloadFromAccount reads the raw GetModels payload through RPC HTrJv.
-// A stale stored session (HTTP 401) is refreshed from the account's Chrome
-// profile and the call retried once.
+// Read-only session recovery is shared with the other metadata calls.
 func (s *Provider) fetchModelsPayloadFromAccount(ctx context.Context, acc session.StoredAccount) (string, error) {
 	if s.accounts == nil {
 		return "", errors.New("dịch vụ tài khoản chưa được khởi tạo")
 	}
 	// The account's browser serves the call; hold it so it is not restarted
 	// (proxy change, idle close) while the catalogue is read.
-	defer s.accounts.AcquireProfile(acc.ProfileDir)()
-	payload, err := s.readModelsPayload(ctx, acc)
-	if !isUnauthorized(err) {
-		return payload, err
+	release, err := s.accounts.AcquireProfile(ctx, acc.ProfileDir)
+	if err != nil {
+		return "", err
 	}
-	synced, syncErr := s.syncSession(ctx, acc)
-	if syncErr != nil {
-		return "", fmt.Errorf("phiên Flow đã hết hạn và không đồng bộ lại được: %w", syncErr)
-	}
-	return s.readModelsPayload(ctx, synced)
+	defer release()
+	return s.readModelsPayload(ctx, acc)
 }
 
 func (s *Provider) readModelsPayload(ctx context.Context, acc session.StoredAccount) (string, error) {
@@ -624,16 +619,7 @@ func (s *Provider) readModelsPayload(ctx context.Context, acc session.StoredAcco
 		return "", err
 	}
 	defer s.keepCredentials(acc, client)
-	rpcID := client.Credentials().RPCs.ID(chrome.MethodModels)
-	fReq, err := BuildBatchEnvelope(rpcID, "[]")
-	if err != nil {
-		return "", err
-	}
-	raw, err := client.Do(ctx, rpcID, fReq, time.Duration(limits.RequestTimeoutSeconds)*time.Second)
-	if err != nil {
-		return "", err
-	}
-	return chrome.ParseRPCPayload(string(raw), rpcID)
+	return readFlowPayload(ctx, client, chrome.MethodModels, "[]", time.Duration(limits.RequestTimeoutSeconds)*time.Second)
 }
 
 // GetVideoModels returns the text-to-video families of the account whose turn is next.

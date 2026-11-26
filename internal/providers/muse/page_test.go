@@ -807,3 +807,167 @@ const page = (` + pageSource + `)(1024);
 		t.Fatalf("trpc proxy / body fiber cache test failed: %v\n%s", err, out)
 	}
 }
+
+func TestPageSharedTabSendRouteSerializationAndCacheReset(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is needed to execute the page script")
+	}
+	script := `const assert = require('node:assert/strict');
+let activeSends = 0;
+let maxActiveSends = 0;
+let currentClient = null;
+let clientVersion = 0;
+const makeClient = (label) => {
+  clientVersion++;
+  return {
+    label,
+    ensureActiveChatSendReady() {},
+    async sendMessage(text, atts, opts) {
+      activeSends++;
+      if (activeSends > maxActiveSends) maxActiveSends = activeSends;
+      await new Promise((r) => setTimeout(r, 25));
+      if (opts?.targetRoute?.sessionId) {
+        global.location.pathname = '/c/' + opts.targetRoute.sessionId;
+        currentClient = makeClient('thread-' + opts.targetRoute.sessionId);
+        chatFiber.memoizedProps.value = currentClient;
+      }
+      activeSends--;
+      return { ok: true, sessionId: opts?.targetRoute?.sessionId || 'new-' + text, used: label };
+    },
+  };
+};
+currentClient = makeClient('home');
+const chatFiber = { memoizedProps: { value: currentClient } };
+const bodyFiber = { memoizedProps: {}, child: chatFiber };
+chatFiber.return = bodyFiber;
+const rootFiber = { tag: 3, child: bodyFiber };
+bodyFiber.return = rootFiber;
+const bodyEl = { __reactFiber$app: bodyFiber, children: [], contains: (el) => el === bodyEl };
+global.document = { body: bodyEl };
+global.location = { pathname: '/' };
+global.fetch = async () => ({ status: 200, async json() { return {}; } });
+global.window = { __hatchEarlyGatewayRuntimeState: { activeRuntime: { getSnapshot: () => ({ isConnected: true }) } } };
+
+const page = (` + pageSource + `)(1024);
+(async () => {
+  const [r1, r2, lMid] = await Promise.all([
+    page.send('p1', [], ''),
+    page.send('p2', [], 't1'),
+    page.login(2000),
+  ]);
+  assert.equal(maxActiveSends, 1, 'send and sendTo on shared tab must never overlap');
+  assert.equal(r1.ok, true);
+  assert.equal(r2.ok, true);
+  assert.equal(lMid.loggedIn, true);
+  const beforeVer = clientVersion;
+  // Subsequent send must re-resolve updated React client because thread navigation invalidated cachedChat.
+  await page.send('p3', [], '');
+  assert.equal(clientVersion, beforeVer);
+})().catch(e => { console.error(e); process.exitCode = 1; });`
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, node)
+	cmd.Stdin = strings.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("shared tab send serialization test failed: %v\n%s", err, out)
+	}
+}
+
+func TestChromePageSharedRouteMutexSerializesRouteCallsWithoutBlockingReads(t *testing.T) {
+	f := newFakeDevTools(t, MuseURL)
+	var stateMu sync.Mutex
+	inRoute := 0
+	maxInRoute := 0
+	statusDuringRoute := false
+	enteredSend := make(chan struct{})
+	releaseSend := make(chan struct{})
+
+	f.answers["send"] = func(args []json.RawMessage) any {
+		var text string
+		_ = json.Unmarshal(args[0], &text)
+		stateMu.Lock()
+		inRoute++
+		if inRoute > maxInRoute {
+			maxInRoute = inRoute
+		}
+		stateMu.Unlock()
+		if text == "first" {
+			close(enteredSend)
+			<-releaseSend
+		} else {
+			time.Sleep(15 * time.Millisecond)
+		}
+		stateMu.Lock()
+		inRoute--
+		stateMu.Unlock()
+		return SendResult{OK: true, SessionID: "s-" + text}
+	}
+	f.answers["login"] = func([]json.RawMessage) any {
+		stateMu.Lock()
+		inRoute++
+		if inRoute > maxInRoute {
+			maxInRoute = inRoute
+		}
+		stateMu.Unlock()
+		time.Sleep(5 * time.Millisecond)
+		stateMu.Lock()
+		inRoute--
+		stateMu.Unlock()
+		return LoginState{LoggedIn: true, Chat: true, HTTP: 200}
+	}
+	f.answers["status"] = func([]json.RawMessage) any {
+		stateMu.Lock()
+		if inRoute > 0 {
+			statusDuringRoute = true
+		}
+		stateMu.Unlock()
+		return "running"
+	}
+
+	nav := &sync.RWMutex{}
+	routeMu := &sync.Mutex{}
+	p1 := newTestPage(f)
+	p2 := newTestPage(f)
+	p1.bindTab("1", "j1", nav, routeMu, nil)
+	p2.bindTab("1", "j2", nav, routeMu, nil)
+	defer p1.Close()
+	defer p2.Close()
+
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		if _, err := p1.Send(ctx, "first", nil); err != nil {
+			t.Errorf("p1 send: %v", err)
+		}
+	}()
+	<-enteredSend
+	// Pure RPC Status on shared tab must NOT block while routeMu is held by p1.Send.
+	if st, err := p2.Status(ctx, "s1"); err != nil || st != "running" {
+		t.Fatalf("status while send holds routeMu = (%q, %v)", st, err)
+	}
+	go func() {
+		defer wg.Done()
+		if _, err := p2.SendTo(ctx, "s1", "cont"); err != nil {
+			t.Errorf("p2 SendTo: %v", err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if _, err := p2.Login(ctx); err != nil {
+			t.Errorf("p2 Login: %v", err)
+		}
+	}()
+	time.Sleep(25 * time.Millisecond)
+	close(releaseSend)
+	wg.Wait()
+
+	if maxInRoute != 1 {
+		t.Fatalf("max concurrent route-mutating calls = %d, want 1", maxInRoute)
+	}
+	if !statusDuringRoute {
+		t.Fatal("expected pure Status RPC to execute concurrently while routeMu is held")
+	}
+}

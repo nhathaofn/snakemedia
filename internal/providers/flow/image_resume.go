@@ -1,9 +1,11 @@
 package flow
 
 import (
-	"SnakeMedia/internal/browser"
 	"context"
+	"slices"
 	"strings"
+
+	"SnakeMedia/internal/browser"
 
 	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/models"
@@ -22,28 +24,72 @@ func (s *Provider) resumeImageGeneration(ctx context.Context, job generationJob,
 		return models.SuccessResponse(pending)
 	}
 	defer release()
+	limits := s.cfg.Get().FlowPagePolicy()
+	if req.Quality == ImageQuality1K && completeAcceptedImages(job) {
+		// The acceptance response already identifies every image. Flow's
+		// project listing can lag or omit the client IDs after a restart.
+		// Signed URLs can expire, so keep project lookup as a fallback.
+		if acceptedClient, err := s.flowClient(ctx, *acc); err == nil {
+			items := s.materializeGeneratedImages(ctx, acceptedClient, nil, limits, job.ProjectID, req, slices.Clone(job.Images))
+			if imageJobPhase(items) == generationComplete {
+				for i := range items {
+					items[i].JobID, items[i].ModelName = job.ID, job.ImageTemplate.ModelName
+					if items[i].ModelName == "" {
+						items[i].ModelName = req.ModelID
+					}
+				}
+				job.Phase, job.Images, job.ImageResult, job.Message = generationComplete, items, items, ""
+				if err := s.saveGenerationJob(job); err != nil {
+					return models.ErrorResponse[[]GeneratedImageItem](err.Error(), models.CodeInternal)
+				}
+				return models.SuccessResponse(items)
+			}
+		}
+	}
 	methods := []string{chrome.MethodProjectContents, chrome.MethodMedia}
 	if req.Quality != ImageQuality1K {
 		methods = append(methods, chrome.MethodUpsampleImage)
 	}
 	client, err := s.flowClient(ctx, *acc, methods...)
 	if err != nil {
-		return models.SuccessResponse(pending)
+		client, err = s.projectClient(ctx, *acc, job.ProjectID, methods...)
+		if err != nil {
+			return models.SuccessResponse(pending)
+		}
 	}
 	defer s.keepCredentials(*acc, client)
+
+	var browser *browser.Browser
+	if req.Quality != ImageQuality1K {
+		browser, err = s.generationBrowser(ctx, *acc, job.ProjectID)
+		if err != nil || browser == nil {
+			return models.SuccessResponse(pending)
+		}
+		if completeAcceptedImages(job) {
+			items := s.materializeGeneratedImages(ctx, client, browser, limits, job.ProjectID, req, slices.Clone(job.Images))
+			for i := range items {
+				items[i].JobID, items[i].ModelName = job.ID, job.ImageTemplate.ModelName
+				if items[i].ModelName == "" {
+					items[i].ModelName = req.ModelID
+				}
+			}
+			phase := imageJobPhase(items)
+			job.Phase, job.Images = phase, items
+			if phase == generationComplete {
+				job.ImageResult, job.Message = items, ""
+			} else if idx := slices.IndexFunc(items, func(it GeneratedImageItem) bool { return it.Error != "" }); idx >= 0 {
+				job.Message = items[idx].Error
+			}
+			if err := s.saveGenerationJob(job); err != nil {
+				return models.ErrorResponse[[]GeneratedImageItem](err.Error(), models.CodeInternal)
+			}
+			return models.SuccessResponse(items)
+		}
+	}
 	listing, err := s.projectContentsPayload(ctx, client, job.ProjectID)
 	if err != nil {
 		return models.SuccessResponse(pending)
 	}
-
-	var browser *browser.Browser
-	if req.Quality != ImageQuality1K {
-		browser, err = s.accounts.EnsureAccountHeadlessBrowser(ctx, *acc)
-		if err != nil || browser == nil {
-			return models.SuccessResponse(pending)
-		}
-	}
-	limits := s.cfg.Get().FlowPagePolicy()
 	var found []GeneratedImageItem
 	foundClientIDs := make(map[string]bool, len(job.ClientIDs))
 	listed := false
@@ -96,7 +142,9 @@ func (s *Provider) resumeImageGeneration(ctx context.Context, job generationJob,
 			}
 		}
 	}
-	job.Images = append([]GeneratedImageItem(nil), found...)
+	if len(found) >= len(job.Images) {
+		job.Images = slices.Clone(found)
+	}
 	if len(foundClientIDs) == len(job.ClientIDs) {
 		job.Phase, job.ImageResult, job.Message = imageJobPhase(results), append([]GeneratedImageItem(nil), results...), ""
 	} else {
@@ -106,6 +154,22 @@ func (s *Provider) resumeImageGeneration(ctx context.Context, job generationJob,
 		return models.ErrorResponse[[]GeneratedImageItem](err.Error(), models.CodeInternal)
 	}
 	return models.SuccessResponse(results)
+}
+
+// completeAcceptedImages identifies an entire accepted batch from an older or
+// current journal without relying on the order in which the project lists it.
+func completeAcceptedImages(job generationJob) bool {
+	if job.Phase != generationAccepted || len(job.ClientIDs) == 0 || len(job.Images) != len(job.ClientIDs) {
+		return false
+	}
+	seen := make(map[string]bool, len(job.Images))
+	for _, item := range job.Images {
+		if item.Pending || item.ID == "" || item.URL == "" || seen[item.ID] {
+			return false
+		}
+		seen[item.ID] = true
+	}
+	return true
 }
 
 // ResumeImageGeneration reconciles a saved image request without sending a

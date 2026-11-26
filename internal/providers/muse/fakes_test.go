@@ -1,8 +1,12 @@
 package muse
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"path/filepath"
 	"sync"
@@ -14,6 +18,21 @@ import (
 	"SnakeMedia/internal/media"
 	"github.com/google/uuid"
 )
+
+func testPNGBytes(t *testing.T, w, h int) []byte {
+	t.Helper()
+	img := image.NewNRGBA(image.Rect(0, 0, w, h))
+	for y := range h {
+		for x := range w {
+			img.Set(x, y, color.NRGBA{R: uint8((x * 17) % 256), G: uint8((y * 31) % 256), B: 120, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
 
 // fakePage scripts a Muse tab. Fields are read under mu.
 type fakePage struct {

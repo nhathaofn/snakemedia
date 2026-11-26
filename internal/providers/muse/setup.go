@@ -26,13 +26,20 @@ func sendSetup(ctx context.Context, page Page, cfg config.MuseConfig, sleep func
 	if text == "" {
 		return "", false, nil
 	}
-	return sendNote(ctx, page, text, time.Duration(cfg.ImageTimeoutMinutes)*time.Minute, cfg, sleep, now)
+	return sendNoteWithLabel(ctx, page, text, "thiết lập", time.Duration(cfg.ImageTimeoutMinutes)*time.Minute, cfg, sleep, now)
 }
 
 // sendNote sends text in a new chat of its own and waits up to limit for
 // Muse's text reply. sent reports whether Muse took the message (it opened a
 // chat for it).
 func sendNote(ctx context.Context, page Page, text string, limit time.Duration, cfg config.MuseConfig, sleep func(context.Context, time.Duration) error, now func() time.Time) (reply string, sent bool, err error) {
+	return sendNoteWithLabel(ctx, page, text, "", limit, cfg, sleep, now)
+}
+
+func sendNoteWithLabel(ctx context.Context, page Page, text, label string, limit time.Duration, cfg config.MuseConfig, sleep func(context.Context, time.Duration) error, now func() time.Time) (reply string, sent bool, err error) {
+	if limit <= 0 {
+		return "", false, errors.New("Thời gian chờ phản hồi không hợp lệ.")
+	}
 	res, err := page.Send(ctx, text, nil)
 	if err != nil {
 		return "", false, fmt.Errorf("không gửi được: %w", err)
@@ -47,6 +54,10 @@ func sendNote(ctx context.Context, page Page, text string, limit time.Duration, 
 	deadline := now().Add(limit)
 	errLimit := max(cfg.PollErrorLimit, 1)
 	errCount := 0
+	pollInterval := time.Duration(cfg.PollIntervalMS) * time.Millisecond
+	if pollInterval <= 0 {
+		pollInterval = 500 * time.Millisecond
+	}
 	for {
 		status, err := page.Status(ctx, res.SessionID)
 		if err == nil {
@@ -64,13 +75,16 @@ func sendNote(ctx context.Context, page Page, text string, limit time.Duration, 
 		} else if ctx.Err() == nil {
 			errCount++
 			if errCount >= errLimit {
-				return "", true, fmt.Errorf("không đọc được phản hồi thiết lập: %w", err)
+				if label != "" {
+					return "", true, fmt.Errorf("không đọc được phản hồi %s: %w", label, err)
+				}
+				return "", true, fmt.Errorf("không đọc được phản hồi từ Muse: %w", err)
 			}
 		}
 		if !now().Before(deadline) {
 			return "", true, fmt.Errorf("quá %d phút Muse chưa trả lời", int(limit.Minutes()))
 		}
-		if err := sleep(ctx, time.Duration(cfg.PollIntervalMS)*time.Millisecond); err != nil {
+		if err := sleep(ctx, pollInterval); err != nil {
 			return "", true, err
 		}
 	}

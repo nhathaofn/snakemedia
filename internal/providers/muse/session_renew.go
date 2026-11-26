@@ -180,13 +180,39 @@ func mergeSetCookies(existing []browser.Cookie, incoming []*http.Cookie, default
 		if path == "" {
 			path = "/"
 		}
+		// Respect explicit cookie deletions (MaxAge < 0 or Expires in the past,
+		// including Unix epoch 0) by removing the cookie instead of letting
+		// PersistSessionCookies resurrect Expires <= 0 with a 30-day TTL.
+		deleted := nc.MaxAge < 0 || (!nc.Expires.IsZero() && !nc.Expires.After(now))
+		if deleted {
+			kept := out[:0]
+			for _, prev := range out {
+				if prev.Name == nc.Name && prev.Path == path && strings.EqualFold(strings.TrimPrefix(prev.Domain, "."), strings.TrimPrefix(domain, ".")) {
+					continue
+				}
+				kept = append(kept, prev)
+			}
+			out = kept
+			indexByKey = make(map[string]int, len(out))
+			for i, c := range out {
+				indexByKey[cookieKey(c.Domain, c.Path, c.Name)] = i
+			}
+			continue
+		}
 		var exp float64
 		if !nc.Expires.IsZero() {
 			exp = float64(nc.Expires.Unix())
 		} else if nc.MaxAge > 0 {
 			exp = float64(now.Add(time.Duration(nc.MaxAge) * time.Second).Unix())
-		} else if nc.MaxAge < 0 {
-			exp = float64(now.Add(-time.Second).Unix())
+		}
+		var sameSite string
+		switch nc.SameSite {
+		case http.SameSiteStrictMode:
+			sameSite = "Strict"
+		case http.SameSiteLaxMode:
+			sameSite = "Lax"
+		case http.SameSiteNoneMode:
+			sameSite = "None"
 		}
 		updated := browser.Cookie{
 			Name:     nc.Name,
@@ -196,6 +222,7 @@ func mergeSetCookies(existing []browser.Cookie, incoming []*http.Cookie, default
 			Expires:  exp,
 			HTTPOnly: nc.HttpOnly,
 			Secure:   nc.Secure,
+			SameSite: sameSite,
 		}
 		key := cookieKey(updated.Domain, updated.Path, updated.Name)
 		if idx, exists := indexByKey[key]; exists {

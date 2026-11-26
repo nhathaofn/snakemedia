@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -236,6 +237,7 @@ func (s *Provider) followEditJob(ctx context.Context, client *chrome.FlowClient,
 }
 
 func (s *Provider) ResumeVideoEdit(ctx context.Context, id string) models.Response[[]GeneratedVideoItem] {
+	id = strings.ToLower(strings.TrimSpace(id))
 	if _, err := uuid.Parse(id); err != nil {
 		return models.ErrorResponse[[]GeneratedVideoItem](err.Error(), models.CodeInvalidArgument)
 	}
@@ -302,6 +304,19 @@ func (s *Provider) expireEditJob(job editJob) {
 		return
 	}
 	defer unlock()
+	// Re-verify mtime and terminal state under the job lock to close TOCTOU races.
+	path, err := s.statePath("jobs", job.ID)
+	if err != nil {
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil || time.Since(info.ModTime()) <= s.jobRetention() {
+		return
+	}
+	var current editJob
+	if err := s.readState("jobs", job.ID, &current); err != nil || !current.Complete {
+		return
+	}
 	if err := s.removeState("jobs", job.ID); err != nil {
 		logger.Get().Warn("cannot delete expired edit job", "job", job.ID, "error", err)
 	}
@@ -315,6 +330,22 @@ func (s *Provider) abandonEditJob(job editJob) editJob {
 		return job
 	}
 	defer unlock()
+	// Re-verify mtime and current disk state under the job lock.
+	path, err := s.statePath("jobs", job.ID)
+	if err == nil {
+		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) <= s.jobRetention() {
+			if freshErr := s.readState("jobs", job.ID, &job); freshErr == nil {
+				return job
+			}
+		}
+		var current editJob
+		if readErr := s.readState("jobs", job.ID, &current); readErr == nil {
+			job = current
+			if job.Complete {
+				return job
+			}
+		}
+	}
 	item := job.Template
 	item.ID, item.JobID = job.ID, job.ID
 	item.Error = "Flow không trả kết quả trong thời gian lưu giữ; đã ngừng theo dõi."

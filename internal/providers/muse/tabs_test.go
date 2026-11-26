@@ -63,7 +63,7 @@ func (fc *fakeChromeTabs) pool() *tabPool {
 		fc.targets = append(fc.targets, t)
 		return t, nil
 	}
-	tp.navigate = func(_ context.Context, t browser.Target, _ int, site browser.Site) error {
+	tp.navigate = func(_ context.Context, t browser.Target, _ int, site browser.Site, _ config.AccountConfig) error {
 		fc.mu.Lock()
 		defer fc.mu.Unlock()
 		if fc.failNavOnID == t.ID {
@@ -76,6 +76,7 @@ func (fc *fakeChromeTabs) pool() *tabPool {
 		}
 		return nil
 	}
+	tp.waitReady = nil
 	tp.closeTab = func(_ context.Context, _ int, _ config.AccountConfig, id string) error {
 		fc.mu.Lock()
 		defer fc.mu.Unlock()
@@ -261,9 +262,9 @@ func TestTabPoolDirtyReleaseAndPeriodicHeapReload(t *testing.T) {
 	tp.navLock = func(string, string) *sync.RWMutex { return navMu }
 	navs := 0
 	origNav := tp.navigate
-	tp.navigate = func(ctx context.Context, target browser.Target, port int, site browser.Site) error {
+	tp.navigate = func(ctx context.Context, target browser.Target, port int, site browser.Site, policy config.AccountConfig) error {
 		navs++
-		return origNav(ctx, target, port, site)
+		return origNav(ctx, target, port, site, policy)
 	}
 	policy := config.DefaultAccountConfig()
 	ctx := context.Background()
@@ -352,5 +353,80 @@ func TestColdChromeStaggerPlanner(t *testing.T) {
 	}
 	if prev <= 5*time.Second {
 		t.Fatalf("expected 20 cold accounts to spread past 5s, got max=%v", prev)
+	}
+}
+
+func TestActiveJobIndexTracksActiveOnlyAcrossLifecycle(t *testing.T) {
+	p := testProvider(t, &fakePage{loggedIn: true})
+	jobs := []MuseJob{
+		{ID: "done-1", Kind: MuseJobImage, Status: MuseJobSucceeded},
+		{ID: "fail-1", Kind: MuseJobVideo, Status: MuseJobFailed},
+		{ID: "queued-1", Kind: MuseJobImage, Status: MuseJobQueued, NextCheckAt: p.now().Add(5 * time.Second).UTC().Format(time.RFC3339Nano)},
+		{ID: "proc-1", Kind: MuseJobVideo, Status: MuseJobProcessing, AccountID: "acc1", SessionID: "s1"},
+	}
+	if _, err := p.jobs.add(jobs...); err != nil {
+		t.Fatal(err)
+	}
+	active := p.jobs.listActive()
+	if len(active) != 2 || active[0].ID != "queued-1" || active[1].ID != "proc-1" {
+		t.Fatalf("listActive = %+v, want [queued-1 proc-1]", active)
+	}
+	if delay := p.nextWakeDelay(); delay > 6*time.Second {
+		t.Fatalf("nextWakeDelay ignored queued NextCheckAt: %v", delay)
+	}
+	if _, err := p.jobs.update("queued-1", func(j *MuseJob) { j.Status = MuseJobCancelled }); err != nil {
+		t.Fatal(err)
+	}
+	active = p.jobs.listActive()
+	if len(active) != 1 || active[0].ID != "proc-1" {
+		t.Fatalf("after cancel active = %+v, want [proc-1]", active)
+	}
+	// Retrying a failed job restores it to the active index.
+	if _, err := p.jobs.update("fail-1", func(j *MuseJob) { j.Status = MuseJobQueued }); err != nil {
+		t.Fatal(err)
+	}
+	active = p.jobs.listActive()
+	if len(active) != 2 || active[0].ID != "fail-1" || active[1].ID != "proc-1" {
+		t.Fatalf("after retry active = %+v, want [fail-1 proc-1]", active)
+	}
+}
+
+func TestRemoveJobFromSlotMatchesEmptyExactAndAssignTabGeneratesHolderID(t *testing.T) {
+	got := removeJobFromSlot([]string{"j1", "", "j2"}, "")
+	if len(got) != 2 || got[0] != "j1" || got[1] != "j2" {
+		t.Fatalf("removeJobFromSlot removed wrong entry: got %v, want [j1 j2]", got)
+	}
+
+	f := newFakeDevTools(t, MuseURL)
+	p := testProvider(t, &fakePage{loggedIn: true})
+	p.mu.Lock()
+	p.ctx = context.Background()
+	p.mu.Unlock()
+	acc := addSignedIn(t, p, "A")
+	cfg := p.cfg.Get().Muse
+	cfg.ThreadsPerAccount = 2
+
+	jobPage := newTestPage(f)
+	if err := p.assignTab(context.Background(), "job-1", acc.ID, jobPage, cfg); err != nil {
+		t.Fatalf("assignTab job-1: %v", err)
+	}
+	opPage := newTestPage(f)
+	if err := p.assignTab(context.Background(), "", acc.ID, opPage, cfg); err != nil {
+		t.Fatalf("assignTab empty jobID: %v", err)
+	}
+	targetID, holderID := opPage.boundTab()
+	if holderID == "" {
+		t.Fatal("expected assignTab with empty jobID to generate non-empty holder ID")
+	}
+	if !p.tabs.hasOtherBusy(acc.ID, f.port, targetID, "job-1") {
+		t.Fatal("expected opPage holder to be counted as sibling busy")
+	}
+	opPage.Close()
+	if p.tabs.hasOtherBusy(acc.ID, f.port, targetID, "job-1") {
+		t.Fatal("expected opPage holder to release cleanly without disturbing job-1")
+	}
+	jobPage.Close()
+	if p.tabs.hasBusy(acc.ID, f.port) {
+		t.Fatal("expected tabPool to become idle once both pages close")
 	}
 }

@@ -1,11 +1,18 @@
 package chrome
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"SnakeMedia/internal/config"
+	"github.com/gorilla/websocket"
 )
 
 func TestResolveActiveBuildRPCsAndLimits(t *testing.T) {
@@ -101,5 +108,96 @@ func TestResolveNamelessDescriptorsFromFallbackIDs(t *testing.T) {
 	registry, err = resolveRPCs([]string{"https://www.gstatic.com/a.js"}, 5, 10240, func(string) ([]byte, error) { return []byte(named), nil }, MethodProjects)
 	if err != nil || registry.ID(MethodProjects) != "newID" {
 		t.Fatalf("named descriptor did not win: %+v %v", registry, err)
+	}
+}
+
+func TestRPCRegistryMergePreservesExistingFields(t *testing.T) {
+	stored := RPCRegistry{
+		Models:         "HTrJv",
+		UploadImage:    "maseQ",
+		GenerateImages: "ogiZ0b",
+		UpsampleImage:  "SPrCad",
+		EditVideo:      "jIps6",
+		Credits:        "oldCred",
+	}
+	partial := RPCRegistry{
+		Credits:      "newCred",
+		Availability: "rThb8d",
+	}
+	merged := partial.Merge(stored)
+	if merged.Credits != "newCred" || merged.Availability != "rThb8d" {
+		t.Fatalf("fresh values did not win: %+v", merged)
+	}
+	if merged.Models != "HTrJv" || merged.UploadImage != "maseQ" || merged.GenerateImages != "ogiZ0b" || merged.UpsampleImage != "SPrCad" || merged.EditVideo != "jIps6" {
+		t.Fatalf("stored studio RPCs were clobbered: %+v", merged)
+	}
+}
+
+func TestDiscoverRPCsDOMScriptFetchFallbackDecodesJSONStringifiedJS(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	rawJS := `var a={id:"nzlxg",m:"/VideoFxService.GetCredits"};var b={id:"rThb8d",m:"/VideoFxService.CheckFlowAvailability"};var c={id:"maseQ",m:"/FlowService.UploadImage"};`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var req struct {
+				ID     int            `json:"id"`
+				Method string         `json:"method"`
+				Params map[string]any `json:"params"`
+			}
+			if err := json.Unmarshal(msg, &req); err != nil {
+				return
+			}
+			var reply any
+			switch req.Method {
+			case "Debugger.enable", "Debugger.disable", "Debugger.setSkipAllPauses":
+				reply = map[string]any{"id": req.ID, "result": map[string]any{}}
+			case "Runtime.evaluate":
+				expr, _ := req.Params["expression"].(string)
+				switch {
+				case strings.Contains(expr, "querySelectorAll"):
+					val, _ := json.Marshal([]string{"https://www.gstatic.com/dom_fallback.js"})
+					reply = map[string]any{"id": req.ID, "result": map[string]any{"result": map[string]any{"value": string(val)}}}
+				case strings.Contains(expr, "fetch("):
+					if !strings.Contains(expr, "JSON.stringify(") {
+						// Reproduce browser.Evaluate failure when raw JS is returned unquoted.
+						reply = map[string]any{"id": req.ID, "result": map[string]any{"result": map[string]any{"value": rawJS}}}
+					} else {
+						val, _ := json.Marshal(rawJS)
+						reply = map[string]any{"id": req.ID, "result": map[string]any{"result": map[string]any{"value": string(val)}}}
+					}
+				default:
+					reply = map[string]any{"id": req.ID, "result": map[string]any{"result": map[string]any{"value": 0}}}
+				}
+			}
+			_ = conn.WriteJSON(reply)
+		}
+	}))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	policy := config.DefaultFlowPagePolicy()
+	policy.RPCCacheSeconds = 0
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	reg, err := discoverRPCs(ctx, conn, "build-dom-fallback-test", policy, MethodUploadImage)
+	if err != nil {
+		t.Fatalf("DOM script fetch fallback failed: %v", err)
+	}
+	if reg.ID(MethodUploadImage) != "maseQ" || reg.Credits != "nzlxg" {
+		t.Fatalf("unexpected registry from DOM fallback: %+v", reg)
 	}
 }

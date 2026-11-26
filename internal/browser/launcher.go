@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"SnakeMedia/internal/logger"
 )
@@ -41,6 +42,11 @@ func BuildArgs(opts LaunchOptions) []string {
 	}
 	if opts.Headless {
 		args = append(args, "--headless=new", "--window-size=1366,768", "--hide-scrollbars", "--mute-audio")
+		// Pass a normalized User-Agent at launch when observed so Chromium does
+		// not revert back to "HeadlessChrome/" after short-lived CDP sockets close.
+		if ua := LastUserAgent(); ua != "" && !hasArgPrefix(opts.ExtraArgs, "--user-agent=") {
+			args = append(args, "--user-agent="+ua)
+		}
 	}
 	if len(opts.ExtraArgs) > 0 {
 		args = append(args, opts.ExtraArgs...)
@@ -49,6 +55,15 @@ func BuildArgs(opts LaunchOptions) []string {
 		args = append(args, opts.TargetURL)
 	}
 	return args
+}
+
+func hasArgPrefix(args []string, prefix string) bool {
+	for _, a := range args {
+		if strings.HasPrefix(strings.ToLower(a), prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // Launch starts a detached Chrome process with the given options.

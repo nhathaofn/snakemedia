@@ -25,9 +25,10 @@ func (stubSite) Inspect(context.Context, *browser.Browser, accounts.Record) (acc
 }
 
 type stubProvider struct {
-	id     string
-	log    *[]string
-	source string
+	id      string
+	log     *[]string
+	source  string
+	onClose func()
 }
 
 func (p *stubProvider) ID() string   { return p.id }
@@ -46,7 +47,11 @@ func (p *stubProvider) OptionSources() map[string]engine.OptionSource {
 func (p *stubProvider) Start(context.Context, func(events.Event, any)) {
 	*p.log = append(*p.log, "start "+p.id)
 }
-func (p *stubProvider) Close() { *p.log = append(*p.log, "close "+p.id) }
+func (p *stubProvider) Close() {
+	if p.onClose != nil {
+		p.onClose()
+	}
+}
 
 func plugin(id string, log *[]string, source string) Plugin {
 	return Plugin{
@@ -74,8 +79,15 @@ func TestPluginsJoinTheApp(t *testing.T) {
 		t.Fatal(err)
 	}
 	set.Start(context.Background(), func(events.Event, any) {})
+	closed := make(chan string, 2)
+	for _, provider := range set.built {
+		provider.(*stubProvider).onClose = func() { closed <- provider.ID() }
+	}
 	set.Close()
-	if got := strings.Join(log, ","); got != "start one,start two,close one,close two" {
+	if len(closed) != 2 {
+		t.Fatal("every plugin should close")
+	}
+	if got := strings.Join(log, ","); got != "start one,start two" {
 		t.Fatalf("lifecycle in plugin order, got %s", got)
 	}
 	if p := Find[*stubProvider](set); p == nil || p.id != "one" {
@@ -104,7 +116,9 @@ func TestCloseDoesNotWaitForeverOnAStuckProvider(t *testing.T) {
 	var log []string
 	stuck := &stuckProvider{stubProvider: stubProvider{id: "stuck", log: &log}, release: make(chan struct{})}
 	defer close(stuck.release)
-	set := &Set{built: []Provider{stuck}, closeWait: 50 * time.Millisecond}
+	otherClosed := make(chan struct{})
+	other := &stubProvider{id: "other", onClose: func() { close(otherClosed) }}
+	set := &Set{built: []Provider{stuck, other}, closeWait: 50 * time.Millisecond}
 	done := make(chan struct{})
 	go func() {
 		set.Close()
@@ -112,6 +126,11 @@ func TestCloseDoesNotWaitForeverOnAStuckProvider(t *testing.T) {
 	}()
 	select {
 	case <-done:
+		select {
+		case <-otherClosed:
+		default:
+			t.Fatal("another provider was skipped because the first one hung")
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Close kept waiting on a provider that never closes")
 	}

@@ -14,10 +14,13 @@ export function OutputFolderField({
   provider,
   value,
   onChange,
+  onUserChange,
 }: {
   provider: AccountProvider;
   value: string;
   onChange: (dir: string) => void;
+  /** Fired only when the user explicitly picks a folder (never on initial load). */
+  onUserChange?: (dir: string) => void;
 }) {
   const addToast = useAppStore((s) => s.addToast);
   const report = useCallback(
@@ -51,7 +54,10 @@ export function OutputFolderField({
   const choose = async () => {
     try {
       const res = unwrap(await api.chooseBatchOutputDirectory(provider));
-      if (!res.canceled && res.path) onChange(res.path);
+      if (!res.canceled && res.path) {
+        onChange(res.path);
+        onUserChange?.(res.path);
+      }
     } catch (cause) {
       report('Không chọn được thư mục lưu', cause);
     }

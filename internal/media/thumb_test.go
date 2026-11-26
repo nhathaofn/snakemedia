@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -43,6 +42,9 @@ func TestThumbIsSmallJPEG(t *testing.T) {
 	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "image/jpeg" {
 		t.Fatalf("status %d, type %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "private, no-cache" {
+		t.Fatalf("Cache-Control = %q, want private, no-cache", cc)
+	}
 	img, err := jpeg.Decode(rec.Body)
 	if err != nil {
 		t.Fatal(err)
@@ -70,15 +72,48 @@ func TestThumbFallsBackToOriginal(t *testing.T) {
 	}
 }
 
-func TestPreviewDataURLScalesDownAndFallsBackEmpty(t *testing.T) {
+func TestImportPreviewLoadsOnlySelectedImageOnDemand(t *testing.T) {
 	dir := t.TempDir()
-	imgPath := filepath.Join(dir, "wide.png")
-	writePNG(t, imgPath, 800, 400)
-	got := PreviewDataURL(imgPath, 120, 72)
-	if !strings.HasPrefix(got, "data:image/jpeg;base64,") {
-		t.Fatalf("unexpected data URL: %q", got)
+	store := NewStore(dir)
+	wanted := filepath.Join(dir, "wide.png")
+	writePNG(t, wanted, 800, 400)
+	prefix := store.ImportPreviewPrefix([]string{wanted, ""}, 1<<20)
+	rec := get(t, store, prefix+"0")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview status %d", rec.Code)
 	}
-	if PreviewDataURL(filepath.Join(dir, "missing.png"), 120, 72) != "" {
-		t.Fatal("missing file must return empty data URL")
+	img, err := jpeg.Decode(rec.Body)
+	if err != nil || img.Bounds().Dx() != 120 || img.Bounds().Dy() != 60 {
+		t.Fatalf("expected 120x60 JPEG, got %v (%v)", img, err)
+	}
+	for _, url := range []string{prefix + "1", prefix + "2", prefix + "-1"} {
+		if rec := get(t, store, url); rec.Code != http.StatusNotFound {
+			t.Fatalf("invalid selection %q returned %d", url, rec.Code)
+		}
+	}
+	store.ImportPreviewPrefix([]string{wanted}, 1)
+	if rec := get(t, store, prefix+"0"); rec.Code != http.StatusNotFound {
+		t.Fatal("old scan should be invalidated")
+	}
+}
+
+func TestWithinDeduplicatesRepeatedDynamicRoots(t *testing.T) {
+	store := NewStore(t.TempDir())
+	allowed := t.TempDir()
+	other := t.TempDir()
+	store.AllowRootsFrom(func() []string {
+		// Simulate 2,000 queued jobs sharing the same batch output folder.
+		dup := make([]string, 0, 2001)
+		for range 2000 {
+			dup = append(dup, other)
+		}
+		dup = append(dup, allowed)
+		return dup
+	})
+	if _, err := store.CheckDir(filepath.Join(allowed, "sub")); err != nil {
+		t.Fatalf("CheckDir inside allowed root failed: %v", err)
+	}
+	if _, err := store.CheckDir(filepath.Join(t.TempDir(), "outside")); err == nil {
+		t.Fatal("CheckDir outside allowed roots should fail")
 	}
 }

@@ -7,11 +7,11 @@ import (
 	"slices"
 	"strings"
 
+	"SnakeMedia/internal/providers/flow/chrome"
 	"SnakeMedia/internal/providers/flow/session"
 )
 
-// errNoFlowAccount is returned when no connected account passes the cookie check.
-var errNoFlowAccount = errors.New("không có tài khoản Google Flow nào có cookie hợp lệ. Vui lòng đăng nhập hoặc làm mới tài khoản.")
+var errNoFlowAccount = errors.New("không có tài khoản Flow đang bật và sẵn sàng. Xem trạng thái ở Trang chủ → Tài khoản.")
 
 // readyCandidate reserves one of candidates with reserve, holds its profile
 // (its headless browser must outlive the work) and syncs its Flow session from
@@ -26,6 +26,7 @@ func readyCandidate[C any](
 	reserve func(context.Context, []C) (int, *accountLease, error),
 ) (chosen C, synced session.StoredAccount, lease *accountLease, release func(), err error) {
 	var skipped []string
+	var unavailable error
 	remaining := slices.Clone(candidates)
 	for len(remaining) > 0 {
 		idx, next, err := reserve(ctx, remaining)
@@ -37,11 +38,18 @@ func readyCandidate[C any](
 		if err == nil {
 			return remaining[idx], fresh, next, releaseNext, nil
 		}
-		if !errors.Is(err, session.ErrSessionSignedOut) {
+		switch {
+		case errors.Is(err, session.ErrSessionSignedOut):
+			skipped = append(skipped, acc.Email)
+		case errors.Is(err, chrome.ErrPageNotReady) && ctx.Err() == nil:
+			unavailable = fmt.Errorf("phiên Flow của %s đang tải: %w", acc.Email, err)
+		default:
 			return chosen, synced, nil, nil, fmt.Errorf("không đồng bộ được phiên Flow của %s: %w", acc.Email, err)
 		}
-		skipped = append(skipped, acc.Email)
 		remaining = slices.Delete(remaining, idx, idx+1)
+	}
+	if unavailable != nil {
+		return chosen, synced, nil, nil, unavailable
 	}
 	if len(skipped) == 0 {
 		return chosen, synced, nil, nil, errNoFlowAccount
@@ -62,7 +70,11 @@ func (s *Provider) readySpecific(ctx context.Context, acc session.StoredAccount)
 // holdAndSync holds acc's profile and reads its session fresh from Chrome; on
 // failure both the profile and lease are let go.
 func (s *Provider) holdAndSync(ctx context.Context, acc session.StoredAccount, lease *accountLease) (session.StoredAccount, func(), error) {
-	releaseProfile := s.accounts.AcquireProfile(acc.ProfileDir)
+	releaseProfile, err := s.accounts.AcquireProfile(ctx, acc.ProfileDir)
+	if err != nil {
+		lease.release()
+		return session.StoredAccount{}, nil, err
+	}
 	synced, err := s.syncSession(ctx, acc)
 	if err != nil {
 		releaseProfile()
