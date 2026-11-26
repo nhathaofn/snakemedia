@@ -223,19 +223,59 @@ func readChatOnce(ctx context.Context, job MuseJob, page Page) func() ([]Assista
 	}
 }
 
-// wantedMedia picks the result files of kind from a chat, and reports whether
-// Muse listed files of that kind it could not hand over (missing).
+// completedResultSettleDelays briefly re-reads chat.history when sessions.list
+// flips to "completed" right before the final assistant media/presentation
+// event finishes writing, preventing false CẦN ĐỔI PROMPT failures on paid runs.
+var completedResultSettleDelays = []time.Duration{2 * time.Second, 3 * time.Second}
+
+func mediaPathKey(p string) string {
+	s := strings.TrimSpace(p)
+	s = strings.TrimPrefix(s, "sandbox://")
+	return strings.TrimLeft(s, "/")
+}
+
+// wantedMedia picks the result files of kind from a chat (deduplicating files
+// repeated across message.assistant resources and delta.presentation events),
+// and reports whether Muse listed files of that kind it could not hand over.
 func wantedMedia(events []AssistantEvent, kind MuseJobKind) (wanted []ResultMedia, missing bool) {
+	indexByKey := make(map[string]int)
+	var missingKeys []string
 	for _, e := range events {
 		for _, m := range append(append([]ResultMedia(nil), e.Videos...), e.Images...) {
 			if m.Path == "" || !strings.HasPrefix(m.Mime, kindMime[kind]) {
 				continue
 			}
-			if m.Missing {
-				missing = true
+			key := mediaPathKey(m.Path)
+			if key == "" {
 				continue
 			}
+			if m.Missing {
+				missingKeys = append(missingKeys, key)
+				continue
+			}
+			if idx, ok := indexByKey[key]; ok {
+				prev := wanted[idx]
+				if m.ByteLen <= 0 && prev.ByteLen > 0 {
+					m.ByteLen = prev.ByteLen
+				}
+				if kind == MuseJobVideo && idx != len(wanted)-1 {
+					wanted = append(append(wanted[:idx], wanted[idx+1:]...), m)
+					for i := idx; i < len(wanted); i++ {
+						indexByKey[mediaPathKey(wanted[i].Path)] = i
+					}
+				} else {
+					wanted[idx] = m
+				}
+				continue
+			}
+			indexByKey[key] = len(wanted)
 			wanted = append(wanted, m)
+		}
+	}
+	for _, key := range missingKeys {
+		if _, ok := indexByKey[key]; !ok {
+			missing = true
+			break
 		}
 	}
 	return wanted, missing
@@ -268,6 +308,30 @@ func (p *Provider) collectWithReplies(ctx context.Context, job MuseJob, accountI
 	if isLong(job) {
 		if long, err = p.longOutcome(ctx, job, accountID, *page, replies); err != nil {
 			return err
+		}
+	}
+	if ended == sessionCompleted && len(wanted) == 0 && !missing && (!isLong(job) || long.State == statusDone) {
+		for _, delay := range completedResultSettleDelays {
+			if err := p.sleep(ctx, delay); err != nil {
+				return err
+			}
+			fresh, rErr := (*page).Result(ctx, job.SessionID)
+			if rErr != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				continue
+			}
+			replies = fresh
+			wanted, missing = wantedMedia(replies, job.Kind)
+			if isLong(job) {
+				if long, err = p.longOutcome(ctx, job, accountID, *page, replies); err != nil {
+					return err
+				}
+			}
+			if len(wanted) > 0 || missing || (isLong(job) && long.State != statusDone) {
+				break
+			}
 		}
 	}
 	// A video job asks for one file. A long video's chat holds every clip

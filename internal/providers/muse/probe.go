@@ -266,7 +266,24 @@ func (s *Site) waitVideoCheck(ctx context.Context, page Page, sid string, limit 
 						return sessionCompleted, replies, nil
 					}
 				}
-				if status == sessionCompleted || status == sessionInterrupted {
+				if status == sessionCompleted {
+					// Give chat.history a brief settle window when sessions.list flips
+					// to completed right before the media resource/presentation lands.
+					if err := s.sleepFn(ctx, 2*time.Second); err != nil {
+						return "", nil, err
+					}
+					if fresh, fErr := page.Result(ctx, sid); fErr == nil {
+						replies = fresh
+						wanted, _ = wantedMedia(replies, MuseJobVideo)
+						for _, m := range wanted {
+							if !m.Missing {
+								return sessionCompleted, replies, nil
+							}
+						}
+					}
+					return status, replies, nil
+				}
+				if status == sessionInterrupted {
 					return status, replies, nil
 				}
 			}

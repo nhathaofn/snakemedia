@@ -894,20 +894,163 @@ function pageMain(CHUNK) {
         },
         20000,
       );
-      const media = (list) =>
-        (list || []).map((m) => ({
-          path: m.path || "",
-          mime: m.mime || "",
-          byteLen: Number(m.byte_len) || 0,
-          missing: Boolean(m.missing),
-        }));
+      const mediaKey = (p) =>
+        String(p || "")
+          .trim()
+          .replace(/^sandbox:\/\//, "")
+          .replace(/^\/+/, "");
+      const inferMime = (path, kind) => {
+        const clean = String(path || "")
+          .split(/[?#]/)[0]
+          .toLowerCase();
+        if (clean.endsWith(".mp4") || clean.endsWith(".m4v")) return "video/mp4";
+        if (clean.endsWith(".webm")) return "video/webm";
+        if (clean.endsWith(".mov")) return "video/quicktime";
+        if (clean.endsWith(".webp")) return "image/webp";
+        if (clean.endsWith(".png")) return "image/png";
+        if (clean.endsWith(".jpg") || clean.endsWith(".jpeg")) return "image/jpeg";
+        if (clean.endsWith(".gif")) return "image/gif";
+        const k = String(kind || "").toLowerCase();
+        if (k === "video") return "video/mp4";
+        if (k === "image") return "image/webp";
+        return "";
+      };
+      const parseMeta = (raw) => {
+        if (!raw) return null;
+        if (typeof raw === "object") return raw;
+        if (typeof raw === "string") {
+          try {
+            const parsed = JSON.parse(raw);
+            return parsed && typeof parsed === "object" ? parsed : null;
+          } catch (e) {}
+        }
+        return null;
+      };
+      const normalizePath = (p) => {
+        const s = String(p || "").trim();
+        if (!s) return "";
+        if (s.startsWith("sandbox://") || s.startsWith("/")) return s;
+        return "sandbox://" + s;
+      };
+      const isSandboxOrLocal = (p) => Boolean(p) && !/^https?:\/\//i.test(p);
+      const addItem = (list, seen, item) => {
+        if (!item.path || !item.mime) return;
+        const key = mediaKey(item.path);
+        if (!key) return;
+        const idx = seen.get(key);
+        if (idx !== undefined) {
+          const prev = list[idx];
+          if (prev.missing && !item.missing) {
+            list[idx] = item;
+          } else if (prev.byteLen <= 0 && item.byteLen > 0) {
+            list[idx] = { ...prev, byteLen: item.byteLen };
+          }
+          return;
+        }
+        seen.set(key, list.length);
+        list.push(item);
+      };
+      const extractMedia = (e) => {
+        const images = [];
+        const videos = [];
+        const seenImages = new Map();
+        const seenVideos = new Map();
+        const pushTyped = (item, kindHint = "") => {
+          const path = String(item.path || "").trim();
+          const mime = String(item.mime || "").trim() || inferMime(path, kindHint);
+          if (!path || !mime) return;
+          const entry = {
+            path,
+            mime,
+            byteLen: Number(item.byteLen) || 0,
+            missing: Boolean(item.missing),
+          };
+          if (mime.startsWith("video/")) {
+            addItem(videos, seenVideos, entry);
+          } else if (mime.startsWith("image/")) {
+            addItem(images, seenImages, entry);
+          }
+        };
+        for (const m of e.payload?.data?.images || []) {
+          pushTyped(
+            {
+              path: m.path || "",
+              mime: m.mime || "",
+              byteLen: m.byte_len,
+              missing: m.missing,
+            },
+            "image",
+          );
+        }
+        for (const m of e.payload?.data?.videos || []) {
+          pushTyped(
+            {
+              path: m.path || "",
+              mime: m.mime || "",
+              byteLen: m.byte_len,
+              missing: m.missing,
+            },
+            "video",
+          );
+        }
+        // Muse often delivers generated files directly on message.assistant
+        // in e.resources (or e.payload.resources) without a separate
+        // delta.presentation event.
+        for (const list of [e.resources, e.payload?.resources]) {
+          if (!Array.isArray(list)) continue;
+          for (const r of list) {
+            if (!r || typeof r !== "object") continue;
+            const meta = parseMeta(r.metadata);
+            const path =
+              [r.uri, r.path, normalizePath(meta?.path)]
+                .map((v) => String(v || "").trim())
+                .find(isSandboxOrLocal) || "";
+            if (!path) continue;
+            const kind = r.kind || meta?.kind || "";
+            const mime =
+              String(
+                r.mime_type || r.mime || meta?.mime_type || meta?.mime || "",
+              ).trim() || inferMime(path, kind);
+            const byteLen =
+              Number(
+                r.byte_len ?? r.size_bytes ?? meta?.size_bytes ?? meta?.byte_len,
+              ) || 0;
+            const missing = Boolean(r.missing || meta?.missing);
+            pushTyped({ path, mime, byteLen, missing }, kind);
+          }
+        }
+        // Fallback: markdown media embeds ![...](sandbox://...) in assistant
+        // text or fallback_text when neither presentation nor resources carried them.
+        for (const rawText of [
+          e.display_text,
+          e.payload?.data?.fallback_text,
+          e.payload?.fallback_text,
+        ]) {
+          if (typeof rawText !== "string" || !rawText.includes("sandbox://"))
+            continue;
+          for (const match of rawText.matchAll(
+            /!\[[^\]]*\]\((sandbox:\/\/[^)\s]+)\)/g,
+          )) {
+            const path = match[1];
+            if (/(?:^|\/)(?:uploads|attachments)\//i.test(mediaKey(path)))
+              continue;
+            const mime = inferMime(path, "");
+            if (!mime) continue;
+            pushTyped({ path, mime, byteLen: 0, missing: false });
+          }
+        }
+        return { images, videos };
+      };
       return (h.chat_events || [])
         .filter((e) => e.role === "assistant")
-        .map((e) => ({
-          text: e.display_text || "",
-          images: media(e.payload?.data?.images),
-          videos: media(e.payload?.data?.videos),
-        }));
+        .map((e) => {
+          const { images, videos } = extractMedia(e);
+          return {
+            text: e.display_text || "",
+            images,
+            videos,
+          };
+        });
     },
     async open(path, maxBytes) {
       sweepFiles();
