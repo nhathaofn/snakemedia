@@ -110,4 +110,30 @@ describe('batchImport helpers', () => {
     expect(overRes.rows[0].status).toBe('overwrite');
     expect(overRes.rows[1].status).toBe('overwrite');
   });
+
+  it('preserves raw draft input with trailing underscores/spaces while keeping canonical output normalized', () => {
+    const images = [makeImage('1.png')];
+    const overrides = new Map([
+      [0, { project: 'oliva_', angle: 'front ', variant: 'young_', state: 'wet ' }],
+    ]);
+    const { rows } = buildBatchRows({
+      images,
+      aliases: [],
+      roles: [],
+      locks: [],
+      defaultRole: MuseRefRole.Character,
+      conflict: MuseAssetBatchConflict.Rename,
+      existingAssets: [],
+      overrides,
+    });
+    expect(rows[0].projectInput).toBe('oliva_');
+    expect(rows[0].angleInput).toBe('front ');
+    expect(rows[0].variantInput).toBe('young_');
+    expect(rows[0].stateInput).toBe('wet ');
+    expect(rows[0].project).toBe('OLIVA');
+    expect(rows[0].angle).toBe('front');
+    expect(rows[0].variant).toBe('young');
+    expect(rows[0].state).toBe('wet');
+    expect(rows[0].canonicalName).toContain('OLIVA_CHAR_');
+  });
 });

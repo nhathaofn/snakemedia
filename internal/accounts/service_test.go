@@ -768,3 +768,40 @@ func TestOpenSerializesPerAccountAndQuietRenewPreservesLiveProxyAndCookieTTL(t *
 		t.Fatalf("route() wiped ProxyStatus=%q, want %q", after.ProxyStatus, proxy.StatusLive)
 	}
 }
+
+func TestSignedInAccountWithoutIdentityKeepsPinnedProxy(t *testing.T) {
+	// Muse accounts never populate Identity; once signed in, they must still pin
+	// their auto-assigned proxy instead of silently moving to another IP when
+	// that proxy dies — even after temporarily entering StatusError.
+	s, _, _ := testService(t, Inspection{SignedIn: true})
+	if res := s.SaveProxies("1.2.3.4:8080\n2.3.4.5:8080"); !res.Success {
+		t.Fatalf("SaveProxies: %s", res.Error)
+	}
+	seed(t, s, Record{Account: Account{ID: "muse-1", Name: "Muse 1", Status: StatusUnverified}, ProxyAuto: "1.2.3.4:8080"})
+	// seed() defaults Proxy to proxy.None; clear it so the account uses the shared auto proxy list.
+	_, _ = s.Update("muse-1", func(r *Record) { r.Proxy = "" })
+	if _, err := s.apply("muse-1", Inspection{SignedIn: true}); err != nil {
+		t.Fatalf("apply signed in: %v", err)
+	}
+	rec, err := s.Record("muse-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rec.SignedInOnce {
+		t.Fatal("expected SignedInOnce to be set after sign-in")
+	}
+	if !assignment(rec).Keep {
+		t.Fatal("expected assignment(rec).Keep = true for signed-in account without Identity")
+	}
+	// Mark the pinned proxy dead and move account to StatusError (e.g. failed check):
+	// Keep must remain true so it refuses to migrate to 2.3.4.5:8080.
+	s.proxies.MarkDead("1.2.3.4:8080")
+	_, _ = s.Update("muse-1", func(r *Record) { r.Status = StatusError })
+	rec, _ = s.Record("muse-1")
+	if !assignment(rec).Keep {
+		t.Fatal("expected SignedInOnce to keep proxy pinned even after StatusError")
+	}
+	if _, err := s.route(context.Background(), rec); err == nil {
+		t.Fatal("expected route() to refuse silently switching a signed-in account to another proxy")
+	}
+}

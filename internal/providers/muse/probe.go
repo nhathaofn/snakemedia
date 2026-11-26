@@ -130,9 +130,13 @@ func (s *Site) CheckVideo(ctx context.Context, b *browser.Browser, rec accounts.
 		if quota != nil {
 			data.Quota = quota
 		}
-		kind, _ := classifyRestriction(res.Reason, res.Diagnostics, "", quota)
-		if kind == restrictNone && res.Diagnostics != nil && res.Diagnostics.RequestTimedOut {
-			return insp, fmt.Errorf("Hết thời gian chờ Muse phản hồi lệnh kiểm tra (%s). Hãy thử lại.", firstNonEmpty(res.Diagnostics.Message, res.Reason))
+		kind, _ := classifyRestrictionForKind(MuseJobVideo, res.Reason, res.Diagnostics, "", quota)
+		weeklyOut := quota != nil && quota.weeklyOut() && (!cfg.UseTopup || !quota.topupLeft())
+		if kind == restrictNone && !weeklyOut {
+			if isTransientVideoCheckFailure(res.Reason, res.Diagnostics) {
+				insp.Data, insp.Usage = data, accountUsage(data)
+				return insp, fmt.Errorf("Lỗi tạm thời khi gửi lệnh kiểm tra tạo video (%s). Hãy thử lại.", firstNonEmpty(diagText(res.Diagnostics), res.Reason))
+			}
 		}
 		return s.classifyCheckFailure(res.Reason, res.Diagnostics, "", quota, data, insp), nil
 	}
@@ -183,10 +187,31 @@ func (s *Site) CheckVideo(ctx context.Context, b *browser.Browser, rec accounts.
 	}
 
 	reply := replyText(replies)
-	if reply == "" && ended == sessionInterrupted {
-		reply = "phiên tạo video bị ngắt giữa chừng"
+	if ended == sessionInterrupted {
+		kind, _ := classifyRestrictionForKind(MuseJobVideo, "", nil, reply, quota)
+		weeklyOut := quota != nil && quota.weeklyOut() && (!cfg.UseTopup || !quota.topupLeft())
+		if kind == restrictNone && !weeklyOut {
+			insp.Data, insp.Usage = data, accountUsage(data)
+			return insp, errors.New("Phiên kiểm tra tạo video bị ngắt giữa chừng; hãy thử lại.")
+		}
 	}
 	return s.classifyCheckFailure("", nil, reply, quota, data, insp), nil
+}
+
+func isTransientVideoCheckFailure(reason string, diag *SendDiagnostics) bool {
+	if diag != nil && diag.RequestTimedOut {
+		return true
+	}
+	if isSessionOrGatewayFailureText(reason) || isSessionOrGatewayFailureText(diagText(diag)) {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(reason + " " + diagText(diag)))
+	for _, marker := range []string{"rate_limit", "rate limit", "too many requests", "http 429", "status 429", "temporarily unavailable", "timeout", "timed out"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return strings.EqualFold(strings.TrimSpace(reason), "send_failed") && strings.TrimSpace(diagText(diag)) == ""
 }
 
 func (s *Site) waitVideoTabReady(ctx context.Context, page Page, budget time.Duration) error {

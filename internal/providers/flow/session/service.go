@@ -100,8 +100,8 @@ func (s *Service) GetConnectedStoredAccounts() ([]StoredAccount, error) {
 }
 
 // AcquireProfile keeps the account's browser from being restarted until release.
-func (s *Service) AcquireProfile(profileDir string) (release func()) {
-	return s.accounts.AcquireProfile(profileDir)
+func (s *Service) AcquireProfile(ctx context.Context, profileDir string) (func(), error) {
+	return s.accounts.AcquireProfile(ctx, profileDir)
 }
 
 // EnsureAccountHeadlessBrowser returns the account's running browser or starts
@@ -190,6 +190,9 @@ func (o *signInObservations) signedOut(err error, limit int) bool {
 func (s *Service) UpdateCredentials(id string, c chrome.Credentials) error {
 	return s.update(id, func(d *flowData) {
 		if d.Credentials.AtToken == c.AtToken {
+			if d.Credentials.BuildLabel == c.BuildLabel {
+				c.RPCs = c.RPCs.Merge(d.Credentials.RPCs)
+			}
 			d.Credentials = c
 		}
 	})
@@ -201,6 +204,9 @@ func (s *Service) UpdateBalance(id string, balance chrome.FlowCredits, c chrome.
 	return s.update(id, func(d *flowData) {
 		if d.Credentials.AtToken != c.AtToken {
 			return
+		}
+		if d.Credentials.BuildLabel == c.BuildLabel {
+			c.RPCs = c.RPCs.Merge(d.Credentials.RPCs)
 		}
 		d.Balance, d.BalanceError, d.Credentials = &balance, "", c
 		d.LastVerifiedAt = time.Now().UTC().Format(time.RFC3339Nano)

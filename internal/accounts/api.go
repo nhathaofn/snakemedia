@@ -54,8 +54,10 @@ func (s *Service) Add(_ context.Context, provider Provider, name string) models.
 	return models.SuccessResponse(rec.Account)
 }
 
-// ImportCookies saves an account from cookies exported on a signed-in page,
-// then checks the session in the background.
+// ImportCookies saves an account from cookies exported on a signed-in page.
+// If the shared proxy list already has usable lines, the account joins the list
+// and checks through a proxy; if the list is empty it stays unverified without
+// contacting the site over the real IP until the user assigns a proxy or checks.
 func (s *Service) ImportCookies(provider Provider, name, raw string) models.Response[Account] {
 	site, err := s.site(provider)
 	if err != nil {
@@ -69,12 +71,29 @@ func (s *Service) ImportCookies(provider Provider, name, raw string) models.Resp
 		return fail[Account](err, models.CodeInvalidArgument)
 	}
 	rec := s.newRecord(provider, name, SourceCookies)
-	rec.Cookies, rec.CookieVersion, rec.Message = cookies, uuid.NewString(), "Đang kiểm tra cookie…"
+	hasSharedProxy := false
+	if text, tErr := s.proxies.Text(); tErr == nil {
+		for _, line := range proxy.ParseList(text) {
+			if p := proxy.Parse(line); p != nil && p.Error == "" {
+				hasSharedProxy = true
+				break
+			}
+		}
+	}
+	rec.Cookies, rec.CookieVersion = cookies, uuid.NewString()
+	if hasSharedProxy {
+		rec.Proxy = ""
+		rec.Message = "Đang kiểm tra cookie qua proxy…"
+	} else {
+		rec.Message = "Đã nhập cookie. Chọn proxy (nếu cần) rồi bấm Kiểm tra."
+	}
 	if err := s.store.add(rec); err != nil {
 		return fail[Account](err, models.CodeInternal)
 	}
 	s.notify()
-	s.goBackground(func() { s.check(s.lifetime(), rec.ID) })
+	if hasSharedProxy {
+		s.goBackground(func() { s.check(s.lifetime(), rec.ID) })
+	}
 	return models.SuccessResponse(rec.Account)
 }
 
@@ -88,7 +107,7 @@ func (s *Service) ReplaceCookies(id, raw string) models.Response[Account] {
 	if err != nil {
 		return fail[Account](err, models.CodeInvalidArgument)
 	}
-	if err := s.closeBrowser(rec); err != nil {
+	if err := s.closeBrowserNoSync(rec); err != nil {
 		return fail[Account](err, models.CodeUnavailable)
 	}
 	updated, err := s.Update(id, func(r *Record) {
@@ -199,7 +218,7 @@ func (s *Service) SetProxy(id, line string) models.Response[Account] {
 	if err != nil {
 		return fail[Account](err, notFoundOr(err))
 	}
-	if err := s.closeBrowser(rec); err != nil {
+	if err := s.closeBrowserLocked(rec, true); err != nil {
 		return fail[Account](err, models.CodeUnavailable)
 	}
 	rec, err = s.Update(id, func(r *Record) {
@@ -215,8 +234,12 @@ func (s *Service) SetProxy(id, line string) models.Response[Account] {
 	return models.SuccessResponse(rec.Account)
 }
 
-// RotateIP asks the account's rotating proxy for a new exit IP.
+// RotateIP asks the account's rotating proxy for a new exit IP. The browser
+// must be idle so Chrome and Go HTTP clients never split-brain across old/new IPs.
 func (s *Service) RotateIP(ctx context.Context, id string) models.Response[proxy.CheckResult] {
+	lock := s.openLock(id)
+	lock.Lock()
+	defer lock.Unlock()
 	rec, err := s.store.get(id)
 	if err != nil {
 		return fail[proxy.CheckResult](err, notFoundOr(err))
@@ -225,13 +248,17 @@ func (s *Service) RotateIP(ctx context.Context, id string) models.Response[proxy
 	if line == "" {
 		return fail[proxy.CheckResult](errors.New("Tài khoản không dùng proxy xoay IP."), models.CodeInvalidArgument)
 	}
+	if err := s.closeBrowserLocked(rec, true); err != nil {
+		if errors.Is(err, browser.ErrProfileBusy) {
+			return fail[proxy.CheckResult](errors.New("Tài khoản đang chạy tác vụ. Hãy đợi tác vụ xong rồi mới xoay IP."), models.CodeUnavailable)
+		}
+		return fail[proxy.CheckResult](err, models.CodeUnavailable)
+	}
 	res, err := s.proxies.Rotate(ctx, line)
 	if err != nil {
 		s.Update(id, func(r *Record) { r.ProxyStatus, r.Message = string(res.Status), err.Error() })
 		return fail[proxy.CheckResult](err, models.CodeUnavailable)
 	}
-	// A busy browser keeps its route until its work ends.
-	_ = s.closeBrowser(rec)
 	s.Update(id, func(r *Record) { r.ProxyStatus, r.ProxyIP, r.Message = string(proxy.StatusLive), res.IP, "" })
 	return models.SuccessResponse(res)
 }
@@ -274,17 +301,21 @@ func (s *Service) Proxies() models.Response[string] {
 	return models.SuccessResponse(text)
 }
 
-// SaveProxies replaces the shared proxy list. Idle browsers still run on the
-// previous proxies, so they are closed; busy ones switch on their next start.
+// SaveProxies replaces the shared proxy list. Idle browsers using the shared
+// list are closed so they pick up the new list on next start; busy ones switch
+// when their work finishes.
 func (s *Service) SaveProxies(text string) models.Response[bool] {
 	if err := s.proxies.Save(text); err != nil {
 		return fail[bool](err, models.CodeInternal)
 	}
 	if records, err := s.store.list(); err == nil {
 		for _, rec := range records {
-			_ = s.closeBrowser(rec) // busy browsers are skipped
+			if rec.Proxy != proxy.None {
+				_ = s.closeBrowser(rec) // busy browsers are skipped
+			}
 		}
 	}
+	s.notify()
 	return models.SuccessResponse(true)
 }
 

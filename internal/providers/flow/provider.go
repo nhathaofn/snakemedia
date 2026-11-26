@@ -25,7 +25,7 @@ import (
 // (session.Service in the app, an in-memory fake in tests).
 type Accounts interface {
 	GetConnectedStoredAccounts() ([]session.StoredAccount, error)
-	AcquireProfile(profileDir string) (release func())
+	AcquireProfile(ctx context.Context, profileDir string) (release func(), err error)
 	EnsureAccountHeadlessBrowser(ctx context.Context, acc session.StoredAccount) (*browser.Browser, error)
 	ProxyURL(ctx context.Context, acc session.StoredAccount) (*url.URL, error)
 	SyncSession(ctx context.Context, acc session.StoredAccount) (session.StoredAccount, error)
@@ -56,8 +56,11 @@ type Provider struct {
 	// whether another was asked for meanwhile (coalesceCreditRefresh).
 	creditRefreshMu     sync.Mutex
 	creditRefreshes     map[string]*creditRefresh
+	creditRefreshWG     sync.WaitGroup
+	closingCredits      bool
 	projectResolveLocks sync.Map // account ID -> serialises resolveProject
 	pageLocks           sync.Map // browser port -> *sync.RWMutex (pageLock)
+	mintLocks           sync.Map // browser port -> *sync.Mutex (mintLock)
 	// undiscoverableBuilds remembers Flow builds whose project page lacked
 	// the BatchGenerateImages descriptor.
 	undiscoverableBuilds map[string]time.Time

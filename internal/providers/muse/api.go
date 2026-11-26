@@ -498,7 +498,7 @@ func (p *Provider) submitJobsLocked(req MuseJobRequest, runKey string) models.Re
 					}
 				}
 				job.After, job.BoardFrames, job.Review = boardID, board.Frames, board.Review
-				if existingBoard != nil && existingBoard.Status == MuseJobSucceeded && len(existingBoard.Files) > 0 {
+				if existingBoard != nil && existingBoard.Status == MuseJobSucceeded && len(existingBoard.Files) >= board.Frames && len(existingBoard.Files) > 0 {
 					frames := slices.Clone(existingBoard.Files)
 					if len(frames) > board.Frames {
 						frames = frames[:board.Frames]

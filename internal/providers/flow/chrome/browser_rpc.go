@@ -15,8 +15,17 @@ import (
 // minted the token. Chrome supplies its own cookies, Origin and transport.
 // Request/session data stays in Go and this account's validated Flow tab.
 func (f *FlowClient) DoFromBrowser(ctx context.Context, port int, rpcID, fReq string, timeout time.Duration) ([]byte, error) {
+	return f.DoFromBrowserWithLimit(ctx, port, rpcID, fReq, timeout, f.policy.MaxResponseBytes)
+}
+
+// DoFromBrowserWithLimit submits a first-party RPC from Chrome with an explicit
+// response byte cap (e.g. UpsampleImage returning Base64 2K/4K images).
+func (f *FlowClient) DoFromBrowserWithLimit(ctx context.Context, port int, rpcID, fReq string, timeout time.Duration, maxResponseBytes int64) ([]byte, error) {
 	if !rpcIDPattern.MatchString(rpcID) {
 		return nil, errors.New("invalid runtime RPC ID")
+	}
+	if maxResponseBytes <= 0 {
+		maxResponseBytes = f.policy.MaxResponseBytes
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -36,13 +45,13 @@ func (f *FlowClient) DoFromBrowser(ctx context.Context, port int, rpcID, fReq st
 			return nil, err
 		}
 		defer conn.Close()
-		conn.SetReadLimit(max(f.policy.MaxDiscoveryBytes, 2*f.policy.MaxResponseBytes))
+		conn.SetReadLimit(max(f.policy.MaxDiscoveryBytes, 2*maxResponseBytes))
 		stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 		defer stop()
 		request, _ := json.Marshal(map[string]any{
 			"path":    batchPath + "?" + batchParams(f.creds, rpcID).Encode(),
 			"body":    url.Values{"f.req": {fReq}, "at": {f.creds.AtToken}}.Encode(),
-			"timeout": timeout.Milliseconds(), "maxBytes": f.policy.MaxResponseBytes,
+			"timeout": timeout.Milliseconds(), "maxBytes": maxResponseBytes,
 		})
 		script := `(async()=>{
  if(location.origin!==` + quoteJS(FlowURL) + `)throw Error('Unexpected Flow origin');

@@ -225,6 +225,7 @@ func (p *Provider) migrateLegacyAssetsToVault() {
 	p.assetMu.Lock()
 	defer p.assetMu.Unlock()
 	var updates []MuseAsset
+	var files []assetFileChanges
 	for _, a := range p.assets.List() {
 		needsMigrate := false
 		for _, it := range a.Items {
@@ -237,13 +238,21 @@ func (p *Provider) migrateLegacyAssetsToVault() {
 			continue
 		}
 		orig := a
-		if _, _, err := p.materializeAssetItems(&a, &orig); err == nil {
+		if change, err := p.materializeAssetItems(&a, &orig); err == nil {
 			updates = append(updates, a)
+			files = append(files, change)
 		}
 	}
 	if len(updates) > 0 {
 		if err := p.assets.SaveBatch(nil, updates); err != nil {
+			for _, change := range files {
+				change.rollback()
+			}
 			logger.Get().Warn("muse legacy asset vault migration failed", "error", err)
+			return
+		}
+		for _, change := range files {
+			p.removeUnusedVaultFiles(change.replaced)
 		}
 	}
 }
@@ -320,148 +329,6 @@ func ensurePrimaryItem(items []MuseAssetItem) {
 	}
 }
 
-// materializeAssetItems ensures every item in a lives inside VaultDir with a
-// canonical filename matching [PREFIX_]TYPE_alias[_angle][_variant][_state][_vN][_rej].ext.
-// It returns temporary muse-asset-* URLs and replaced vault files to clean up after save.
-func (p *Provider) materializeAssetItems(a *MuseAsset, old *MuseAsset) (oldMediaURLs, replacedVaultAbs []string, err error) {
-	oldByID := make(map[string]MuseAssetItem)
-	oldByURL := make(map[string]MuseAssetItem)
-	if old != nil {
-		for _, it := range old.Items {
-			oldByID[it.ID] = it
-			if it.URL != "" {
-				oldByURL[it.URL] = it
-			}
-		}
-	}
-
-	items := slices.Clone(a.Items)
-	if len(items) == 0 && len(a.Images) > 0 {
-		for _, img := range a.Images {
-			it := MuseAssetItem{URL: img, Version: 1}
-			if prev, ok := oldByURL[img]; ok {
-				it = prev
-			}
-			items = append(items, it)
-		}
-	}
-	if len(items) == 0 {
-		return nil, nil, errors.New("Mỗi tư liệu cần ít nhất 1 ảnh.")
-	}
-
-	ensurePrimaryItem(items)
-
-	keptVaultAbs := make(map[string]bool)
-	for i := range items {
-		it := &items[i]
-		if it.ID == "" {
-			it.ID = uuid.NewString()
-		}
-		it.Angle = slugifyToken(it.Angle, false)
-		it.Variant = slugifyToken(it.Variant, false)
-		it.State = slugifyToken(it.State, false)
-		it.Lock = strings.TrimSpace(it.Lock)
-		if it.Version < 1 {
-			it.Version = 1
-		}
-		if it.Rejected {
-			it.Primary = false
-		}
-
-		switch {
-		case strings.HasPrefix(it.URL, media.Route):
-			srcPath, pathErr := p.media.Path(it.URL)
-			if pathErr != nil {
-				return nil, nil, pathErr
-			}
-			data, readErr := os.ReadFile(srcPath)
-			if readErr != nil {
-				return nil, nil, fmt.Errorf("Không đọc được ảnh %s: %w", filepath.Base(srcPath), readErr)
-			}
-			ext := strings.ToLower(filepath.Ext(srcPath))
-			if ext == "" {
-				ext = ".png"
-			}
-			relPath, fileName, usedVer, pathErr := p.uniqueVaultRelPath(
-				a.Project, a.Type, a.Tag, it.Angle, it.Variant, it.State, it.Version, it.Rejected, ext, "",
-			)
-			if pathErr != nil {
-				return nil, nil, pathErr
-			}
-			dstAbs, absErr := p.vaultFileAbs(relPath)
-			if absErr != nil {
-				return nil, nil, absErr
-			}
-			if writeErr := copyBytesToVault(dstAbs, data); writeErr != nil {
-				return nil, nil, fmt.Errorf("Không ghi được ảnh vào kho tư liệu: %w", writeErr)
-			}
-			if strings.HasPrefix(it.URL, media.Route+assetPrefix) {
-				oldMediaURLs = append(oldMediaURLs, it.URL)
-			}
-			it.Version = usedVer
-			it.FileName = fileName
-			it.VaultRelPath = relPath
-			it.URL = media.VaultURL(relPath)
-			keptVaultAbs[strings.ToLower(filepath.Clean(dstAbs))] = true
-
-		case strings.HasPrefix(it.URL, media.VaultRoute):
-			srcAbs, pathErr := p.media.VaultPath(it.URL)
-			if pathErr != nil {
-				return nil, nil, pathErr
-			}
-			if _, statErr := os.Stat(srcAbs); statErr != nil {
-				return nil, nil, fmt.Errorf("Ảnh tư liệu không còn trên đĩa: %s", filepath.Base(srcAbs))
-			}
-			ext := strings.ToLower(filepath.Ext(srcAbs))
-			if ext == "" {
-				ext = ".png"
-			}
-			relPath, fileName, usedVer, relErr := p.uniqueVaultRelPath(
-				a.Project, a.Type, a.Tag, it.Angle, it.Variant, it.State, it.Version, it.Rejected, ext, srcAbs,
-			)
-			if relErr != nil {
-				return nil, nil, relErr
-			}
-			dstAbs, absErr := p.vaultFileAbs(relPath)
-			if absErr != nil {
-				return nil, nil, absErr
-			}
-			if !strings.EqualFold(filepath.Clean(srcAbs), filepath.Clean(dstAbs)) {
-				if mvErr := moveFileSafe(srcAbs, dstAbs); mvErr != nil {
-					return nil, nil, fmt.Errorf("Không đổi tên file trong kho tư liệu: %w", mvErr)
-				}
-			}
-			it.Version = usedVer
-			it.FileName = fileName
-			it.VaultRelPath = relPath
-			it.URL = media.VaultURL(relPath)
-			keptVaultAbs[strings.ToLower(filepath.Clean(dstAbs))] = true
-
-		default:
-			return nil, nil, errors.New("Ảnh tư liệu phải nằm trong kho hoặc được chọn từ ứng dụng.")
-		}
-	}
-
-	if old != nil {
-		for _, prev := range old.Items {
-			if strings.HasPrefix(prev.URL, media.VaultRoute) {
-				if prevAbs, err := p.media.VaultPath(prev.URL); err == nil {
-					if !keptVaultAbs[strings.ToLower(filepath.Clean(prevAbs))] {
-						replacedVaultAbs = append(replacedVaultAbs, prevAbs)
-					}
-				}
-			}
-			if strings.HasPrefix(prev.URL, media.Route+assetPrefix) {
-				oldMediaURLs = append(oldMediaURLs, prev.URL)
-			}
-		}
-	}
-
-	a.Items = items
-	syncAssetImages(a)
-	return oldMediaURLs, replacedVaultAbs, nil
-}
-
 // SaveAsset adds an asset (empty ID) or replaces one, keeping files inside the
 // Asset Vault named cleanly according to the naming convention.
 func (p *Provider) SaveAsset(a MuseAsset) models.Response[MuseAsset] {
@@ -507,7 +374,7 @@ func (p *Provider) saveAssetLocked(a MuseAsset) models.Response[MuseAsset] {
 		}
 	}
 
-	oldMediaURLs, replacedVaultAbs, matErr := p.materializeAssetItems(&a, oldPtr)
+	files, matErr := p.materializeAssetItems(&a, oldPtr)
 	if matErr != nil {
 		return fail[MuseAsset](matErr, models.CodeInvalidArgument)
 	}
@@ -516,6 +383,7 @@ func (p *Provider) saveAssetLocked(a MuseAsset) models.Response[MuseAsset] {
 		a.ID = uuid.NewString()
 		a.CreatedAt = p.now().UTC().Format(time.RFC3339)
 		if err := p.assets.Add(a); err != nil {
+			files.rollback()
 			return fail[MuseAsset](err, models.CodeInternal)
 		}
 	} else {
@@ -524,14 +392,13 @@ func (p *Provider) saveAssetLocked(a MuseAsset) models.Response[MuseAsset] {
 			*old = a
 		})
 		if err != nil {
-			return fail[MuseAsset](err, models.CodeNotFound)
+			files.rollback()
+			return fail[MuseAsset](err, models.CodeInternal)
 		}
 		a = saved
 	}
 
-	p.removeUnusedAssetMedia(oldMediaURLs)
-	p.removeUnusedVaultFiles(replacedVaultAbs)
-	p.sweepAssetImages()
+	p.finishAssetFiles([]assetFileChanges{files})
 	return models.SuccessResponse(a)
 }
 
@@ -632,6 +499,7 @@ func (p *Provider) UpdateAssetItem(assetID, itemID string, patch MuseAssetItemPa
 	if idx < 0 {
 		return fail[MuseAsset](errors.New("Ảnh thành phần không tồn tại."), models.CodeNotFound)
 	}
+	existing.Items = slices.Clone(existing.Items)
 	if patch.Angle != nil {
 		existing.Items[idx].Angle = *patch.Angle
 	}
@@ -705,41 +573,49 @@ func (p *Provider) UpdateAssetsRole(ids []string, role MuseRefRole) models.Respo
 	newType := typeForRole(role)
 	p.assetMu.Lock()
 	defer p.assetMu.Unlock()
-	var oldMedia, oldVault []string
-	var matErr error
-	changed, err := p.assets.UpdateMany(ids, func(a *MuseAsset) bool {
-		if a.Role == role && (!newType.valid() || a.Type == newType) {
-			return false
+	selected := p.assets.Snapshot(ids)
+	var updates []MuseAsset
+	var files []assetFileChanges
+	committed := false
+	defer func() {
+		if !committed {
+			for _, change := range files {
+				change.rollback()
+			}
 		}
-		orig := *a
+	}()
+	for _, id := range ids {
+		a, ok := selected[id]
+		if !ok {
+			continue
+		}
+		delete(selected, id)
+		if a.Role == role && (!newType.valid() || a.Type == newType) {
+			continue
+		}
+		orig := a
 		a.Role = role
 		if newType.valid() {
 			a.Type = newType
 		}
 		if len(a.Items) > 0 || len(a.Images) > 0 {
-			om, ov, mErr := p.materializeAssetItems(a, &orig)
-			if mErr != nil {
-				if matErr == nil {
-					matErr = mErr
-				}
-				*a = orig
-				return false
+			change, err := p.materializeAssetItems(&a, &orig)
+			if err != nil {
+				return fail[int](err, models.CodeInternal)
 			}
-			oldMedia = append(oldMedia, om...)
-			oldVault = append(oldVault, ov...)
+			files = append(files, change)
 		}
-		return true
-	})
-	if err != nil {
+		updates = append(updates, a)
+	}
+	if len(updates) == 0 {
+		return models.SuccessResponse(0)
+	}
+	if err := p.assets.SaveBatch(nil, updates); err != nil {
 		return fail[int](err, models.CodeInternal)
 	}
-	if len(changed) == 0 && matErr != nil {
-		return fail[int](matErr, models.CodeInternal)
-	}
-	p.removeUnusedAssetMedia(oldMedia)
-	p.removeUnusedVaultFiles(oldVault)
-	p.sweepAssetImages()
-	return models.SuccessResponse(len(changed))
+	committed = true
+	p.finishAssetFiles(files)
+	return models.SuccessResponse(len(updates))
 }
 
 // ImportAssetImages copies picked images into the temporary media folder before SaveAsset.

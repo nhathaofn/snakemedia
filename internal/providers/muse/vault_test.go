@@ -258,3 +258,63 @@ func TestVaultMigrationRefusesExistingDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestVaultMigrationRejectsNestedAndTraversalAndPreservesSameFile(t *testing.T) {
+	p := testProvider(t, &fakePage{})
+	u, err := p.media.Put(assetPrefix+"safe", "image/png", ".png", testPNGBytes(t, 16, 16))
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := p.SaveAsset(MuseAsset{
+		Project: "OLIVA", Type: MuseTypeChar, Tag: "hero", Role: MuseRoleCharacter,
+		Items: []MuseAssetItem{{URL: u, Angle: "front", Primary: true}},
+	})
+	if !saved.Success {
+		t.Fatal(saved.Error)
+	}
+	oldRoot := p.vaultDir()
+	rel := saved.Data.Items[0].VaultRelPath
+	oldAbs := filepath.Join(oldRoot, filepath.FromSlash(rel))
+
+	// 1. Nested destination inside current vault must be refused.
+	nested := filepath.Join(oldRoot, "sub-vault")
+	if res := p.SetAssetVaultDirectory(nested, true); res.Success {
+		t.Fatal("migration allowed nested target inside old vault directory")
+	}
+
+	// 2. Hardlinked destination pointing to the exact same physical file (os.SameFile == true)
+	// must NOT delete the source file.
+	hardlinkDest := filepath.Join(resolvedTempDir(t), "HardlinkDest")
+	dstFile := filepath.Join(hardlinkDest, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(dstFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(oldAbs, dstFile); err == nil {
+		res := p.SetAssetVaultDirectory(hardlinkDest, true)
+		if !res.Success {
+			t.Fatalf("migration with same-file destination failed: %s", res.Error)
+		}
+		if _, statErr := os.Stat(dstFile); statErr != nil {
+			t.Fatalf("destination file missing after same-file migration: %v", statErr)
+		}
+		if _, statErr := os.Stat(oldAbs); statErr != nil {
+			t.Fatalf("same-file source was deleted during migration: %v", statErr)
+		}
+	}
+
+	// 3. Corrupted VaultRelPath with traversal ("../") must be refused and never touch outside files.
+	outsideFile := filepath.Join(resolvedTempDir(t), "outside.png")
+	if err := os.WriteFile(outsideFile, testPNGBytes(t, 8, 8), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = p.assets.Update(saved.Data.ID, func(a *MuseAsset) {
+		a.Items[0].VaultRelPath = "../outside.png"
+	})
+	otherDest := filepath.Join(resolvedTempDir(t), "OtherDest")
+	if res := p.SetAssetVaultDirectory(otherDest, true); res.Success {
+		t.Fatal("migration accepted traversal VaultRelPath")
+	}
+	if _, statErr := os.Stat(outsideFile); statErr != nil {
+		t.Fatalf("outside file was modified/removed by traversal migration: %v", statErr)
+	}
+}

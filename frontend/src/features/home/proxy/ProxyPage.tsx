@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Activity, Save } from 'lucide-react';
 import './ProxyPage.css';
 import { Button, Card, Icon } from '../../../components/ui';
-import { api, unwrap } from '../../../services';
+import { api, unwrap, unwrapList } from '../../../services';
 import { useAppStore } from '../../../stores';
 import type { ProxyCheckResult } from '../../../types';
 
@@ -76,7 +76,7 @@ export const ProxyPage: React.FC = () => {
     setBusy('check');
     try {
       if (text !== saved) await save();
-      const checked = unwrap(await api.checkProxies());
+      const checked = unwrapList(await api.checkProxies());
       setResults(checked);
       const live = checked.filter((r) => r.ok).length;
       addToast({

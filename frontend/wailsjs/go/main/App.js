@@ -246,12 +246,12 @@ export function PickFlowImageReferences() {
   return window['go']['main']['App']['PickFlowImageReferences']();
 }
 
-export function PickMuseAssetFiles() {
-  return window['go']['main']['App']['PickMuseAssetFiles']();
+export function PickMuseAssetFiles(arg1) {
+  return window['go']['main']['App']['PickMuseAssetFiles'](arg1);
 }
 
-export function PickMuseAssetFolder(arg1) {
-  return window['go']['main']['App']['PickMuseAssetFolder'](arg1);
+export function PickMuseAssetFolder(arg1, arg2) {
+  return window['go']['main']['App']['PickMuseAssetFolder'](arg1, arg2);
 }
 
 export function PickMuseAssetImages() {
@@ -264,6 +264,10 @@ export function PickMuseAssetVaultDirectoryPath() {
 
 export function PickMuseReferences() {
   return window['go']['main']['App']['PickMuseReferences']();
+}
+
+export function PickToolPath(arg1) {
+  return window['go']['main']['App']['PickToolPath'](arg1);
 }
 
 export function PickVideo() {

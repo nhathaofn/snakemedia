@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import {
   AlertCircle,
   BookmarkPlus,
@@ -177,6 +177,26 @@ export function MuseSingleWorkspace({ kind }: { kind: MuseJobKind }) {
     }
   }, [jobs, filter]);
 
+  const openPreview = useCallback((job: MuseJob, url: string) => {
+    const items = singleLightboxItems(job);
+    const index = Math.max(
+      0,
+      items.findIndex((it) => it.url === url),
+    );
+    setLightbox({ items, index });
+  }, []);
+
+  const reusePrompt = useCallback(
+    (job: MuseJob) => {
+      update({ prompt: job.prompt });
+    },
+    [update],
+  );
+
+  const openSaveToVault = useCallback((job: MuseJob, url: string) => {
+    setVaultSources([{ localUrl: url, suggestedPrompt: job.prompt, suggestedName: job.label }]);
+  }, []);
+
   const generate = async () => {
     const prompt = draft.prompt.trim();
     if (!prompt) return;
@@ -241,23 +261,9 @@ export function MuseSingleWorkspace({ kind }: { kind: MuseJobKind }) {
               <SingleTile
                 job={job}
                 actions={jobActions}
-                onPreview={(url) => {
-                  const items = singleLightboxItems(job);
-                  const index = Math.max(
-                    0,
-                    items.findIndex((it) => it.url === url),
-                  );
-                  setLightbox({ items, index });
-                }}
-                onReuse={() => update({ prompt: job.prompt })}
-                onSaveToVault={
-                  job.kind === MuseJobKind.Image
-                    ? (url) =>
-                        setVaultSources([
-                          { localUrl: url, suggestedPrompt: job.prompt, suggestedName: job.label },
-                        ])
-                    : undefined
-                }
+                onPreview={openPreview}
+                onReuse={reusePrompt}
+                onSaveToVault={kind === MuseJobKind.Image ? openSaveToVault : undefined}
               />
             )}
           />
@@ -312,9 +318,9 @@ export const SingleTile = memo(function SingleTile({
 }: {
   job: MuseJob;
   actions: JobActions;
-  onPreview: (url: string) => void;
-  onReuse: () => void;
-  onSaveToVault?: (url: string) => void;
+  onPreview: (job: MuseJob, url: string) => void;
+  onReuse: (job: MuseJob) => void;
+  onSaveToVault?: (job: MuseJob, url: string) => void;
 }) {
   const active = isActive(job);
   const ended = isEnded(job);
@@ -344,7 +350,7 @@ export const SingleTile = memo(function SingleTile({
                   type="button"
                   className="muse-tile-open"
                   aria-label="Xem lớn"
-                  onClick={() => onPreview(url)}
+                  onClick={() => onPreview(job, url)}
                 >
                   {job.kind === MuseJobKind.Video ? (
                     <VideoThumbnail src={url} />
@@ -353,12 +359,16 @@ export const SingleTile = memo(function SingleTile({
                   )}
                 </button>
                 <div className="muse-tile-overlay">
-                  <IconAction icon={Maximize2} label="Xem lớn" onClick={() => onPreview(url)} />
+                  <IconAction
+                    icon={Maximize2}
+                    label="Xem lớn"
+                    onClick={() => onPreview(job, url)}
+                  />
                   {onSaveToVault && job.kind === MuseJobKind.Image && (
                     <IconAction
                       icon={BookmarkPlus}
                       label="Lưu vào Kho Tư liệu"
-                      onClick={() => onSaveToVault(url)}
+                      onClick={() => onSaveToVault(job, url)}
                     />
                   )}
                   <IconAction icon={Download} label="Lưu" onClick={() => actions.save(url)} />
@@ -414,7 +424,7 @@ export const SingleTile = memo(function SingleTile({
             {ended && (
               <IconAction icon={RotateCcw} label="Chạy lại" onClick={() => actions.retry(job)} />
             )}
-            <IconAction icon={CornerUpLeft} label="Dùng lại prompt" onClick={onReuse} />
+            <IconAction icon={CornerUpLeft} label="Dùng lại prompt" onClick={() => onReuse(job)} />
             {!busy && (
               <IconAction icon={Trash2} label="Xoá" onClick={() => actions.remove(job.id)} />
             )}

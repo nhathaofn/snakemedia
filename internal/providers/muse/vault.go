@@ -15,7 +15,6 @@ import (
 	"unicode"
 
 	"SnakeMedia/internal/media"
-	"SnakeMedia/pkg/utils"
 )
 
 // MuseAssetType identifies the category prefix in the Muse asset naming convention
@@ -463,13 +462,6 @@ func (p *Provider) uniqueVaultRelPath(project string, assetType MuseAssetType, a
 	return "", "", 0, errors.New("Quá nhiều phiên bản trùng tên trong kho tư liệu.")
 }
 
-func copyBytesToVault(dstAbs string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(dstAbs), 0o755); err != nil {
-		return err
-	}
-	return utils.WriteFileAtomic(dstAbs, data, 0o644)
-}
-
 func copyFileToFile(srcAbs, dstAbs string) error {
 	return copyVaultFile(srcAbs, dstAbs, os.Rename)
 }
@@ -504,23 +496,6 @@ func copyVaultFile(srcAbs, dstAbs string, install func(string, string) error) er
 	return install(tmpName, dstAbs)
 }
 
-func moveFileSafe(srcAbs, dstAbs string) error {
-	if strings.EqualFold(filepath.Clean(srcAbs), filepath.Clean(dstAbs)) {
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(dstAbs), 0o755); err != nil {
-		return err
-	}
-	if err := os.Rename(srcAbs, dstAbs); err == nil {
-		return nil
-	}
-	if err := copyFileToFile(srcAbs, dstAbs); err != nil {
-		return err
-	}
-	_ = os.Remove(srcAbs)
-	return nil
-}
-
 // snapshotToMedia copies a vault or media image into MediaDir under muse-ref-<sha256_16>.<ext>
 // deduplicated by content hash, so queued jobs remain immutable even if the user
 // edits, renames, or deletes files in the Asset Vault folder.
@@ -528,11 +503,14 @@ func (p *Provider) snapshotToMedia(localURL string) (string, error) {
 	if strings.HasPrefix(localURL, media.Route) {
 		return localURL, nil
 	}
+	p.vaultMu.RLock()
 	srcAbs, err := p.media.OpenPath(localURL)
 	if err != nil {
+		p.vaultMu.RUnlock()
 		return "", err
 	}
 	data, err := os.ReadFile(srcAbs)
+	p.vaultMu.RUnlock()
 	if err != nil {
 		return "", err
 	}

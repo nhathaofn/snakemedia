@@ -39,7 +39,7 @@ func (p *Provider) writeOutputs(job MuseJob, files []string) (MuseJob, error) {
 			}
 			delete(paths, url)
 		}
-		path, err := p.media.SaveTo(url, job.OutputDir, media.OutputName(job.Index, "muse"))
+		path, err := p.media.SaveToOnce(url, job.OutputDir, media.PlannedOutputName(job.Index, "muse", job.ID, url))
 		if err != nil {
 			failures = append(failures, err.Error())
 		} else {

@@ -258,13 +258,20 @@ func (p *Provider) send(ctx context.Context, job MuseJob, acc accounts.Record, l
 			sid, nextPage, outcome, recErr := p.reconcileAfterSend(sendCtx, job, acc, lease, page, text, beforeIDs, true, true)
 			page = nextPage
 			if ctx.Err() != nil {
-				if outcome == reconcileFound && sid != "" {
-					p.recordCancelledSession(job.ID, sid)
-					if page != nil {
-						_ = page.Cancel(sendCtx, sid)
+				switch outcome {
+				case reconcileFound:
+					if sid != "" {
+						p.recordCancelledSession(job.ID, sid)
+						if page != nil {
+							_ = page.Cancel(sendCtx, sid)
+						}
+					} else {
+						p.markCancelledSendUnknown(job.ID)
 					}
-				} else {
+				case reconcileNotSent:
 					p.clearSendingState(job.ID)
+				default:
+					p.markCancelledSendUnknown(job.ID)
 				}
 				return job, page, context.Canceled
 			}
@@ -292,6 +299,10 @@ func (p *Provider) send(ctx context.Context, job MuseJob, acc accounts.Record, l
 				return job, page, errSendUnknown
 			}
 		} else {
+			if ctx.Err() != nil {
+				p.markCancelledSendUnknown(job.ID)
+				return job, page, context.Canceled
+			}
 			p.markRecycleBrowser(acc.ID)
 			p.clearSessionVerified(acc.ID)
 			_, _, _ = p.refreshAccountForRun(sendCtx, acc.ID, job.Kind, &page, lease, "untracked_send_error")
@@ -383,6 +394,19 @@ func (p *Provider) recordCancelledSession(jobID, sessionID string) {
 		}
 		j.SessionID = sessionID
 		j.Sending, j.PreSendTracked, j.PreSendSessions = false, false, nil
+	})
+}
+
+// markCancelledSendUnknown records that a cancelled in-flight send could not
+// be confirmed as not sent, so RetryFailed / mayBePaid refuses to silently
+// double-send it.
+func (p *Provider) markCancelledSendUnknown(jobID string) {
+	_, _ = p.updateJob(jobID, func(j *MuseJob) {
+		if j.Status == MuseJobQueued {
+			return
+		}
+		j.Sending, j.PreSendTracked, j.PreSendSessions = false, false, nil
+		j.SendUnknown = true
 	})
 }
 

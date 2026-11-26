@@ -250,3 +250,165 @@ func (p *transientVideoPollPage) Status(ctx context.Context, sid string) (string
 	}
 	return p.fakePage.Status(ctx, sid)
 }
+
+func TestP0_C1_ResumeRefreshQuotaOrVideoDisabledNeverWipesSessionID(t *testing.T) {
+	now := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	page := &fakePage{
+		loggedIn: true,
+		quota:    &MuseQuota{PercentUsed: 100, ResetsAt: now.Add(24 * time.Hour).Format(time.RFC3339)},
+		statuses: []string{sessionCompleted},
+		events:   []AssistantEvent{{Text: "done", Videos: []ResultMedia{{Path: "v1.mp4", Mime: "video/mp4"}}}},
+	}
+	p := testProvider(t, page)
+	p.now = func() time.Time { return now }
+	acc := addSignedIn(t, p, "ExhaustedAcc")
+	p.updateAccount(acc.ID, func(r *accounts.Record, _ *museData) {
+		r.SkipVideoCheck = true
+	})
+
+	var curPage Page = page
+	_, ok, err := p.refreshAccountForResume(context.Background(), acc.ID, MuseJobVideo, &curPage, nil, "resume_signed_in")
+	if !ok || err != nil {
+		t.Fatalf("refreshAccountForResume must allow reading existing chat even when quota=100%% and SkipVideoCheck=true: ok=%v err=%v", ok, err)
+	}
+
+	// Dead account during resume must wrap in stayInChatError so recordFailure never requeues & wipes SessionID.
+	pageDead := &fakePage{
+		loggedIn: true,
+		quota:    &MuseQuota{Subtitle: "Your account has been suspended"},
+	}
+	p2 := testProvider(t, pageDead)
+	p2.now = func() time.Time { return now }
+	acc2 := addSignedIn(t, p2, "DeadAcc")
+	job := submit(t, p2, MuseJobVideo, "keep my session")[0]
+	_, _ = p2.jobs.update(job.ID, func(j *MuseJob) {
+		j.Status = MuseJobProcessing
+		j.AccountID = acc2.ID
+		j.SessionID = "chat-paid-1"
+	})
+	var curPage2 Page = pageDead
+	_, ok2, err2 := p2.refreshAccountForResume(context.Background(), acc2.ID, MuseJobVideo, &curPage2, nil, "resume_signed_in")
+	if ok2 || err2 == nil {
+		t.Fatalf("expected dead account error on resume, got ok=%v err=%v", ok2, err2)
+	}
+	p2.recordFailure(job.ID, acc2.ID, err2)
+	got := mustJob(t, p2, job.ID)
+	if got.Status != MuseJobFailed || got.SessionID != "chat-paid-1" || !got.mayBePaid() {
+		t.Fatalf("dead account during resume must fail preserving SessionID (never requeue): %+v", got)
+	}
+}
+
+func TestP0_C1_TabCapReachedDuringResumeKeepsSessionID(t *testing.T) {
+	p := testProvider(t, &fakePage{loggedIn: true})
+	acc := addSignedIn(t, p, "A")
+	job := submit(t, p, MuseJobImage, "existing chat")[0]
+	_, _ = p.jobs.update(job.ID, func(j *MuseJob) {
+		j.Status = MuseJobProcessing
+		j.AccountID = acc.ID
+		j.SessionID = "chat-keep-cap"
+	})
+	p.recordFailure(job.ID, acc.ID, errTabCapReached)
+	got := mustJob(t, p, job.ID)
+	if got.Status != MuseJobProcessing || got.SessionID != "chat-keep-cap" || got.AccountID != acc.ID {
+		t.Fatalf("errTabCapReached during resume wiped SessionID or requeued: %+v", got)
+	}
+	if got.NextCheckAt == "" {
+		t.Fatalf("expected NextCheckAt to be scheduled for re-check: %+v", got)
+	}
+}
+
+func TestP0_C1_LongVideoTurnOneOverdueFailsWithoutResending(t *testing.T) {
+	now := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	page := &fakePage{
+		loggedIn: true,
+		statuses: []string{sessionRunning},
+		events:   []AssistantEvent{{Text: "Working on clip 3..."}},
+	}
+	p := testProvider(t, page)
+	p.now = func() time.Time { return now }
+	acc := addSignedIn(t, p, "LongAcc")
+	job := submit(t, p, MuseJobVideo, "long story")[0]
+	_, _ = p.jobs.update(job.ID, func(j *MuseJob) {
+		j.Duration = 60
+		j.Status = MuseJobProcessing
+		j.AccountID = acc.ID
+		j.SessionID = "chat-long-turn1"
+		j.SentAt = now.Add(-2 * time.Hour).Format(time.RFC3339)
+		j.Attempts = 1
+	})
+	cur := mustJob(t, p, job.ID)
+	var pg Page = page
+	_, _, _, err := p.pollWithReplies(context.Background(), cur, nil, &pg, p.cfg.Get().Muse)
+	if !errors.As(err, new(*longIncompleteError)) {
+		t.Fatalf("expected longIncompleteError on long video turn-1 timeout, got %T: %v", err, err)
+	}
+	p.recordFailure(job.ID, acc.ID, err)
+	got := mustJob(t, p, job.ID)
+	if got.Status != MuseJobFailed || got.SessionID != "chat-long-turn1" {
+		t.Fatalf("long video turn-1 timeout must fail preserving SessionID instead of requeueing: %+v", got)
+	}
+}
+
+func TestP0_C1_CancelMidSendWithReconcileUnknownMarksSendUnknown(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	page := &trackedUnknownSendPage{
+		fakePage: &fakePage{
+			loggedIn: true,
+			sendErr:  errors.New("cdp connection dropped mid-send"),
+			onSend: func() {
+				close(started)
+				<-release
+			},
+		},
+		beforeIDs:   []SessionInfo{{ID: "old-chat"}},
+		sessionsErr: errors.New("cannot list sessions"),
+	}
+	p := testProvider(t, page)
+	acc := addSignedIn(t, p, "A")
+	job := submit(t, p, MuseJobImage, "ambiguous cancel")[0]
+	_, _ = p.jobs.update(job.ID, func(j *MuseJob) {
+		j.Status = MuseJobProcessing
+		j.AccountID = acc.ID
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		cur := mustJob(t, p, job.ID)
+		_, _, _ = p.send(ctx, cur, acc, nil, page, p.cfg.Get().Muse, "ambiguous cancel", nil, false)
+	}()
+
+	<-started
+	cancel()
+	_, _ = p.jobs.update(job.ID, func(j *MuseJob) { j.Status = MuseJobCancelled })
+	close(release)
+	<-done
+
+	got := mustJob(t, p, job.ID)
+	if !got.SendUnknown || got.Sending || !got.mayBePaid() {
+		t.Fatalf("cancel mid-send + reconcileUnknown must mark SendUnknown=true so mayBePaid()=true: %+v", got)
+	}
+	// mayBePaid must also return true while Sending is true.
+	if !(MuseJob{Sending: true}).mayBePaid() {
+		t.Fatal("MuseJob{Sending: true}.mayBePaid() must be true")
+	}
+}
+
+type trackedUnknownSendPage struct {
+	*fakePage
+	beforeIDs   []SessionInfo
+	sessionsErr error
+}
+
+func (p *trackedUnknownSendPage) Sessions(_ context.Context, refresh bool) ([]SessionInfo, error) {
+	if !refresh {
+		return p.beforeIDs, nil
+	}
+	return nil, p.sessionsErr
+}
+
+func (p *trackedUnknownSendPage) UserMessages(context.Context, string) ([]UserEvent, error) {
+	return nil, p.sessionsErr
+}

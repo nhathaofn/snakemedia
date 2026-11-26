@@ -47,7 +47,7 @@ type Journal[T Record] struct {
 	items     []T
 	byID      map[string]int
 	active    map[string]bool
-	keepID    func(T) bool
+	retireKey func(T) string
 	retired   []string
 	retiredID map[string]bool
 	// blocked stops every write: the file belongs to a newer build.
@@ -86,13 +86,13 @@ type Options[T Record] struct {
 	// job runs, lost on a restart anyway): it stays in memory and reaches disk
 	// with the record's next real change. Nil persists every Update.
 	Transient func(before, after T) bool
-	// KeepID retains a removed record's ID within the same disk transaction.
-	KeepID func(T) bool
+	// RetireKey retains a caller-defined recovery key when removing or trimming a record.
+	RetireKey func(T) string
 }
 
 // New returns a journal stored at path. Call Load before using it.
 func New[T Record](path string, opts Options[T]) *Journal[T] {
-	j := &Journal[T]{path: path, limit: opts.Limit, normalize: opts.Normalize, transient: opts.Transient, keepID: opts.KeepID, retiredID: map[string]bool{}, items: []T{}, byID: map[string]int{}, active: map[string]bool{}}
+	j := &Journal[T]{path: path, limit: opts.Limit, normalize: opts.Normalize, transient: opts.Transient, retireKey: opts.RetireKey, retiredID: map[string]bool{}, items: []T{}, byID: map[string]int{}, active: map[string]bool{}}
 	j.updated = sync.NewCond(&j.updatesMu)
 	return j
 }
@@ -569,10 +569,13 @@ func (j *Journal[T]) trimLocked() (trimmed []string) {
 }
 
 func (j *Journal[T]) retireLocked(record T) {
-	id := record.JobID()
-	if j.keepID != nil && j.keepID(record) && !j.retiredID[id] {
-		j.retiredID[id] = true
-		j.retired = append(j.retired, id)
+	if j.retireKey == nil {
+		return
+	}
+	key := j.retireKey(record)
+	if key != "" && !j.retiredID[key] {
+		j.retiredID[key] = true
+		j.retired = append(j.retired, key)
 	}
 }
 

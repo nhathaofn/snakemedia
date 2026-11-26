@@ -33,4 +33,32 @@ describe('onNextFrame', () => {
     );
     vi.useRealTimers();
   });
+
+  it('supports flush, clear(id), and clearAll without stale frame rollback', () => {
+    vi.useFakeTimers();
+    const applied = vi.fn();
+    const collect = collectByIdOnNextFrame<string | null>(applied);
+
+    collect('job-1', 'processing');
+    collect('job-2', 'processing');
+    // Direct RPC cancels job-1 before the next frame -> clear drops stale event.
+    collect.clear('job-1');
+    vi.advanceTimersByTime(16);
+    expect(applied).toHaveBeenCalledExactlyOnceWith(new Map([['job-2', 'processing']]));
+
+    applied.mockClear();
+    collect('job-3', 'queued');
+    // Synchronous flush commits immediately; subsequent rAF tick is a no-op.
+    collect.flush();
+    expect(applied).toHaveBeenCalledExactlyOnceWith(new Map([['job-3', 'queued']]));
+    vi.advanceTimersByTime(16);
+    expect(applied).toHaveBeenCalledTimes(1);
+
+    applied.mockClear();
+    collect('job-4', 'queued');
+    collect.clearAll();
+    vi.advanceTimersByTime(16);
+    expect(applied).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
 });

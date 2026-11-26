@@ -40,14 +40,18 @@ func (s *Provider) generationBrowser(ctx context.Context, acc session.StoredAcco
 // instead (kept for measuring the difference). The page is held so a project
 // being opened elsewhere cannot navigate it mid-request.
 func (s *Provider) sendBillable(ctx context.Context, client *chrome.FlowClient, browser *browser.Browser, rpcID, fReq string) ([]byte, error) {
+	return s.sendBillableWithLimit(ctx, client, browser, rpcID, fReq, s.cfg.Get().Accounts.MaxResponseBytes)
+}
+
+func (s *Provider) sendBillableWithLimit(ctx context.Context, client *chrome.FlowClient, browser *browser.Browser, rpcID, fReq string, maxResponseBytes int64) ([]byte, error) {
 	timeout := time.Duration(s.cfg.Get().Flow.GenerationTimeoutSeconds) * time.Second
-	if s.rpcFromGo {
-		return client.Do(ctx, rpcID, fReq, timeout)
+	if s.rpcFromGo || browser == nil {
+		return client.DoWithLimit(ctx, rpcID, fReq, timeout, maxResponseBytes)
 	}
 	page := s.pageLock(browser.Port)
 	page.RLock()
 	defer page.RUnlock()
-	return client.DoFromBrowser(ctx, browser.Port, rpcID, fReq, timeout)
+	return client.DoFromBrowserWithLimit(ctx, browser.Port, rpcID, fReq, timeout, maxResponseBytes)
 }
 
 // mintGenerationToken mints one single-use reCAPTCHA Enterprise token with the
@@ -55,6 +59,9 @@ func (s *Provider) sendBillable(ctx context.Context, client *chrome.FlowClient, 
 // it is the built-in key used, and that fallback is logged. The page is held
 // so a project being opened elsewhere cannot navigate it mid-mint.
 func (s *Provider) mintGenerationToken(ctx context.Context, browser *browser.Browser, policy config.AccountConfig, action string) (string, error) {
+	mint := s.mintLock(browser.Port)
+	mint.Lock()
+	defer mint.Unlock()
 	page := s.pageLock(browser.Port)
 	page.RLock()
 	defer page.RUnlock()
@@ -81,7 +88,7 @@ func (s *Provider) uploadReferences(ctx context.Context, client *chrome.FlowClie
 		if err != nil {
 			return nil, fmt.Errorf("không tải ảnh tham chiếu %q lên được: %w", ref.FileName, err)
 		}
-		mediaID, err := s.UploadReferenceImage(ctx, client, acc, ref.Base64, ref.MimeType, ref.FileName, token, projectID)
+		mediaID, err := s.uploadReferenceImageFromBrowser(ctx, client, browser, acc, ref.Base64, ref.MimeType, ref.FileName, token, projectID)
 		if err != nil {
 			return nil, fmt.Errorf("không tải ảnh tham chiếu %q lên được: %w", ref.FileName, err)
 		}

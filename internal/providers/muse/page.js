@@ -49,16 +49,21 @@ function pageMain(CHUNK) {
         window.requestAnimationFrame = (cb) => {
           const id = ++seq;
           let done = false;
+          let rId = 0;
+          let timer = 0;
           const run = (ts) => {
             if (done) return;
             done = true;
+            clearTimeout(timer);
+            if (rId) caf(rId);
             pending.delete(id);
             cb(ts);
           };
-          pending.set(id, [
-            raf(run),
-            setTimeout(() => run(performance.now()), 32),
-          ]);
+          rId = raf(run);
+          if (!done) {
+            timer = setTimeout(() => run(performance.now()), 32);
+            pending.set(id, [rId, timer]);
+          }
           return id;
         };
         window.cancelAnimationFrame = (id) => {
@@ -360,6 +365,50 @@ function pageMain(CHUNK) {
       return "";
     }
   };
+  const waitRt = async (ms = 3000) => {
+    const end = Date.now() + ms;
+    for (;;) {
+      try {
+        const snap =
+          window.__hatchEarlyGatewayRuntimeState?.activeRuntime?.getSnapshot?.();
+        if (snap && typeof snap.sendRequest === "function") return snap;
+      } catch (e) {}
+      if (Date.now() >= end) break;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    return rt();
+  };
+  const readyRt = async () => {
+    ensureVisible();
+    let snap = await waitRt();
+    if (gatewayDownKind(snap)) {
+      const gwErr = await ensureGatewayReady(5000);
+      if (gwErr) {
+        throw new Error("gateway disconnected: " + gwErr);
+      }
+      snap = await waitRt(1500);
+    }
+    if (gatewayDownKind(snap)) {
+      throw new Error("gateway disconnected");
+    }
+    return snap;
+  };
+  const withTimeout = (promise, ms, label) => {
+    if (!(ms > 0)) return promise;
+    let timer = null;
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timeout`)), ms);
+      }),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
+  };
+  const gwRequest = async (method, params, ms = 15000, label = method) => {
+    const snap = await readyRt();
+    return withTimeout(snap.sendRequest(method, params), ms, label);
+  };
   // sessions.list lists every chat of the account, and every job opens one:
   // jobs polling the same tab side by side share one listing for a moment.
   // Shorter than the shortest poll interval the settings allow (1 s), so one
@@ -368,7 +417,7 @@ function pageMain(CHUNK) {
   let listed = null;
   const sessionList = () => {
     if (listed && Date.now() - listed.at < LIST_SHARE_MS) return listed.p;
-    const p = rt().sendRequest("sessions.list", {});
+    const p = gwRequest("sessions.list", {}, 8000, "sessions");
     const entry = { at: Date.now(), p };
     listed = entry;
     p.catch(() => {
@@ -409,8 +458,21 @@ function pageMain(CHUNK) {
       });
     });
   };
+  const FILE_TTL_MS = 10 * 60 * 1000;
+  const MAX_OPEN_FILES = 16;
   const files = new Map();
   let fileSeq = 0;
+  const sweepFiles = () => {
+    const cutoff = Date.now() - FILE_TTL_MS;
+    for (const [id, entry] of files) {
+      if (!entry || entry.at < cutoff) files.delete(id);
+    }
+    while (files.size >= MAX_OPEN_FILES) {
+      const oldest = files.keys().next().value;
+      if (oldest === undefined) break;
+      files.delete(oldest);
+    }
+  };
   const b64 = (u8) => {
     const parts = [];
     for (let i = 0; i < u8.length; i += 32768)
@@ -443,6 +505,7 @@ function pageMain(CHUNK) {
     ),
   ];
   const chunkTexts = new Map();
+  let activeScans = 0;
   const source = (u) => {
     let pending = chunkTexts.get(u);
     if (!pending) {
@@ -536,11 +599,19 @@ function pageMain(CHUNK) {
         if (!known.has(base + m[0])) lazy.add(base + m[0] + query);
       }
     };
-    const v =
-      (await first(loaded, find, listLazy)) ?? (await first([...lazy], find));
-    if (v != null) return remember(v);
-    misses.set(memo, Date.now());
-    return null;
+    activeScans++;
+    try {
+      const v =
+        (await first(loaded, find, listLazy)) ?? (await first([...lazy], find));
+      if (v != null) return remember(v);
+      misses.set(memo, Date.now());
+      return null;
+    } finally {
+      if (--activeScans <= 0) {
+        activeScans = 0;
+        chunkTexts.clear();
+      }
+    }
   };
   // A Next.js server action is registered as createServerReference)("<id>",…,"<name>").
   const actionId = (name) =>
@@ -757,52 +828,23 @@ function pageMain(CHUNK) {
       return sessions.find((s) => s.session_id === sid)?.status || "";
     },
     async sessions(fresh) {
-      ensureVisible();
-      const waitRt = async (ms = 3000) => {
-        const end = Date.now() + ms;
-        for (;;) {
-          try {
-            const snap =
-              window.__hatchEarlyGatewayRuntimeState?.activeRuntime?.getSnapshot?.();
-            if (snap && typeof snap.sendRequest === "function") return snap;
-          } catch (e) {}
-          if (Date.now() >= end) break;
-          await new Promise((r) => setTimeout(r, 150));
-        }
-        return rt();
-      };
-      let snap = await waitRt();
-      if (gatewayDownKind(snap)) {
-        const gwErr = await ensureGatewayReady(5000);
-        if (gwErr) {
-          throw new Error("gateway disconnected: " + gwErr);
-        }
-        snap = await waitRt(1500);
-      }
-      if (gatewayDownKind(snap)) {
-        throw new Error("gateway disconnected");
-      }
-      let timer = null;
-      try {
-        const { sessions = [] } = await Promise.race([
-          fresh ? snap.sendRequest("sessions.list", {}) : sessionList(),
-          new Promise((_, reject) => {
-            timer = setTimeout(() => reject(new Error("sessions timeout")), 8000);
-          }),
-        ]);
-        return sessions.map((s) => ({
-          id: s.session_id || "",
-          status: s.status || "",
-        }));
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
+      const { sessions = [] } = fresh
+        ? await gwRequest("sessions.list", {}, 8000, "sessions")
+        : await sessionList();
+      return sessions.map((s) => ({
+        id: s.session_id || "",
+        status: s.status || "",
+      }));
     },
     async userMessages(sid) {
-      const h = await rt().sendRequest("chat.history", {
-        session_id: sid,
-        limit: 50,
-      });
+      const h = await gwRequest(
+        "chat.history",
+        {
+          session_id: sid,
+          limit: 500,
+        },
+        20000,
+      );
       const textOf = (e) => {
         for (const v of [
           e?.display_text,
@@ -834,16 +876,24 @@ function pageMain(CHUNK) {
     },
     // The chat's raw events, tool calls included (TestLiveConsole only).
     async history(sid) {
-      return await rt().sendRequest("chat.history", {
-        session_id: sid,
-        limit: 200,
-      });
+      return await gwRequest(
+        "chat.history",
+        {
+          session_id: sid,
+          limit: 500,
+        },
+        20000,
+      );
     },
     async result(sid) {
-      const h = await rt().sendRequest("chat.history", {
-        session_id: sid,
-        limit: 50,
-      });
+      const h = await gwRequest(
+        "chat.history",
+        {
+          session_id: sid,
+          limit: 500,
+        },
+        20000,
+      );
       const media = (list) =>
         (list || []).map((m) => ({
           path: m.path || "",
@@ -860,27 +910,36 @@ function pageMain(CHUNK) {
         }));
     },
     async open(path, maxBytes) {
-      const r = await rt().sendRequest("fs.raw", {
-        path: path.replace(/^sandbox:\/\//, ""),
-      });
+      sweepFiles();
+      const r = await gwRequest(
+        "fs.raw",
+        {
+          path: path.replace(/^sandbox:\/\//, ""),
+        },
+        90000,
+      );
       const blob = r instanceof Blob ? r : r.data;
       if (!blob || blob.size <= 0 || blob.size > maxBytes)
         throw new Error("Muse file is empty or exceeds the download limit");
       if (blob.size <= CHUNK) {
         return { id: 0, size: blob.size, data: await blobB64(blob) };
       }
-      files.set(++fileSeq, blob);
-      return { id: fileSeq, size: blob.size };
+      const id = ++fileSeq;
+      files.set(id, { blob, at: Date.now() });
+      return { id, size: blob.size };
     },
     async slice(id, i) {
-      return blobB64(files.get(id).slice(i * CHUNK, (i + 1) * CHUNK));
+      const entry = files.get(id);
+      if (!entry?.blob) throw new Error("Muse file handle expired or closed");
+      entry.at = Date.now();
+      return blobB64(entry.blob.slice(i * CHUNK, (i + 1) * CHUNK));
     },
     closeFile(id) {
       files.delete(id);
       return null;
     },
     async cancel(sid) {
-      await rt().sendRequest("chat.cancel", { session_id: sid });
+      await gwRequest("chat.cancel", { session_id: sid }, 10000);
       return null;
     },
     // The subscription Muse's settings screen shows (fetchSubscriptionAction):
@@ -894,7 +953,7 @@ function pageMain(CHUNK) {
       const upload = await scan("upload", uploadConfig);
       let models = null;
       try {
-        models = await rt().sendRequest("model.get", {});
+        models = await gwRequest("model.get", {}, 10000);
       } catch (e) {}
       return { upload, models };
     },

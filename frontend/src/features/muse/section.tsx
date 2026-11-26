@@ -29,7 +29,7 @@ export const museSection = {
       path: 'image',
       label: 'Ảnh',
       icon: Image,
-      element: <MuseStudio kind={MuseJobKind.Image} />,
+      element: <MuseStudio key={MuseJobKind.Image} kind={MuseJobKind.Image} />,
       layout: 'full',
     },
     {
@@ -37,7 +37,7 @@ export const museSection = {
       path: 'video',
       label: 'Video',
       icon: Clapperboard,
-      element: <MuseStudio kind={MuseJobKind.Video} />,
+      element: <MuseStudio key={MuseJobKind.Video} kind={MuseJobKind.Video} />,
       layout: 'full',
     },
     {

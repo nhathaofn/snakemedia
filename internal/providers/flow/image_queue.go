@@ -205,6 +205,7 @@ func newImageQueue(s *Provider) *imageQueue {
 			}
 		},
 		Transient: onlyImageStepChanged,
+		RetireKey: func(t ImageTask) string { return imageRequestKey(t.RequestID) },
 	})
 	q.generate = s.GenerateImages
 	q.resume = s.ResumeImageGeneration
@@ -222,13 +223,13 @@ func newImageQueue(s *Provider) *imageQueue {
 	q.saveImage = func(localURL string, t ImageTask) (string, error) {
 		return s.media.SaveToOnce(localURL, t.OutputDir, media.PlannedOutputName(t.Index, "flow", t.ID, localURL))
 	}
-	// A batch keeps saving into the folder it was queued with, also after the
-	// user picks another one or the app restarts.
+	// A batch keeps saving into the folder it was queued with. Keep completed
+	// batch paths revealable after a folder change or an app restart.
 	if s.media != nil {
 		s.media.AllowRootsFrom(func() []string {
 			var dirs []string
 			for _, t := range q.journal.List() {
-				if !t.Finished() && t.OutputDir != "" {
+				if t.OutputDir != "" {
 					dirs = append(dirs, t.OutputDir)
 				}
 			}
@@ -266,14 +267,16 @@ func (s *Provider) Start(ctx context.Context, emit func(events.Event, any)) {
 			q.mu.Unlock()
 		}
 	}
-	for _, t := range q.journal.List() {
-		if t.Status == ImageTaskRunning {
-			_, _ = q.journal.Update(t.ID, func(t *ImageTask) { t.Status, t.Step = ImageTaskQueued, "" })
-		}
-	}
 	q.adoptPending()
 	q.wg.Add(1)
 	go q.loop()
+}
+
+func imageRequestKey(id string) string {
+	if id == "" {
+		return ""
+	}
+	return "request:" + strings.ToLower(id)
 }
 
 // adoptPending takes over unfinished All-mode generation jobs that no task
@@ -296,7 +299,8 @@ func (q *imageQueue) adoptPending() {
 	var adopted []ImageTask
 	batch, now := uuid.NewString(), q.stamp()
 	for _, job := range pending {
-		if mode, _ := normalizeImageProjectMode(job.ImageTemplate.ProjectMode); mode != ImageProjectModeAll || held[strings.ToLower(job.ID)] {
+		if mode, _ := normalizeImageProjectMode(job.ImageTemplate.ProjectMode); mode != ImageProjectModeAll || job.ImageTemplate.QueueOwned ||
+			held[strings.ToLower(job.ID)] || q.journal.Retired(imageRequestKey(job.ID)) {
 			continue
 		}
 		tpl := job.ImageTemplate
@@ -321,6 +325,9 @@ func (q *imageQueue) adoptPending() {
 // checked again on the next start.
 func (s *Provider) Close() {
 	q := s.queue
+	s.creditRefreshMu.Lock()
+	s.closingCredits = true
+	s.creditRefreshMu.Unlock()
 	q.mu.Lock()
 	stop := q.stop
 	q.mu.Unlock()
@@ -328,6 +335,7 @@ func (s *Provider) Close() {
 		stop()
 	}
 	q.wg.Wait()
+	s.creditRefreshWG.Wait()
 }
 
 func (q *imageQueue) lifetime() context.Context {
@@ -374,6 +382,9 @@ func (q *imageQueue) nextWake() (time.Duration, bool) {
 	now := q.now()
 	var earliest time.Time
 	for _, task := range q.journal.ListActive() {
+		if task.Status == ImageTaskRunning && !q.isRunning(task.ID) {
+			return queuePumpInterval, true
+		}
 		if task.Held || task.Status != ImageTaskQueued {
 			continue
 		}
@@ -412,8 +423,15 @@ func (q *imageQueue) pump() {
 	if ctx.Err() != nil {
 		return
 	}
+	active := q.journal.ListActive()
+	if q.recoverOrphanedTasks(active) {
+		active = q.journal.ListActive()
+	}
 	cfg := q.cfg()
-	for {
+	for _, task := range active {
+		if ctx.Err() != nil {
+			return
+		}
 		now := q.now()
 		q.mu.Lock()
 		free := cfg.QueueThreads - len(q.running)
@@ -422,9 +440,12 @@ func (q *imageQueue) pump() {
 		if free <= 0 {
 			return
 		}
-		task, fresh, ok := q.nextDue(now, allowFresh)
-		if !ok {
-			return
+		if !imageTaskDue(task, now) || q.isRunning(task.ID) {
+			continue
+		}
+		fresh := q.isFreshSend(task)
+		if fresh && !allowFresh {
+			continue
 		}
 		q.mu.Lock()
 		taskCtx, cancel := context.WithCancel(ctx)
@@ -469,6 +490,36 @@ func (q *imageQueue) pump() {
 	}
 }
 
+// recoverOrphanedTasks requeues interrupted work at startup and after a
+// worker could not persist its final transition. Request IDs and saved
+// results stay intact so reconciliation and saving can continue safely.
+func (q *imageQueue) recoverOrphanedTasks(active []ImageTask) bool {
+	var orphaned []string
+	for _, task := range active {
+		if task.Status == ImageTaskRunning && !q.isRunning(task.ID) {
+			orphaned = append(orphaned, task.ID)
+		}
+	}
+	if len(orphaned) == 0 {
+		return false
+	}
+	recovered, err := q.journal.UpdateMany(orphaned, func(t *ImageTask) bool {
+		if t.Status != ImageTaskRunning {
+			return false
+		}
+		t.Status, t.Step = ImageTaskQueued, ""
+		return true
+	})
+	if err != nil {
+		logger.Get().Warn("cannot recover interrupted Flow image tasks", "error", err)
+		return false
+	}
+	for _, task := range recovered {
+		q.publish(task)
+	}
+	return len(recovered) > 0
+}
+
 func (q *imageQueue) release(id string) {
 	q.mu.Lock()
 	if cancel, ok := q.running[id]; ok {
@@ -477,26 +528,6 @@ func (q *imageQueue) release(id string) {
 	}
 	q.mu.Unlock()
 	q.trigger()
-}
-
-// nextDue is the oldest queued task that is not held and not waiting for a
-// later check.
-func (q *imageQueue) nextDue(now time.Time, allowFresh bool) (ImageTask, bool, bool) {
-	q.mu.Lock()
-	running := make(map[string]bool, len(q.running))
-	for id := range q.running {
-		running[id] = true
-	}
-	q.mu.Unlock()
-	for _, t := range q.journal.ListActive() {
-		if !running[t.ID] && imageTaskDue(t, now) {
-			fresh := q.isFreshSend(t)
-			if allowFresh || !fresh {
-				return t, fresh, true
-			}
-		}
-	}
-	return ImageTask{}, false, false
 }
 
 func imageTaskDue(t ImageTask, now time.Time) bool {
@@ -520,9 +551,12 @@ func (q *imageQueue) isFreshSend(t ImageTask) bool {
 	return !found && err == nil
 }
 
-// onlySaving reports a task whose images were made but not all saved.
+// onlySaving reports a task with committed results to finalize. Even an
+// adopted task without an output folder must never send again from this state.
 func (q *imageQueue) onlySaving(t ImageTask) bool {
-	return t.RequestID == "" && t.OutputDir != "" && len(t.Results) > 0 && len(unsaved(t)) > 0
+	return t.RequestID == "" && slices.ContainsFunc(t.Results, func(item GeneratedImageItem) bool {
+		return item.LocalURL != ""
+	})
 }
 
 func (q *imageQueue) execute(ctx context.Context, t ImageTask) {
@@ -531,7 +565,7 @@ func (q *imageQueue) execute(ctx context.Context, t ImageTask) {
 		return
 	}
 	if q.onlySaving(t) {
-		q.finishWithResults(t, t.Results)
+		q.finishWithResults(ctx, t, t.Results)
 		return
 	}
 	if t.RequestID == "" {
@@ -570,7 +604,7 @@ func (q *imageQueue) execute(ctx context.Context, t ImageTask) {
 		q.interrupted(t.ID)
 		return
 	}
-	q.settle(t, res)
+	q.settle(ctx, t, res)
 }
 
 // request builds the generation request, reading the reference images from
@@ -590,13 +624,13 @@ func (q *imageQueue) request(t ImageTask) (GenerateImageRequest, error) {
 	}
 	return GenerateImageRequest{
 		RequestID: t.RequestID, Prompt: t.Prompt, ModelID: t.ModelID, AspectRatio: t.AspectRatio,
-		Quality: t.Quality, ProjectMode: ImageProjectModeAll, Count: t.Count, References: refs,
+		Quality: t.Quality, ProjectMode: ImageProjectModeAll, Count: t.Count, References: refs, queueOwned: true,
 	}, nil
 }
 
 // settle records Flow's answer. A request Flow may still hold keeps its ID
 // and is checked again later; only a definite answer frees the ID.
-func (q *imageQueue) settle(t ImageTask, res models.Response[[]GeneratedImageItem]) {
+func (q *imageQueue) settle(ctx context.Context, t ImageTask, res models.Response[[]GeneratedImageItem]) {
 	phase, found, phaseErr := q.requestPhase(t.RequestID)
 	open := found && phase != generationComplete && phase != generationRejected
 	if !res.Success {
@@ -626,13 +660,7 @@ func (q *imageQueue) settle(t ImageTask, res models.Response[[]GeneratedImageIte
 		if i := slices.IndexFunc(items, func(i GeneratedImageItem) bool { return i.Error != "" }); i >= 0 {
 			message = items[i].Error
 		}
-		updated, err := q.journal.Update(t.ID, func(t *ImageTask) {
-			t.Results, t.RequestID = items, ""
-		})
-		if err == nil {
-			t = updated
-		}
-		q.fail(t.ID, message, true)
+		q.finishFailure(t.ID, message, true, items)
 		return
 	}
 	updated, err := q.journal.Update(t.ID, func(t *ImageTask) {
@@ -642,16 +670,19 @@ func (q *imageQueue) settle(t ImageTask, res models.Response[[]GeneratedImageIte
 		q.fail(t.ID, "Không ghi được hàng đợi: "+err.Error(), false)
 		return
 	}
-	q.finishWithResults(updated, items)
+	q.finishWithResults(ctx, updated, items)
 }
 
 // finishWithResults copies every made image not yet saved into the task's
 // folder and finishes the task.
-func (q *imageQueue) finishWithResults(t ImageTask, items []GeneratedImageItem) {
+func (q *imageQueue) finishWithResults(ctx context.Context, t ImageTask, items []GeneratedImageItem) {
 	saved := slices.Clone(t.SavedFiles)
 	paths := slices.Clone(t.SavedPaths)
 	var saveErr string
 	for _, item := range items {
+		if ctx.Err() != nil {
+			break
+		}
 		// An adopted task has no folder: its images stay in the media store.
 		if t.OutputDir == "" || item.LocalURL == "" || slices.Contains(saved, item.LocalURL) {
 			continue
@@ -665,8 +696,13 @@ func (q *imageQueue) finishWithResults(t ImageTask, items []GeneratedImageItem) 
 		}
 		saved, paths = append(saved, item.LocalURL), append(paths, path)
 	}
+	closing := q.lifetime().Err() != nil
 	updated, err := q.journal.Update(t.ID, func(t *ImageTask) {
 		t.SavedFiles, t.SavedPaths, t.Step, t.NextCheckAt = saved, paths, "", ""
+		if ctx.Err() != nil {
+			q.markInterrupted(t, closing)
+			return
+		}
 		t.FinishedAt = q.stamp()
 		if saveErr != "" {
 			t.Status, t.Error = ImageTaskFailed, "Lỗi lưu ảnh: "+saveErr
@@ -742,9 +778,16 @@ func (q *imageQueue) unknown(id string, err error) {
 // fail ends a task. definite means Flow answered (or nothing was sent), so
 // the request ID is freed and a retry sends a new request.
 func (q *imageQueue) fail(id, message string, definite bool) {
+	q.finishFailure(id, message, definite, nil)
+}
+
+func (q *imageQueue) finishFailure(id, message string, definite bool, results []GeneratedImageItem) {
 	updated, err := q.journal.Update(id, func(t *ImageTask) {
 		if t.Status != ImageTaskRunning {
 			return
+		}
+		if results != nil {
+			t.Results = results
 		}
 		t.Status, t.Error, t.Step, t.NextCheckAt = ImageTaskFailed, message, "", ""
 		t.FinishedAt = q.stamp()
@@ -766,17 +809,24 @@ func (q *imageQueue) interrupted(id string) {
 		if t.Status != ImageTaskRunning {
 			return
 		}
-		if closing {
-			t.Status, t.Step = ImageTaskQueued, ""
-			return
-		}
-		t.Status, t.Step, t.FinishedAt = ImageTaskCancelled, "", q.stamp()
-		if phase, found, err := q.requestPhase(t.RequestID); err == nil && (!found || phase == generationRejected) {
-			t.RequestID = ""
-		}
+		q.markInterrupted(t, closing)
 	})
 	if err == nil {
 		q.publish(updated)
+	}
+}
+
+func (q *imageQueue) markInterrupted(t *ImageTask, closing bool) {
+	t.Step = ""
+	if closing {
+		t.Status = ImageTaskQueued
+		return
+	}
+	t.Status, t.FinishedAt = ImageTaskCancelled, q.stamp()
+	if t.RequestID != "" {
+		if phase, found, err := q.requestPhase(t.RequestID); err == nil && (!found || phase == generationRejected) {
+			t.RequestID = ""
+		}
 	}
 }
 

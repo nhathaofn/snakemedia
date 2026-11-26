@@ -195,7 +195,9 @@ func (b *localBridge) handleClient(client net.Conn) {
 		if target.User != "" || target.Pass != "" {
 			auth = &xproxy.Auth{User: target.User, Password: target.Pass}
 		}
-		dialer, err := xproxy.SOCKS5("tcp", net.JoinHostPort(target.Host, strconv.Itoa(target.Port)), auth, &net.Dialer{Timeout: timeout})
+		// Enforce timeout across both TCP connect and SOCKS5 handshake so a
+		// stalled SOCKS5 server cannot block handleClient indefinitely.
+		dialer, err := xproxy.SOCKS5("tcp", net.JoinHostPort(target.Host, strconv.Itoa(target.Port)), auth, deadlineDialer{timeout: timeout})
 		if err != nil {
 			return
 		}
@@ -207,6 +209,7 @@ func (b *localBridge) handleClient(client net.Conn) {
 		if err != nil {
 			return
 		}
+		_ = upstream.SetDeadline(time.Time{})
 	} else {
 		// HTTP proxy
 		var err error
@@ -218,9 +221,10 @@ func (b *localBridge) handleClient(client net.Conn) {
 	defer upstream.Close()
 
 	if req.Method == http.MethodConnect {
+		var upstreamConn net.Conn = upstream
 		if target.Scheme != "socks5" {
 			connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n", req.Host, req.Host)
-			if target.User != "" {
+			if target.User != "" || target.Pass != "" {
 				connectReq += "Proxy-Authorization: " + basicAuth(target) + "\r\n"
 			}
 			connectReq += "\r\n"
@@ -235,17 +239,20 @@ func (b *localBridge) handleClient(client net.Conn) {
 				return
 			}
 			_ = resp.Body.Close()
-			if resp.StatusCode != http.StatusOK || upReader.Buffered() > 0 {
+			if resp.StatusCode != http.StatusOK {
 				return
 			}
 			_ = upstream.SetDeadline(time.Time{})
+			if upReader.Buffered() > 0 {
+				upstreamConn = bufferedConn{Conn: upstream, r: upReader}
+			}
 		}
 
 		if _, err := client.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 			return
 		}
 
-		pipe(bufferedConn{Conn: client, r: reader}, upstream)
+		pipe(bufferedConn{Conn: client, r: reader}, upstreamConn)
 		return
 	}
 
@@ -259,7 +266,7 @@ func (b *localBridge) handleClient(client net.Conn) {
 		err = req.Write(upstream)
 	} else {
 		// An HTTP proxy needs the absolute URL (and its credentials).
-		if target.User != "" {
+		if target.User != "" || target.Pass != "" {
 			req.Header.Set("Proxy-Authorization", basicAuth(target))
 		}
 		err = req.WriteProxy(upstream)
@@ -281,6 +288,23 @@ type bufferedConn struct {
 }
 
 func (c bufferedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
+
+// deadlineDialer bounds both TCP dial and subsequent SOCKS5 negotiation so a
+// stalled upstream proxy cannot hang a goroutine indefinitely.
+type deadlineDialer struct {
+	timeout time.Duration
+}
+
+func (d deadlineDialer) Dial(network, addr string) (net.Conn, error) {
+	conn, err := net.DialTimeout(network, addr, d.timeout)
+	if err != nil {
+		return nil, err
+	}
+	if d.timeout > 0 {
+		_ = conn.SetDeadline(time.Now().Add(d.timeout))
+	}
+	return conn, nil
+}
 
 func (c bufferedConn) CloseWrite() error {
 	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {

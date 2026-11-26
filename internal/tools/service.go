@@ -238,6 +238,12 @@ func (s *Service) specOf(program string) (Spec, bool) {
 	return s.manifest.Tools[i], true
 }
 
+// HasProgram reports whether program is declared in the embedded tools manifest.
+func (s *Service) HasProgram(program string) bool {
+	_, ok := s.specOf(program)
+	return ok
+}
+
 func (s *Service) status(spec Spec) Tool {
 	_, downloadable := spec.source()
 	t := Tool{ID: spec.ID, Name: spec.Name, Homepage: spec.Homepage, Ready: true, Downloadable: downloadable}

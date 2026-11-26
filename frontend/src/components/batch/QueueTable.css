@@ -30,6 +30,13 @@
  * The batch queue table both providers show (Flow Ảnh → Hàng loạt, Muse
  * Ảnh/Video → Hàng loạt): one row per prompt in the same fixed columns.
  */
+.queue-table-layout {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .queue-scroll {
   display: flex;
   flex: 1;

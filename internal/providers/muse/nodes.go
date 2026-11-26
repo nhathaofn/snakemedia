@@ -306,6 +306,11 @@ func (p *Provider) awaitJobs(ctx context.Context, targetKind MuseJobKind, jobs [
 			bj, ok := current[boardID]
 			switch {
 			case ok && bj.Status == MuseJobSucceeded && len(bj.Files) > 0:
+				for _, vid := range videoIDs {
+					if v, vOK := current[vid]; vOK && len(v.Frames) == 0 && !v.finished() && v.BoardFrames > 0 && len(bj.Files) < v.BoardFrames {
+						abandoned[vid] = fmt.Sprintf("storyboard chỉ tạo được %d/%d ảnh", len(bj.Files), v.BoardFrames)
+					}
+				}
 				delete(boardToVideos, boardID)
 			case !ok:
 				for _, vid := range videoIDs {

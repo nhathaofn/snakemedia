@@ -82,7 +82,10 @@ func (p *Provider) execute(ctx context.Context, jobID, accountID string) error {
 	}
 	// The account's browser stays as it is (no sign-in window, no restart on
 	// a new proxy, no removal) while this job works outside an explicit recycle.
-	lease := acquireAccountLease(p.accounts, accountID)
+	lease, err := acquireAccountLease(ctx, p.accounts, accountID)
+	if err != nil {
+		return err
+	}
 	defer lease.Release()
 	cfg := p.cfg.Get().Muse
 	if job.Status == MuseJobQueued {
@@ -118,7 +121,7 @@ func (p *Provider) execute(ctx context.Context, jobID, accountID string) error {
 	defer func() { closePage(page) }()
 
 	recoveredOnce := false
-	recoverPreSend := func(cause error, reason string) (bool, error) {
+	recoverAccount := func(cause error, reason string, forResume bool) (bool, error) {
 		if recoveredOnce || ctx.Err() != nil {
 			return false, cause
 		}
@@ -128,7 +131,16 @@ func (p *Provider) execute(ctx context.Context, jobID, accountID string) error {
 			}
 		})
 		recoveredOnce = true
-		freshAcc, ok, refErr := p.refreshAccountForRun(ctx, acc.ID, job.Kind, &page, lease, reason)
+		var (
+			freshAcc accounts.Record
+			ok       bool
+			refErr   error
+		)
+		if forResume {
+			freshAcc, ok, refErr = p.refreshAccountForResume(ctx, acc.ID, job.Kind, &page, lease, reason)
+		} else {
+			freshAcc, ok, refErr = p.refreshAccountForRun(ctx, acc.ID, job.Kind, &page, lease, reason)
+		}
 		if freshAcc.ID != "" {
 			acc = freshAcc
 		}
@@ -139,6 +151,12 @@ func (p *Provider) execute(ctx context.Context, jobID, accountID string) error {
 			return false, refErr
 		}
 		return false, cause
+	}
+	recoverPreSend := func(cause error, reason string) (bool, error) {
+		return recoverAccount(cause, reason, false)
+	}
+	recoverResume := func(cause error, reason string) (bool, error) {
+		return recoverAccount(cause, reason, true)
 	}
 
 	if job.SessionID == "" && !job.Sending {
@@ -248,7 +266,7 @@ func (p *Provider) execute(ctx context.Context, jobID, accountID string) error {
 			return &notSentError{err: err}
 		}
 		if err := p.ensureSignedIn(ctx, job.ID, acc, page); err != nil {
-			if ok, rErr := recoverPreSend(err, "resume_signed_in"); ok {
+			if ok, rErr := recoverResume(err, "resume_signed_in"); ok {
 				// Re-check signed in and bound cleanly after refresh.
 				if page == nil {
 					return &notSentError{err: errPageNotReady}
@@ -261,7 +279,7 @@ func (p *Provider) execute(ctx context.Context, jobID, accountID string) error {
 			if errors.Is(err, errTabCapReached) {
 				return err
 			}
-			if ok, rErr := recoverPreSend(&notSentError{err: err}, "resume_assign_tab"); !ok {
+			if ok, rErr := recoverResume(&notSentError{err: err}, "resume_assign_tab"); !ok {
 				return rErr
 			}
 		}

@@ -1,4 +1,4 @@
-import { api } from '../../../../services/api';
+import { api, unwrap } from '../../../../services/api';
 import { FlowImageTaskStatus } from '../../../../types';
 import type { FlowImageTask, FlowImageTaskReference, FlowModel } from '../../../../types';
 
@@ -30,15 +30,16 @@ export function overCapacity(
   return null;
 }
 
-/** Adds references to every task that can still take them; returns the error, if any. */
+/** Counts jobs that actually gained a reference, or rejects with the backend error. */
 export async function applyToTasks(
   targets: readonly FlowImageTask[],
   refs: FlowImageTaskReference[],
-): Promise<string | null> {
-  if (targets.length === 0 || refs.length === 0) return null;
-  const response = await api.addFlowImageTaskReferences(
-    targets.map((task) => task.id),
-    refs,
+): Promise<number> {
+  if (targets.length === 0 || refs.length === 0) return 0;
+  return unwrap(
+    await api.addFlowImageTaskReferences(
+      targets.map((task) => task.id),
+      refs,
+    ),
   );
-  return response.success ? null : (response.error ?? 'Không rõ lỗi.');
 }

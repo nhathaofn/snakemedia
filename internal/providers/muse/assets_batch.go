@@ -3,27 +3,21 @@ package muse
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
-	"SnakeMedia/internal/logger"
 	"SnakeMedia/internal/media"
 	"SnakeMedia/internal/models"
 	"github.com/google/uuid"
 )
 
 const (
-	folderPreviewMaxSide = 120
-	folderPreviewQuality = 72
-	folderScanWorkers    = 4
-	maxTagRunes          = 40
+	maxTagRunes = 40
 )
 
 func makeBatchAssetItem(item MuseAssetBatchItem) MuseAssetItem {
@@ -62,25 +56,6 @@ func (c MuseAssetBatchConflict) valid() bool {
 	return c == MuseConflictSkip || c == MuseConflictOverwrite || c == MuseConflictRename
 }
 
-// MuseFolderImage describes one image found in a picked folder or dropped file list before import.
-type MuseFolderImage struct {
-	Path       string           `json:"path"`
-	LocalURL   string           `json:"localUrl,omitempty"`
-	FileName   string           `json:"fileName"`
-	RelPath    string           `json:"relPath,omitempty"`
-	Size       int64            `json:"size"`
-	PreviewURL string           `json:"previewUrl,omitempty"`
-	Parsed     *ParsedAssetName `json:"parsed,omitempty"`
-	Error      string           `json:"error,omitempty"`
-}
-
-// MuseAssetFolderScan is the naturally ordered image list of a folder or file selection.
-type MuseAssetFolderScan struct {
-	Canceled bool              `json:"canceled"`
-	Dir      string            `json:"dir"`
-	Images   []MuseFolderImage `json:"images"`
-}
-
 // MuseAssetBatchItem is one asset row sent to ImportAssetBatch.
 type MuseAssetBatchItem struct {
 	SourcePath string        `json:"sourcePath,omitempty"`
@@ -112,175 +87,6 @@ type MuseAssetBatchResult struct {
 	Updated  int      `json:"updated"`
 	Skipped  int      `json:"skipped"`
 	SavedIDs []string `json:"savedIds"`
-}
-
-// AssetImportReady reports whether Muse limits have been read so images can
-// be checked and imported.
-func (p *Provider) AssetImportReady() error {
-	caps, _ := p.knownCapabilities()
-	if caps == nil {
-		return errLimitsUnknown
-	}
-	return nil
-}
-
-// ScanAssetFolder reads the image files inside dir (and optionally subdirectories),
-// sorted in natural filename order with convention auto-parsing and lightweight previews.
-func (p *Provider) ScanAssetFolder(dir string, recursive bool) models.Response[MuseAssetFolderScan] {
-	caps, _ := p.knownCapabilities()
-	if caps == nil {
-		return fail[MuseAssetFolderScan](errLimitsUnknown, models.CodeUnavailable)
-	}
-	var images []MuseFolderImage
-	addEntry := func(fullPath, relPath, name string, info os.FileInfo) {
-		ext := strings.ToLower(filepath.Ext(name))
-		if _, ok := caps.imageMime(ext); !ok {
-			return
-		}
-		item := MuseFolderImage{
-			Path:     fullPath,
-			FileName: name,
-			RelPath:  relPath,
-			Size:     info.Size(),
-			Parsed:   ParseAssetFileName(name),
-		}
-		if info.Size() > caps.MaxFileBytes {
-			item.Error = fmt.Sprintf("Lớn hơn %d MB (giới hạn Muse)", caps.MaxFileBytes>>20)
-		}
-		images = append(images, item)
-	}
-
-	if !recursive {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return fail[MuseAssetFolderScan](fmt.Errorf("Không đọc được thư mục %s: %w", dir, err), models.CodeInvalidArgument)
-		}
-		images = make([]MuseFolderImage, 0, len(entries))
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			fullPath := filepath.Join(dir, entry.Name())
-			info, err := os.Stat(fullPath)
-			if err != nil || !info.Mode().IsRegular() {
-				continue
-			}
-			addEntry(fullPath, entry.Name(), entry.Name(), info)
-		}
-	} else {
-		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return nil
-			}
-			if d.IsDir() {
-				if path != dir && strings.HasPrefix(d.Name(), ".") {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			info, err := d.Info()
-			if err != nil || !info.Mode().IsRegular() {
-				return nil
-			}
-			rel, relErr := filepath.Rel(dir, path)
-			if relErr != nil {
-				rel = d.Name()
-			}
-			addEntry(path, filepath.ToSlash(rel), d.Name(), info)
-			return nil
-		})
-		if err != nil {
-			return fail[MuseAssetFolderScan](fmt.Errorf("Không đọc được thư mục %s: %w", dir, err), models.CodeInvalidArgument)
-		}
-	}
-
-	slices.SortFunc(images, func(a, b MuseFolderImage) int {
-		if c := naturalCompareFileName(a.RelPath, b.RelPath); c != 0 {
-			return c
-		}
-		return naturalCompareFileName(a.FileName, b.FileName)
-	})
-	populateFolderPreviews(images)
-	return models.SuccessResponse(MuseAssetFolderScan{Dir: dir, Images: images})
-}
-
-// ScanAssetPaths inspects a user-provided list of file paths (e.g. from drag-and-drop
-// or multi-file picker) and returns natural-sorted scan rows with parsed convention hints.
-func (p *Provider) ScanAssetPaths(paths []string) models.Response[MuseAssetFolderScan] {
-	caps, _ := p.knownCapabilities()
-	if caps == nil {
-		return fail[MuseAssetFolderScan](errLimitsUnknown, models.CodeUnavailable)
-	}
-	seen := make(map[string]bool, len(paths))
-	images := make([]MuseFolderImage, 0, len(paths))
-	for _, raw := range paths {
-		clean := filepath.Clean(strings.TrimSpace(raw))
-		if clean == "" || seen[strings.ToLower(clean)] {
-			continue
-		}
-		seen[strings.ToLower(clean)] = true
-		info, err := os.Stat(clean)
-		if err != nil || info.IsDir() || !info.Mode().IsRegular() {
-			continue
-		}
-		name := filepath.Base(clean)
-		ext := strings.ToLower(filepath.Ext(name))
-		if _, ok := caps.imageMime(ext); !ok {
-			continue
-		}
-		item := MuseFolderImage{
-			Path:     clean,
-			FileName: name,
-			RelPath:  name,
-			Size:     info.Size(),
-			Parsed:   ParseAssetFileName(name),
-		}
-		if info.Size() > caps.MaxFileBytes {
-			item.Error = fmt.Sprintf("Lớn hơn %d MB (giới hạn Muse)", caps.MaxFileBytes>>20)
-		}
-		images = append(images, item)
-	}
-	slices.SortFunc(images, func(a, b MuseFolderImage) int {
-		return naturalCompareFileName(a.FileName, b.FileName)
-	})
-	populateFolderPreviews(images)
-	return models.SuccessResponse(MuseAssetFolderScan{Images: images})
-}
-
-func populateFolderPreviews(images []MuseFolderImage) {
-	if len(images) == 0 {
-		return
-	}
-	jobs := make(chan int, len(images))
-	for i := range images {
-		if images[i].Error == "" && images[i].Path != "" {
-			jobs <- i
-		}
-	}
-	close(jobs)
-	workers := min(folderPreviewWorkers(len(images)), len(images))
-	if workers < 1 {
-		return
-	}
-	var wg sync.WaitGroup
-	for range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer logger.Recover("scan asset folder", nil)
-			for i := range jobs {
-				images[i].PreviewURL = media.PreviewDataURL(images[i].Path, folderPreviewMaxSide, folderPreviewQuality)
-			}
-		}()
-	}
-	wg.Wait()
-}
-
-func folderPreviewWorkers(n int) int {
-	if n <= 1 {
-		return n
-	}
-	return folderScanWorkers
 }
 
 // ImportAssetBatch validates every row, copies accepted images (from disk paths

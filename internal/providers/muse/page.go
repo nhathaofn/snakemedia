@@ -36,14 +36,21 @@ var pageKey = func() string {
 // requestAnimationFrame is throttled so headless hydration stays responsive
 // while idle tabs run zero timers.
 const visibleShim = `(() => {
-  Object.defineProperty(Document.prototype, 'visibilityState', { get: () => 'visible', configurable: true });
-  Object.defineProperty(Document.prototype, 'hidden', { get: () => false, configurable: true });
+  try {
+    const hd = Object.getOwnPropertyDescriptor(Document.prototype, 'hidden');
+    if (!hd || hd.configurable) Object.defineProperty(Document.prototype, 'hidden', { get: () => false, configurable: true });
+    const vd = Object.getOwnPropertyDescriptor(Document.prototype, 'visibilityState');
+    if (!vd || vd.configurable) Object.defineProperty(Document.prototype, 'visibilityState', { get: () => 'visible', configurable: true });
+  } catch (e) {}
+  if (window.__mssRafPatched || typeof window.requestAnimationFrame !== 'function' || typeof window.cancelAnimationFrame !== 'function') return;
+  window.__mssRafPatched = true;
   const raf = window.requestAnimationFrame.bind(window), caf = window.cancelAnimationFrame.bind(window);
   const t = new Map(); let seq = 0;
   window.requestAnimationFrame = cb => {
-    const id = ++seq; let done = false;
-    const run = ts => { if (done) return; done = true; t.delete(id); cb(ts); };
-    t.set(id, [raf(run), setTimeout(() => run(performance.now()), 32)]);
+    const id = ++seq; let done = false, rId = 0, timer = 0;
+    const run = ts => { if (done) return; done = true; clearTimeout(timer); if (rId) caf(rId); t.delete(id); cb(ts); };
+    rId = raf(run);
+    if (!done) { timer = setTimeout(() => run(performance.now()), 32); t.set(id, [rId, timer]); }
     return id;
   };
   window.cancelAnimationFrame = id => { const v = t.get(id); if (v) { caf(v[0]); clearTimeout(v[1]); t.delete(id); } };
@@ -486,7 +493,7 @@ func (p *chromePage) send(ctx context.Context, text string, atts []Attachment, s
 	}
 	if err := p.homeNav(ctx); err != nil {
 		p.markDirty()
-		return r, err
+		return r, wrapPreSend("send", err)
 	}
 	err := p.invoke(ctx, p.sendTimeout, "send", &r, text, atts, sessionID)
 	if err != nil || (!r.OK && strings.HasPrefix(r.Reason, "not_ready")) {
@@ -513,7 +520,7 @@ func (p *chromePage) homeNav(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return browser.Navigate(ctx, t, p.port, musePage)
+	return browser.NavigateWithPolicy(ctx, t, p.port, musePage, p.policy)
 }
 
 func (p *chromePage) Status(ctx context.Context, sessionID string) (string, error) {

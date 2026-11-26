@@ -129,15 +129,17 @@ export function OpenMuseOutputFolder():Promise<models.Response_bool_>;
 
 export function PickFlowImageReferences():Promise<models.Response___SnakeMedia_internal_providers_flow_ImageTaskReference_>;
 
-export function PickMuseAssetFiles():Promise<models.Response_SnakeMedia_internal_providers_muse_MuseAssetFolderScan_>;
+export function PickMuseAssetFiles(arg1:string):Promise<models.Response_SnakeMedia_internal_providers_muse_MuseAssetFolderScan_>;
 
-export function PickMuseAssetFolder(arg1:boolean):Promise<models.Response_SnakeMedia_internal_providers_muse_MuseAssetFolderScan_>;
+export function PickMuseAssetFolder(arg1:boolean,arg2:string):Promise<models.Response_SnakeMedia_internal_providers_muse_MuseAssetFolderScan_>;
 
 export function PickMuseAssetImages():Promise<models.Response___SnakeMedia_internal_providers_muse_MuseReference_>;
 
 export function PickMuseAssetVaultDirectoryPath():Promise<models.Response_string_>;
 
 export function PickMuseReferences():Promise<models.Response___SnakeMedia_internal_providers_muse_MuseReference_>;
+
+export function PickToolPath(arg1:string):Promise<models.Response_string_>;
 
 export function PickVideo():Promise<models.Response_SnakeMedia_internal_media_ImportResult_>;
 

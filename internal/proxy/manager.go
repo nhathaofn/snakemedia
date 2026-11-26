@@ -329,8 +329,17 @@ func pick(a Assignment, others []Assignment, text string, dead map[string]time.T
 	if len(lines) == 0 {
 		return nil, "", fmt.Errorf("Danh sách proxy đang trống nên %s không có proxy để chạy. Thêm proxy ở Trang chủ → Proxy, hoặc chọn \"Không dùng proxy\" cho tài khoản này.", a.Name)
 	}
+	var validLines []string
+	for _, line := range lines {
+		if p := Parse(line); p != nil && p.Error == "" {
+			validLines = append(validLines, line)
+		}
+	}
+	if len(validLines) == 0 {
+		return nil, "", fmt.Errorf("Danh sách proxy không có dòng hợp lệ cho %s. Kiểm tra lại ở Trang chủ → Proxy.", a.Name)
+	}
 	if a.Keep && a.Auto != "" {
-		if !slices.Contains(lines, a.Auto) {
+		if !slices.Contains(validLines, a.Auto) {
 			return nil, "", fmt.Errorf("Proxy đã ghim của %s không còn trong danh sách. Hãy chọn lại proxy cho tài khoản.", a.Name)
 		}
 		if until, ok := dead[a.Auto]; ok && until.After(now) {
@@ -338,7 +347,7 @@ func pick(a Assignment, others []Assignment, text string, dead map[string]time.T
 		}
 	}
 	var live []string
-	for _, line := range lines {
+	for _, line := range validLines {
 		if until, ok := dead[line]; !ok || !until.After(now) {
 			live = append(live, line)
 		}

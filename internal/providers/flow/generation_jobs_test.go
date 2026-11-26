@@ -248,6 +248,36 @@ func TestVideoResumeKeepsJobPendingWhenTheListingFails(t *testing.T) {
 	}
 }
 
+func TestImageResumeDownloadsPersistedAcceptanceWithoutProjectListing(t *testing.T) {
+	accounts := testAccountService(t)
+	acc := seedFlowAccount(t, accounts, "first@example.invalid", true)
+	s := testFlowService(accounts)
+	job := newGenerationJob("dddddddd-dddd-4ddd-8ddd-dddddddddddd", generationJobImage, "fp", acc.ID)
+	job.Phase, job.ProjectID, job.ClientIDs = generationAccepted, "proj", []string{"CID-1"}
+	job.ImageTemplate = imageGenerationTemplate{Prompt: "a fox", ModelID: "m", ModelName: "Model", AspectRatio: "16:9", Quality: ImageQuality1K}
+	job.Images = []GeneratedImageItem{{ID: "made", URL: "https://flow-content.google/image/made"}}
+	if err := s.saveGenerationJob(job); err != nil {
+		t.Fatal(err)
+	}
+
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	http.DefaultTransport = flowRoundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodGet || r.URL.String() != job.Images[0].URL {
+			t.Fatalf("expected only the accepted image download, got %s %s", r.Method, r.URL)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"image/png"}},
+			Body: io.NopCloser(strings.NewReader("test image bytes")), Request: r}, nil
+	})
+	res := s.ResumeImageGeneration(context.Background(), job.ID)
+	if !res.Success || len(res.Data) != 1 || res.Data[0].LocalURL == "" || res.Data[0].JobID != job.ID {
+		t.Fatalf("persisted result was not recovered: %+v", res)
+	}
+	if saved, err := s.loadGenerationJob(job.ID); err != nil || saved.Phase != generationComplete {
+		t.Fatalf("accepted job did not complete: %s %v", saved.Phase, err)
+	}
+}
+
 func TestImageResumeNeverCallsAListedJobLost(t *testing.T) {
 	accounts := testAccountService(t)
 	acc := seedFlowAccount(t, accounts, "first@example.invalid", true)

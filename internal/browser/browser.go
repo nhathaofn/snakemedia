@@ -121,12 +121,15 @@ func StartBrowser(ctx context.Context, opts LaunchOptions, policy config.Account
 	ticker := time.NewTicker(time.Duration(policy.PollIntervalMS) * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if b.Port == 0 {
-			if data, err := os.ReadFile(activeFile); err == nil {
-				parts := strings.Fields(string(data))
-				if len(parts) == 2 {
-					port, e := strconv.Atoi(parts[0])
-					if e == nil && port >= config.MinPort && port <= config.MaxPort {
+		// Always read DevToolsActivePort written by Chrome for this profile so
+		// we verify the WebSocket endpoint belongs to our launched profile
+		// instead of blindly attaching to another process on a raced port.
+		if data, err := os.ReadFile(activeFile); err == nil {
+			parts := strings.Fields(string(data))
+			if len(parts) == 2 {
+				port, e := strconv.Atoi(parts[0])
+				if e == nil && port >= config.MinPort && port <= config.MaxPort {
+					if b.Port == 0 || port == b.Port {
 						b.Port = port
 						b.endpoint = fmt.Sprintf("ws://127.0.0.1:%d%s", port, parts[1])
 					}

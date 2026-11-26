@@ -182,6 +182,16 @@ func (p *Provider) recordFailure(jobID, accountID string, err error) {
 		log("signed out", "requeued to another account", nil)
 		requeue(fmt.Sprintf("%s chưa đăng nhập Muse", accName), false)
 	case errors.Is(err, errTabCapReached):
+		if mustStayOnAccount {
+			at := wait(recheckWait)
+			log("thread limit reduced", "re-check later", nil)
+			p.updateJob(jobID, func(j *MuseJob) {
+				if j.Status == MuseJobProcessing {
+					j.Step = "Chờ mở luồng để kiểm tra tiếp lúc " + at
+				}
+			})
+			return
+		}
 		log("thread limit reduced", "requeued", nil)
 		requeue("Số luồng trên tài khoản vừa giảm; xếp hàng lại.", false)
 	case errors.As(err, &notSent):
@@ -251,6 +261,22 @@ func (p *Provider) recordFailure(jobID, accountID string, err error) {
 		})
 	case errors.As(err, &usage):
 		p.restAccount(accountID, cfg)
+		if stayInLongChat {
+			until := p.now().Add(time.Duration(cfg.UsagePauseMinutes) * time.Minute)
+			if acc, recErr := p.accounts.Record(accountID); recErr == nil {
+				if parsed := pausedUntil(museView(acc), cfg, p.now()); !parsed.IsZero() {
+					until = parsed
+				}
+			}
+			log("usage", "waits for account rest in existing chat", nil)
+			p.holdUntil(jobID, until)
+			p.updateJob(jobID, func(j *MuseJob) {
+				if j.Status == MuseJobProcessing {
+					j.Step, j.Error = "Chờ "+accName+" có lượt lại để làm tiếp", err.Error()
+				}
+			})
+			return
+		}
 		handOn("usage", fmt.Sprintf("%s hết lượt Muse, chờ tài khoản khác", accName))
 	case errors.As(err, &rejected) && p.accountPaused(accountID, cfg):
 		handOn("usage", fmt.Sprintf("%s hết lượt Muse, chờ tài khoản khác", accName))

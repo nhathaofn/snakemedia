@@ -120,8 +120,11 @@ func waitsForBoard(job MuseJob) bool {
 
 // releaseAfter gives the video jobs waiting for a storyboard that just
 // succeeded its images. Jobs already sent keep the frames they were sent with.
+// A storyboard that finished with missing or partial frames fails its waiting
+// video jobs consistently with releaseWaiting so they never attach broken
+// frames or stall indefinitely.
 func (p *Provider) releaseAfter(board MuseJob) {
-	if board.Status != MuseJobSucceeded || len(board.Files) == 0 {
+	if board.Status != MuseJobSucceeded {
 		return
 	}
 	waiting := func(j MuseJob) bool {
@@ -136,6 +139,20 @@ func (p *Provider) releaseAfter(board MuseJob) {
 	p.updateJobs(ids, func(v *MuseJob) bool {
 		if !waiting(*v) {
 			return false
+		}
+		if len(board.Files) == 0 {
+			v.Status = MuseJobFailed
+			v.Error = "Storyboard không có ảnh; tạo lại video để làm storyboard mới."
+			v.Step = ""
+			v.FinishedAt = p.now().UTC().Format(time.RFC3339)
+			return true
+		}
+		if v.BoardFrames > 0 && len(board.Files) < v.BoardFrames {
+			v.Status = MuseJobFailed
+			v.Error = fmt.Sprintf("Storyboard chỉ tạo được %d/%d ảnh; tạo lại video để làm storyboard mới.", len(board.Files), v.BoardFrames)
+			v.Step = ""
+			v.FinishedAt = p.now().UTC().Format(time.RFC3339)
+			return true
 		}
 		frames := slices.Clone(board.Files)
 		if len(frames) > v.BoardFrames && v.BoardFrames > 0 {

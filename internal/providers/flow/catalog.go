@@ -604,7 +604,11 @@ func (s *Provider) fetchModelsPayloadFromAccount(ctx context.Context, acc sessio
 	}
 	// The account's browser serves the call; hold it so it is not restarted
 	// (proxy change, idle close) while the catalogue is read.
-	defer s.accounts.AcquireProfile(acc.ProfileDir)()
+	release, err := s.accounts.AcquireProfile(ctx, acc.ProfileDir)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	return s.readModelsPayload(ctx, acc)
 }
 

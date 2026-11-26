@@ -73,7 +73,11 @@ type Provider struct {
 	sleep    func(context.Context, time.Duration) error
 	gap      func(config.MuseConfig) time.Duration
 
-	mu       sync.Mutex
+	mu sync.Mutex
+	// vaultMu coordinates Vault directory migration (Lock) against concurrent
+	// job submission snapshots reading from the Vault (RLock).
+	// Lock order: vaultMu -> assetMu.
+	vaultMu  sync.RWMutex
 	emit     func(events.Event, any)
 	ctx      context.Context
 	stop     context.CancelFunc
@@ -282,8 +286,13 @@ func (p *Provider) loop() {
 	defer p.wg.Done()
 	timer := time.NewTimer(pumpInterval)
 	defer timer.Stop()
+	var nextMaintenance time.Time
 	for {
 		p.safePump()
+		if now := p.now(); !now.Before(nextMaintenance) {
+			p.maintainIdleTabs()
+			nextMaintenance = now.Add(pumpInterval)
+		}
 		if !timer.Stop() {
 			select {
 			case <-timer.C:
@@ -350,7 +359,19 @@ func (p *Provider) trigger() {
 	}
 }
 
+func (p *Provider) maintainIdleTabs() {
+	defer logger.Recover("bảo trì tab Muse")
+	cfg := p.cfg.Get()
+	if p.ctx.Err() == nil && p.tabs != nil && p.tabs.hasExcess(cfg.Muse.ThreadsPerAccount) {
+		p.tabs.reconcileIdle(p.ctx, cfg.Muse.ThreadsPerAccount, cfg.Accounts)
+	}
+}
+
 func (p *Provider) pump() {
+	cfg := p.cfg.Get().Muse
+	if !cfg.UseAPI && !hasPendingWorkForRefresh(p.jobs.listActive()) {
+		return
+	}
 	records, err := p.accounts.Records(accounts.ProviderMuse)
 	if err != nil {
 		return
@@ -364,14 +385,6 @@ func (p *Provider) pump() {
 		}
 	}
 	now := p.now()
-	fullCfg := p.cfg.Get()
-	cfg := fullCfg.Muse
-	p.mu.Lock()
-	pumpCtx := p.ctx
-	p.mu.Unlock()
-	if pumpCtx != nil && pumpCtx.Err() == nil && p.tabs != nil && p.tabs.hasExcess(cfg.ThreadsPerAccount) {
-		p.tabs.reconcileIdle(pumpCtx, cfg.ThreadsPerAccount, fullCfg.Accounts)
-	}
 	apiCap := p.apiCapacityFor(cfg, now)
 	p.mu.Lock()
 	if p.ctx == nil || p.ctx.Err() != nil {

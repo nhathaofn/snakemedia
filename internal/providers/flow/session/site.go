@@ -90,11 +90,12 @@ func (s *Site) Inspect(ctx context.Context, b *browser.Browser, rec accounts.Rec
 	return accounts.Inspection{SignedIn: true, Identity: details.Email, Usage: usage(data), Data: data}, nil
 }
 
-// keepRPCs keeps the discovered RPC IDs when an identity read of the same
-// build did not discover them again.
+// keepRPCs merges previously discovered RPC IDs for the same build so an
+// account check (which only inspects home/credits bundles) never wipes studio
+// RPCs discovered from project pages.
 func keepRPCs(fresh, stored chrome.Credentials) chrome.Credentials {
-	if fresh.RPCs == (chrome.RPCRegistry{}) && fresh.BuildLabel == stored.BuildLabel {
-		fresh.RPCs = stored.RPCs
+	if fresh.BuildLabel == stored.BuildLabel {
+		fresh.RPCs = fresh.RPCs.Merge(stored.RPCs)
 	}
 	return fresh
 }

@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { create } from 'zustand';
+import { collectByIdOnNextFrame } from '../../../hooks';
 import { api, unwrap, unwrapList } from '../../../services';
 import { shownForRun, usePreviousRunStore } from '../../../stores';
 import type { MuseJob, MuseOptions } from '../../../types';
@@ -49,8 +50,14 @@ export const useMuseStore = create<MuseState>((set, get) => ({
   },
   loadJobs: () => {
     jobsReload ??= (async () => {
+      // Flush events already queued before the RPC so pre-snapshot updates cannot
+      // land in touched or roll back the fresher snapshot on the next frame.
+      queueMuseEvent.flush();
+      touched.clear();
       try {
         const snapshot = unwrapList(await api.listMuseJobs());
+        // Flush any events that arrived during listMuseJobs into touched before merging.
+        queueMuseEvent.flush();
         set({ jobs: mergeSnapshot(snapshot, touched), loaded: true, loadError: null });
       } catch (cause) {
         set({ loaded: true, loadError: errorText(cause) });
@@ -76,16 +83,19 @@ export const useMuseStore = create<MuseState>((set, get) => ({
   setJob: (job) => {
     // Events can carry no job (bulk removals use MuseJobsRemoved); ignore them.
     if (!job?.id) return;
+    queueMuseEvent.clear(job.id);
     if (jobsReload) touched.set(job.id, job);
     set((state) => ({ jobs: upsertJob(state.jobs, job) }));
   },
   dropJob: (id) => {
+    queueMuseEvent.clear(id);
     if (jobsReload) touched.set(id, null);
     set({ jobs: get().jobs.filter((job) => job.id !== id) });
   },
   dropJobs: (ids) => {
     if (!ids?.length) return;
     const gone = new Set(ids);
+    gone.forEach((id) => queueMuseEvent.clear(id));
     if (jobsReload) gone.forEach((id) => touched.set(id, null));
     set({ jobs: get().jobs.filter((job) => !gone.has(job.id)) });
   },
@@ -94,6 +104,14 @@ export const useMuseStore = create<MuseState>((set, get) => ({
     set((state) => ({ jobs: mergeSnapshot(state.jobs, changes) }));
   },
 }));
+
+/**
+ * Coalesces backend Muse job events to at most one store update per animation
+ * frame, synchronized with direct RPC mutations and snapshot reloads.
+ */
+export const queueMuseEvent = collectByIdOnNextFrame<MuseJob | null>((changes) =>
+  useMuseStore.getState().applyEvents(changes),
+);
 
 /**
  * The jobs the Muse screens list: of the run before this one, only each

@@ -63,7 +63,7 @@ func (fc *fakeChromeTabs) pool() *tabPool {
 		fc.targets = append(fc.targets, t)
 		return t, nil
 	}
-	tp.navigate = func(_ context.Context, t browser.Target, _ int, site browser.Site) error {
+	tp.navigate = func(_ context.Context, t browser.Target, _ int, site browser.Site, _ config.AccountConfig) error {
 		fc.mu.Lock()
 		defer fc.mu.Unlock()
 		if fc.failNavOnID == t.ID {
@@ -76,6 +76,7 @@ func (fc *fakeChromeTabs) pool() *tabPool {
 		}
 		return nil
 	}
+	tp.waitReady = nil
 	tp.closeTab = func(_ context.Context, _ int, _ config.AccountConfig, id string) error {
 		fc.mu.Lock()
 		defer fc.mu.Unlock()
@@ -261,9 +262,9 @@ func TestTabPoolDirtyReleaseAndPeriodicHeapReload(t *testing.T) {
 	tp.navLock = func(string, string) *sync.RWMutex { return navMu }
 	navs := 0
 	origNav := tp.navigate
-	tp.navigate = func(ctx context.Context, target browser.Target, port int, site browser.Site) error {
+	tp.navigate = func(ctx context.Context, target browser.Target, port int, site browser.Site, policy config.AccountConfig) error {
 		navs++
-		return origNav(ctx, target, port, site)
+		return origNav(ctx, target, port, site, policy)
 	}
 	policy := config.DefaultAccountConfig()
 	ctx := context.Background()

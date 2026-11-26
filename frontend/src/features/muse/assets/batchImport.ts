@@ -46,6 +46,8 @@ export interface BatchPreviewRow {
   index: number;
   image: MuseFolderImage;
   project: string;
+  /** Raw controlled-input draft so typing underscores/spaces mid-word is not stripped live. */
+  projectInput: string;
   type: MuseAssetType;
   tag: string;
   resolvedTag: string;
@@ -53,8 +55,11 @@ export interface BatchPreviewRow {
   role: MuseRefRole;
   lock: string;
   angle: string;
+  angleInput: string;
   variant: string;
+  variantInput: string;
   state: string;
+  stateInput: string;
   version: number;
   primary: boolean;
   rejected: boolean;
@@ -284,9 +289,10 @@ export function buildBatchRows({
     const parsedName = image.parsed;
     const fallbackTag = sanitizeTag(fileStem(image.fileName), `tu-lieu-${index + 1}`);
 
-    const project = normalizeProjectName(
-      ov?.project !== undefined ? ov.project : (parsedName?.project ?? normDefaultProject),
-    );
+    const rawProject =
+      ov?.project !== undefined ? ov.project : (parsedName?.project ?? normDefaultProject);
+    const project = normalizeProjectName(rawProject);
+    const projectInput = ov?.project !== undefined ? ov.project : project;
     const rawTag =
       ov?.tag !== undefined
         ? ov.tag
@@ -309,10 +315,13 @@ export function buildBatchRows({
           : defaultTypeForRole(role);
     const lock = ov?.lock !== undefined ? ov.lock : (locks[index] ?? '');
     const angle = cleanToken(ov?.angle !== undefined ? ov.angle : (parsedName?.angle ?? ''));
+    const angleInput = ov?.angle !== undefined ? ov.angle : angle;
     const variant = cleanToken(
       ov?.variant !== undefined ? ov.variant : (parsedName?.variant ?? ''),
     );
+    const variantInput = ov?.variant !== undefined ? ov.variant : variant;
     const state = cleanToken(ov?.state !== undefined ? ov.state : (parsedName?.state ?? ''));
+    const stateInput = ov?.state !== undefined ? ov.state : state;
     const version = parsedName?.version ?? 1;
     const rejected = ov?.rejected !== undefined ? ov.rejected : Boolean(parsedName?.rejected);
     const primary = !rejected && (angle === 'front' || !angle);
@@ -329,25 +338,34 @@ export function buildBatchRows({
     });
     const excluded = ov?.excluded ?? Boolean(image.error);
 
+    const baseRow = {
+      index,
+      image,
+      project,
+      projectInput,
+      type,
+      tag,
+      resolvedTag: tag,
+      name,
+      role,
+      lock,
+      angle,
+      angleInput,
+      variant,
+      variantInput,
+      state,
+      stateInput,
+      version,
+      primary,
+      rejected,
+      canonicalName,
+      hint: parsedName?.hint,
+      excluded: false,
+    };
+
     if (excluded) {
       return {
-        index,
-        image,
-        project,
-        type,
-        tag,
-        resolvedTag: tag,
-        name,
-        role,
-        lock,
-        angle,
-        variant,
-        state,
-        version,
-        primary,
-        rejected,
-        canonicalName,
-        hint: parsedName?.hint,
+        ...baseRow,
         excluded: true,
         status: image.error ? 'error' : 'excluded',
         note: image.error || 'Đã bỏ chọn',
@@ -356,24 +374,7 @@ export function buildBatchRows({
 
     if (image.error) {
       return {
-        index,
-        image,
-        project,
-        type,
-        tag,
-        resolvedTag: tag,
-        name,
-        role,
-        lock,
-        angle,
-        variant,
-        state,
-        version,
-        primary,
-        rejected,
-        canonicalName,
-        hint: parsedName?.hint,
-        excluded: false,
+        ...baseRow,
         status: 'error',
         note: image.error,
       };
@@ -381,24 +382,7 @@ export function buildBatchRows({
 
     if (ov?.role === undefined && parsedRole?.error) {
       return {
-        index,
-        image,
-        project,
-        type,
-        tag,
-        resolvedTag: tag,
-        name,
-        role,
-        lock,
-        angle,
-        variant,
-        state,
-        version,
-        primary,
-        rejected,
-        canonicalName,
-        hint: parsedName?.hint,
-        excluded: false,
+        ...baseRow,
         status: 'error',
         note: parsedRole.error,
       };
@@ -406,24 +390,7 @@ export function buildBatchRows({
 
     if (!isValidTag(tag)) {
       return {
-        index,
-        image,
-        project,
-        type,
-        tag,
-        resolvedTag: tag,
-        name,
-        role,
-        lock,
-        angle,
-        variant,
-        state,
-        version,
-        primary,
-        rejected,
-        canonicalName,
-        hint: parsedName?.hint,
-        excluded: false,
+        ...baseRow,
         status: 'error',
         note: 'Tag chỉ gồm chữ, số, +, - và _ (tối đa 40 ký tự)',
       };
@@ -435,24 +402,7 @@ export function buildBatchRows({
 
     if (mergeByAlias && inBatch) {
       return {
-        index,
-        image,
-        project,
-        type,
-        tag,
-        resolvedTag: tag,
-        name,
-        role,
-        lock,
-        angle,
-        variant,
-        state,
-        version,
-        primary,
-        rejected,
-        canonicalName,
-        hint: parsedName?.hint,
-        excluded: false,
+        ...baseRow,
         status: 'ready',
         note: 'Gộp thêm góc vào @' + tag,
       };
@@ -461,24 +411,7 @@ export function buildBatchRows({
     if (mergeByAlias && inExisting) {
       batchSeen.add(scopeKey);
       return {
-        index,
-        image,
-        project,
-        type,
-        tag,
-        resolvedTag: tag,
-        name,
-        role,
-        lock,
-        angle,
-        variant,
-        state,
-        version,
-        primary,
-        rejected,
-        canonicalName,
-        hint: parsedName?.hint,
-        excluded: false,
+        ...baseRow,
         status: 'overwrite',
         note: 'Thêm góc vào tư liệu đã có',
       };
@@ -488,48 +421,14 @@ export function buildBatchRows({
       taken.add(scopeKey);
       batchSeen.add(scopeKey);
       return {
-        index,
-        image,
-        project,
-        type,
-        tag,
-        resolvedTag: tag,
-        name,
-        role,
-        lock,
-        angle,
-        variant,
-        state,
-        version,
-        primary,
-        rejected,
-        canonicalName,
-        hint: parsedName?.hint,
-        excluded: false,
+        ...baseRow,
         status: 'ready',
       };
     }
 
     if (conflict === MuseAssetBatchConflict.Skip) {
       return {
-        index,
-        image,
-        project,
-        type,
-        tag,
-        resolvedTag: tag,
-        name,
-        role,
-        lock,
-        angle,
-        variant,
-        state,
-        version,
-        primary,
-        rejected,
-        canonicalName,
-        hint: parsedName?.hint,
-        excluded: false,
+        ...baseRow,
         status: 'skip',
         note: inExisting ? 'Trùng tag đã có (bỏ qua)' : 'Trùng tag trong danh sách (bỏ qua)',
       };
@@ -539,24 +438,7 @@ export function buildBatchRows({
       taken.add(scopeKey);
       batchSeen.add(scopeKey);
       return {
-        index,
-        image,
-        project,
-        type,
-        tag,
-        resolvedTag: tag,
-        name,
-        role,
-        lock,
-        angle,
-        variant,
-        state,
-        version,
-        primary,
-        rejected,
-        canonicalName,
-        hint: parsedName?.hint,
-        excluded: false,
+        ...baseRow,
         status: 'overwrite',
         note: inExisting ? 'Ghi đè tư liệu cũ' : 'Ghi đè dòng trùng trước đó',
       };
@@ -567,21 +449,8 @@ export function buildBatchRows({
     taken.add(resolvedScope);
     batchSeen.add(resolvedScope);
     return {
-      index,
-      image,
-      project,
-      type,
-      tag,
+      ...baseRow,
       resolvedTag,
-      name,
-      role,
-      lock,
-      angle,
-      variant,
-      state,
-      version,
-      primary,
-      rejected,
       canonicalName: buildCanonicalPreviewName({
         project,
         type,
@@ -593,8 +462,6 @@ export function buildBatchRows({
         rejected,
         ext: fileExt(image.fileName),
       }),
-      hint: parsedName?.hint,
-      excluded: false,
       status: 'rename',
       note: `Đổi thành @${resolvedTag}`,
     };

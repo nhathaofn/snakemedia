@@ -1,9 +1,9 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DragEvent, ReactNode } from 'react';
 import '../../../components/batch/BatchForm.css';
 import '../../../components/studio/Studio.css';
 import './MuseAssetsPage.css';
-import { FileUp, FolderOpen, Image as ImageIcon, Images, X } from 'lucide-react';
+import { FileUp, FolderOpen, Images, X } from 'lucide-react';
 import { Button, Icon, Modal } from '../../../components/ui';
 import { api, thumbUrl, unwrap } from '../../../services';
 import { useAppStore } from '../../../stores';
@@ -14,13 +14,11 @@ import {
   MuseFolderImage,
   MuseRefRole,
 } from '../../../types';
-import type { MuseAsset, MuseAssetType } from '../../../types';
+import type { MuseAsset } from '../../../types';
 import {
   ANGLE_SUGGESTIONS,
-  ASSET_TYPES,
   STATE_SUGGESTIONS,
   VARIANT_SUGGESTIONS,
-  defaultTypeForRole,
   roleOrder,
   roles,
 } from './assetRoles';
@@ -33,6 +31,7 @@ import {
   type BatchRowOverride,
   type LockSplitMode,
 } from './batchImport';
+import { BatchImportTable } from './BatchImportTable';
 import type { VaultImportSource } from './SaveToVaultDialog';
 
 const CONFLICT_OPTIONS: readonly { value: MuseAssetBatchConflict; label: string }[] = [
@@ -46,15 +45,6 @@ const LOCK_MODE_OPTIONS: readonly { value: LockSplitMode; label: string }[] = [
   { value: 'positional', label: 'Giữ dòng trống' },
   { value: 'block', label: 'Theo đoạn' },
 ];
-
-const STATUS_LABELS: Record<BatchPreviewRow['status'], string> = {
-  ready: 'Mới',
-  rename: 'Đổi tên',
-  overwrite: 'Cập nhật',
-  skip: 'Bỏ qua',
-  excluded: 'Đã bỏ',
-  error: 'Lỗi',
-};
 
 function summaryMessage(added: number, updated: number, skipped: number): string {
   const parts: string[] = [];
@@ -97,6 +87,18 @@ export function BatchImportAssetsDialog({
 }) {
   const addToast = useAppStore((s) => s.addToast);
   const [picking, setPicking] = useState(false);
+  const [page, setPage] = useState(0);
+  const scanRequest = useRef<string | null>(null);
+  useEffect(
+    () => () => {
+      const id = scanRequest.current;
+      if (id) {
+        scanRequest.current = null;
+        void api.cancelGeneration(id);
+      }
+    },
+    [],
+  );
   const [importing, setImporting] = useState(false);
   const [recursive, setRecursive] = useState(true);
   const [folderDir, setFolderDir] = useState('');
@@ -119,7 +121,6 @@ export function BatchImportAssetsDialog({
   const [bulkAngle, setBulkAngle] = useState('');
 
   const lastClickedRow = useRef<number | null>(null);
-  const shiftHeld = useRef(false);
 
   const aliases = useMemo(() => parseAliasLines(aliasText), [aliasText]);
   const parsedRoles = useMemo(() => parseRoleLines(roleText), [roleText]);
@@ -189,41 +190,51 @@ export function BatchImportAssetsDialog({
     });
   };
 
-  const pickFolder = async () => {
-    if (picking || importing) return;
+  const cancelScan = () => {
+    const id = scanRequest.current;
+    if (!id) return;
+    scanRequest.current = null;
+    setPicking(false);
+    void api.cancelGeneration(id);
+  };
+
+  const pickImages = async (fromFolder: boolean) => {
+    if (scanRequest.current || importing) return;
+    const id = crypto.randomUUID();
+    scanRequest.current = id;
     setPicking(true);
     try {
-      const scan = unwrap(await api.pickMuseAssetFolder(recursive));
-      if (scan.canceled) return;
+      const scan = unwrap(
+        await (fromFolder ? api.pickMuseAssetFolder(recursive, id) : api.pickMuseAssetFiles(id)),
+      );
+      if (scanRequest.current !== id || scan.canceled) return;
       setFolderDir(scan.dir);
       setImages(scan.images ?? []);
       setOverrides(new Map());
+      setPage(0);
       lastClickedRow.current = null;
       if ((scan.images ?? []).length === 0) {
-        addToast({ type: 'warning', message: 'Thư mục này không có ảnh nào Muse nhận.' });
+        addToast({ type: 'warning', message: 'Không tìm thấy ảnh nào Muse nhận.' });
       }
     } catch (cause) {
-      addToast({ type: 'error', message: cause instanceof Error ? cause.message : String(cause) });
+      if (scanRequest.current === id) {
+        addToast({
+          type: 'error',
+          message: cause instanceof Error ? cause.message : String(cause),
+        });
+      }
     } finally {
-      setPicking(false);
+      if (scanRequest.current === id) {
+        scanRequest.current = null;
+        setPicking(false);
+      }
     }
   };
 
-  const pickFiles = async () => {
-    if (picking || importing) return;
-    setPicking(true);
-    try {
-      const scan = unwrap(await api.pickMuseAssetFiles());
-      if (scan.canceled) return;
-      setFolderDir(scan.dir ? `${scan.dir} (${scan.images?.length ?? 0} file chọn lẻ)` : '');
-      setImages(scan.images ?? []);
-      setOverrides(new Map());
-      lastClickedRow.current = null;
-    } catch (cause) {
-      addToast({ type: 'error', message: cause instanceof Error ? cause.message : String(cause) });
-    } finally {
-      setPicking(false);
-    }
+  const closeDialog = () => {
+    if (importing) return;
+    cancelScan();
+    onClose();
   };
 
   const toggleRow = (index: number, shiftKey: boolean) => {
@@ -303,7 +314,7 @@ export function BatchImportAssetsDialog({
       title="Nhập hàng loạt vào Kho Tư liệu"
       subtitle="Chọn thư mục hoặc nhiều ảnh; app tự nhận quy ước tên (hoặc dán .txt / gán nhanh) rồi tự chuẩn hoá tên khi lưu vào Kho"
       className="muse-batch-dialog"
-      onClose={() => !importing && onClose()}
+      onClose={closeDialog}
       footer={
         <div className="muse-batch-footer">
           <span className="muse-batch-summary">
@@ -314,12 +325,12 @@ export function BatchImportAssetsDialog({
                 }${errorCount > 0 ? ` · ${errorCount} lỗi` : ''}`}
           </span>
           <div className="muse-dialog-actions">
-            <Button onClick={onClose} disabled={importing}>
+            <Button onClick={closeDialog} disabled={importing}>
               Huỷ
             </Button>
             <Button
               variant="primary"
-              disabled={importing || actionableRows.length === 0}
+              disabled={picking || importing || actionableRows.length === 0}
               onClick={() => void submit()}
             >
               {importing ? 'Đang nhập…' : `Nhập ${actionableRows.length} ảnh vào Kho`}
@@ -340,7 +351,7 @@ export function BatchImportAssetsDialog({
                 size="sm"
                 variant="secondary"
                 disabled={picking || importing}
-                onClick={() => void pickFolder()}
+                onClick={() => void pickImages(true)}
               >
                 <Icon icon={FolderOpen} size="sm" />
                 <span>{picking ? 'Đang quét…' : 'Chọn thư mục…'}</span>
@@ -350,7 +361,7 @@ export function BatchImportAssetsDialog({
                 size="sm"
                 variant="secondary"
                 disabled={picking || importing}
-                onClick={() => void pickFiles()}
+                onClick={() => void pickImages(false)}
               >
                 <Icon icon={Images} size="sm" />
                 <span>Chọn nhiều ảnh…</span>
@@ -542,199 +553,22 @@ export function BatchImportAssetsDialog({
           </div>
         )}
 
-        {rows.length > 0 && (
-          <div className="muse-batch-table-wrap">
-            <table className="muse-batch-table">
-              <thead>
-                <tr>
-                  <th className="col-check">
-                    <input
-                      type="checkbox"
-                      aria-label="Chọn tất cả ảnh"
-                      checked={allSelectableIncluded}
-                      disabled={selectableRows.length === 0}
-                      onChange={toggleAllRows}
-                    />
-                  </th>
-                  <th className="col-num">#</th>
-                  <th className="col-img">Ảnh nguồn</th>
-                  <th className="col-proj">Dự án / Loại</th>
-                  <th className="col-tag">@Tag</th>
-                  <th className="col-meta">Góc / Biến thể / Trạng thái</th>
-                  <th className="col-role">Vai trò / Khoá</th>
-                  <th className="col-status">Tên trong Kho</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr
-                    key={row.image.path || row.image.localUrl || row.index}
-                    className={`muse-batch-row is-${row.status}${row.excluded ? ' is-excluded' : ''}`}
-                  >
-                    <td className="col-check">
-                      <input
-                        type="checkbox"
-                        aria-label={`Chọn ${row.image.fileName}`}
-                        checked={!row.excluded}
-                        disabled={Boolean(row.image.error)}
-                        onMouseDown={(e) => {
-                          shiftHeld.current = e.shiftKey;
-                        }}
-                        onKeyDown={(e) => {
-                          shiftHeld.current = e.shiftKey;
-                        }}
-                        onChange={() => {
-                          const shift = shiftHeld.current;
-                          shiftHeld.current = false;
-                          toggleRow(row.index, shift);
-                        }}
-                      />
-                    </td>
-                    <td className="col-num">{row.index + 1}</td>
-                    <td className="col-img">
-                      <div
-                        className="muse-batch-file"
-                        title={row.image.relPath || row.image.fileName}
-                      >
-                        {row.image.previewUrl ? (
-                          <img src={row.image.previewUrl} alt="" decoding="async" />
-                        ) : (
-                          <span className="muse-batch-thumb-fallback">
-                            <Icon icon={ImageIcon} size="sm" />
-                          </span>
-                        )}
-                        <div className="muse-batch-file-meta">
-                          <span className="muse-batch-filename">{row.image.fileName}</span>
-                          {row.hint && <span className="muse-batch-hint">{row.hint}</span>}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="col-proj">
-                      <div className="muse-batch-stack">
-                        <input
-                          className="batch-input muse-batch-cell-input"
-                          value={row.project}
-                          placeholder="_chung"
-                          aria-label={`Dự án dòng ${row.index + 1}`}
-                          onChange={(e) => patchOverride(row.index, { project: e.target.value })}
-                        />
-                        <select
-                          className="batch-input batch-select muse-batch-cell-input"
-                          value={row.type}
-                          aria-label={`Loại dòng ${row.index + 1}`}
-                          onChange={(e) =>
-                            patchOverride(row.index, { type: e.target.value as MuseAssetType })
-                          }
-                        >
-                          {ASSET_TYPES.map((t) => (
-                            <option key={t.value} value={t.value}>
-                              {t.short}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </td>
-                    <td className="col-tag">
-                      <div className="muse-batch-stack">
-                        <div className="muse-tag-input">
-                          <span>@</span>
-                          <input
-                            className="batch-input muse-batch-cell-input"
-                            value={row.tag}
-                            aria-label={`Tag dòng ${row.index + 1}`}
-                            onChange={(e) => patchOverride(row.index, { tag: e.target.value })}
-                          />
-                        </div>
-                        <input
-                          className="batch-input muse-batch-cell-input"
-                          value={row.name}
-                          placeholder="Tên (tuỳ chọn)"
-                          aria-label={`Tên dòng ${row.index + 1}`}
-                          onChange={(e) => patchOverride(row.index, { name: e.target.value })}
-                        />
-                      </div>
-                    </td>
-                    <td className="col-meta">
-                      <div className="muse-batch-meta-3">
-                        <input
-                          className="batch-input muse-batch-cell-input"
-                          list="batch-angle-suggest"
-                          value={row.angle}
-                          placeholder="Góc"
-                          aria-label={`Góc dòng ${row.index + 1}`}
-                          onChange={(e) => patchOverride(row.index, { angle: e.target.value })}
-                        />
-                        <input
-                          className="batch-input muse-batch-cell-input"
-                          list="batch-variant-suggest"
-                          value={row.variant}
-                          placeholder="Biến thể"
-                          aria-label={`Biến thể dòng ${row.index + 1}`}
-                          onChange={(e) => patchOverride(row.index, { variant: e.target.value })}
-                        />
-                        <input
-                          className="batch-input muse-batch-cell-input"
-                          list="batch-state-suggest"
-                          value={row.state}
-                          placeholder="Trạng thái"
-                          aria-label={`Trạng thái dòng ${row.index + 1}`}
-                          onChange={(e) => patchOverride(row.index, { state: e.target.value })}
-                        />
-                      </div>
-                    </td>
-                    <td className="col-role">
-                      <div className="muse-batch-stack">
-                        <select
-                          className="batch-input batch-select muse-batch-cell-input"
-                          value={row.role}
-                          aria-label={`Vai trò dòng ${row.index + 1}`}
-                          onChange={(e) => {
-                            const nextRole = e.target.value as MuseRefRole;
-                            patchOverride(row.index, {
-                              role: nextRole,
-                              type: defaultTypeForRole(nextRole),
-                            });
-                          }}
-                        >
-                          {roleOrder.map((r) => (
-                            <option key={r} value={r}>
-                              {roles[r].label}
-                            </option>
-                          ))}
-                        </select>
-                        <input
-                          className="batch-input muse-batch-cell-input"
-                          value={row.lock}
-                          placeholder="Khoá chi tiết..."
-                          aria-label={`Khoá dòng ${row.index + 1}`}
-                          onChange={(e) => patchOverride(row.index, { lock: e.target.value })}
-                        />
-                      </div>
-                    </td>
-                    <td className="col-status">
-                      <span
-                        className={`muse-batch-badge is-${row.status}`}
-                        title={row.note ?? STATUS_LABELS[row.status]}
-                      >
-                        {row.note && row.status === 'rename'
-                          ? `→ @${row.resolvedTag}`
-                          : STATUS_LABELS[row.status]}
-                      </span>
-                      <code className="muse-batch-note" title={row.canonicalName}>
-                        {row.canonicalName}
-                      </code>
-                      {row.note && row.status !== 'rename' && (
-                        <span className="muse-batch-note" title={row.note}>
-                          {row.note}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+        {picking && (
+          <Button size="sm" variant="secondary" onClick={cancelScan}>
+            Huỷ quét ảnh
+          </Button>
         )}
+
+        <BatchImportTable
+          rows={rows}
+          page={page}
+          setPage={setPage}
+          selectableCount={selectableRows.length}
+          allSelectableIncluded={allSelectableIncluded}
+          toggleRow={toggleRow}
+          toggleAllRows={toggleAllRows}
+          patchOverride={patchOverride}
+        />
       </div>
     </Modal>
   );

@@ -59,7 +59,8 @@ describe('Muse Phase P2 UI & A11y Fixes (F-1 .. F-5)', () => {
 
     const batchDialog = readSrc('./assets/BatchImportAssetsDialog.tsx');
     expect(batchDialog).toContain('!r.excluded');
-    expect(batchDialog).toContain('onClose={() => !importing && onClose()}');
+    expect(batchDialog).toContain('onClose={closeDialog}');
+    expect(batchDialog).toMatch(/const closeDialog = \(\) => \{\s*if \(importing\) return;/);
     expect(batchDialog).not.toContain('clearOverrideField');
   });
 
@@ -131,14 +132,19 @@ describe('Muse Phase P2 UI & A11y Fixes (F-1 .. F-5)', () => {
     const globalsCss = readSrc('../../styles/globals.css');
     expect(globalsCss).not.toContain('#App');
 
-    const museDir = new URL('./', import.meta.url);
-    const museFiles = fs
-      .readdirSync(museDir, { recursive: true })
+    const srcRoot = new URL('../../', import.meta.url);
+    const allSrcFiles = fs
+      .readdirSync(srcRoot, { recursive: true })
       .map((name) => name.replaceAll('\\', '/'))
       .filter((name) => /\.(ts|tsx)$/.test(name) && !/\.test\.(ts|tsx)$/.test(name));
-    for (const rel of museFiles) {
-      expect(readSrc(`./${rel}`)).not.toContain('window.confirm');
+    for (const rel of allSrcFiles) {
+      expect(readSrc(`../../${rel}`), `${rel} must not call window.confirm`).not.toContain(
+        'window.confirm(',
+      );
     }
-    expect(readSrc('../home/accounts/AccountsPage.tsx')).not.toContain('window.confirm');
+
+    const museSectionSrc = readSrc('./section.tsx');
+    expect(museSectionSrc).toContain('key={MuseJobKind.Image}');
+    expect(museSectionSrc).toContain('key={MuseJobKind.Video}');
   });
 });

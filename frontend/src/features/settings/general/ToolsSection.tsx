@@ -1,8 +1,10 @@
-import React, { useEffect } from 'react';
-import { Button } from '../../../components/ui';
-import { SettingRow, SettingsSection, TextSetting } from '../../../components/settings';
+import React, { useEffect, useState } from 'react';
+import { RotateCcw } from 'lucide-react';
+import { Button, Icon } from '../../../components/ui';
+import { SettingRow, SettingsSection } from '../../../components/settings';
 import { ToolProgressBar, progressText, toolStatus } from '../../../components/tools';
 import { useConfigSection } from '../../../hooks';
+import { api, unwrap } from '../../../services';
 import { useAppStore, useToolsStore } from '../../../stores';
 import type { Tool } from '../../../types';
 import './ToolsSection.css';
@@ -15,7 +17,9 @@ import './ToolsSection.css';
 export const ToolsSection: React.FC = () => {
   const tools = useToolsStore((s) => s.tools);
   const load = useToolsStore((s) => s.load);
+  const addToast = useAppStore((s) => s.addToast);
   const { section, patch, saving } = useConfigSection('tools');
+  const [pickingProgram, setPickingProgram] = useState<string | null>(null);
   const paths = section?.paths;
 
   // A path changed here changes where programs are found.
@@ -32,21 +36,62 @@ export const ToolsSection: React.FC = () => {
     patch({ paths: next });
   };
 
+  const handlePickPath = async (program: string) => {
+    setPickingProgram(program);
+    try {
+      const picked = unwrap(await api.pickToolPath(program)).trim();
+      if (!picked) return;
+      setPath(program, picked);
+    } catch (cause) {
+      addToast({ type: 'error', message: cause instanceof Error ? cause.message : String(cause) });
+    } finally {
+      setPickingProgram(null);
+    }
+  };
+
   return (
     <SettingsSection
       title="Công cụ"
       advanced={tools.flatMap((tool) =>
-        tool.programs.map((program) => (
-          <SettingRow key={program.name} label={program.name}>
-            <TextSetting
-              aria-label={`Đường dẫn ${program.name}`}
-              value={paths?.[program.name] ?? ''}
-              placeholder="Tự tìm"
-              disabled={saving}
-              onCommit={(path) => setPath(program.name, path)}
-            />
-          </SettingRow>
-        )),
+        tool.programs.map((program) => {
+          const currentPath = paths?.[program.name] ?? '';
+          const busy = saving || pickingProgram === program.name;
+          return (
+            <SettingRow key={program.name} label={program.name}>
+              <div className="tools-path-control">
+                <input
+                  type="text"
+                  readOnly
+                  className="settings-input tools-path-input"
+                  aria-label={`Đường dẫn ${program.name}`}
+                  value={currentPath}
+                  placeholder="Tự tìm"
+                  title={currentPath}
+                />
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={() => void handlePickPath(program.name)}
+                >
+                  Chọn…
+                </Button>
+                {currentPath && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => setPath(program.name, '')}
+                    title="Dùng chế độ tự tìm mặc định"
+                  >
+                    <Icon icon={RotateCcw} size="sm" />
+                    Mặc định
+                  </Button>
+                )}
+              </div>
+            </SettingRow>
+          );
+        }),
       )}
     >
       {tools.map((tool) => (

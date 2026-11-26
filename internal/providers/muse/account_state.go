@@ -97,32 +97,39 @@ func (s *accountSlots) dropAccount(accountID string) {
 	s.mu.Unlock()
 }
 
+// maxConcurrentStateRefreshes caps how many background account state refreshes
+// can open headless Chrome instances concurrently, preventing launch storms
+// when many degraded accounts exist at batch start.
+const maxConcurrentStateRefreshes = 2
+
 // accountRuntime holds per-account transient state guarded by Provider.mu
 // (verification cache, refresh coordination, backoff, quota cooldown, and
 // browser recycle markers).
 type accountRuntime struct {
-	verifiedPorts    map[string]verifiedSession
-	sessionEpoch     map[string]int64
-	lastRefresh      map[string]refreshOutcome
-	stateRefreshSeen map[string]string
-	stateRefreshBusy map[string]bool
-	backoff          map[string]time.Time
-	quotaAttempt     map[string]time.Time
-	quotaPending     map[string]*quotaRefresh
-	recycleBrowser   map[string]bool
+	verifiedPorts     map[string]verifiedSession
+	sessionEpoch      map[string]int64
+	lastRefresh       map[string]refreshOutcome
+	stateRefreshSeen  map[string]string
+	stateRefreshBusy  map[string]bool
+	stateRefreshSlots chan struct{}
+	backoff           map[string]time.Time
+	quotaAttempt      map[string]time.Time
+	quotaPending      map[string]*quotaRefresh
+	recycleBrowser    map[string]bool
 }
 
 func newAccountRuntime() accountRuntime {
 	return accountRuntime{
-		verifiedPorts:    make(map[string]verifiedSession),
-		sessionEpoch:     make(map[string]int64),
-		lastRefresh:      make(map[string]refreshOutcome),
-		stateRefreshSeen: make(map[string]string),
-		stateRefreshBusy: make(map[string]bool),
-		backoff:          make(map[string]time.Time),
-		quotaAttempt:     make(map[string]time.Time),
-		quotaPending:     make(map[string]*quotaRefresh),
-		recycleBrowser:   make(map[string]bool),
+		verifiedPorts:     make(map[string]verifiedSession),
+		sessionEpoch:      make(map[string]int64),
+		lastRefresh:       make(map[string]refreshOutcome),
+		stateRefreshSeen:  make(map[string]string),
+		stateRefreshBusy:  make(map[string]bool),
+		stateRefreshSlots: make(chan struct{}, maxConcurrentStateRefreshes),
+		backoff:           make(map[string]time.Time),
+		quotaAttempt:      make(map[string]time.Time),
+		quotaPending:      make(map[string]*quotaRefresh),
+		recycleBrowser:    make(map[string]bool),
 	}
 }
 

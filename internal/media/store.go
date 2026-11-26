@@ -81,8 +81,9 @@ type Store struct {
 	formats map[string]func() string
 	// vaultDir resolves the active Muse Asset Vault directory; vaultThumbDir keeps
 	// thumbnails in AppData instead of polluting the user-visible vault folder.
-	vaultDir      func() string
-	vaultThumbDir string
+	vaultDir       func() string
+	vaultThumbDir  string
+	importPreviews importPreviewSet
 }
 
 // NewStore keeps media in dir, created on first use.
@@ -307,6 +308,10 @@ func (s *Store) ImportVideo(accepted []string, chooseFile func() (string, error)
 func (s *Store) Middleware(next http.Handler) http.Handler {
 	files := http.StripPrefix(Route, http.FileServer(http.Dir(s.dir)))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, importPreviewRoute) {
+			s.serveImportPreview(w, r)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, VaultRoute) {
 			s.serveVault(w, r)
 			return

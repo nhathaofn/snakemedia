@@ -277,7 +277,7 @@ func TestScanAssetFolderSortsNaturallyAndFiltersNonImages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res := p.ScanAssetFolder(dir, false)
+	res := p.ScanAssetFolder(context.Background(), dir, false)
 	if !res.Success {
 		t.Fatalf("scan failed: %s", res.Error)
 	}
@@ -289,11 +289,28 @@ func TestScanAssetFolderSortsNaturallyAndFiltersNonImages(t *testing.T) {
 	if !slices.Equal(names, want) {
 		t.Fatalf("order = %v, want %v", names, want)
 	}
-	if !strings.HasPrefix(res.Data.Images[0].PreviewURL, "data:image/jpeg;base64,") {
-		t.Fatalf("expected preview data URL, got %q", res.Data.Images[0].PreviewURL)
+	if !strings.HasPrefix(res.Data.Images[0].PreviewURL, "/import-preview/") {
+		t.Fatalf("expected lazy preview URL, got %q", res.Data.Images[0].PreviewURL)
 	}
 	if res.Data.Images[3].Error == "" || res.Data.Images[3].PreviewURL != "" {
 		t.Fatalf("oversized image should flag error and skip preview: %+v", res.Data.Images[3])
+	}
+}
+
+func TestAssetFolderScanHonorsCancellation(t *testing.T) {
+	p := testProvider(t, &fakePage{})
+	acc := addSignedIn(t, p, "A")
+	withCaps(p, acc, 4)
+	dir := t.TempDir()
+	writeTestPNG(t, filepath.Join(dir, "selected.png"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, recursive := range []bool{false, true} {
+		res := p.ScanAssetFolder(ctx, dir, recursive)
+		if !res.Success || !res.Data.Canceled || len(res.Data.Images) != 0 {
+			t.Fatalf("expected a cancelled scan: %+v", res)
+		}
 	}
 }
 

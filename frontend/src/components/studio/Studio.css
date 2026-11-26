@@ -37,10 +37,6 @@
   overflow: hidden;
 }
 
-.studio-workspace-panel[hidden] {
-  display: none;
-}
-
 .studio-mode-panel {
   flex: 1;
   display: flex;

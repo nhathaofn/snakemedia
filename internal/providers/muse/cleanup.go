@@ -105,7 +105,10 @@ func (p *Provider) CleanChats(ctx context.Context) models.Response[[]MuseCleanRe
 // reply. Deleting many chats can take Muse a while, so it waits as long as a
 // video.
 func (p *Provider) cleanAccount(ctx context.Context, rec accounts.Record, text string, minutes int) (string, error) {
-	release := p.accounts.Acquire(rec.ID)
+	release, err := p.accounts.AcquireWork(ctx, rec.ID)
+	if err != nil {
+		return "", err
+	}
 	defer release()
 	page, err := p.pageFor(ctx, rec)
 	if err != nil {

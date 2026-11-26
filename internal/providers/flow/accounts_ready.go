@@ -70,7 +70,11 @@ func (s *Provider) readySpecific(ctx context.Context, acc session.StoredAccount)
 // holdAndSync holds acc's profile and reads its session fresh from Chrome; on
 // failure both the profile and lease are let go.
 func (s *Provider) holdAndSync(ctx context.Context, acc session.StoredAccount, lease *accountLease) (session.StoredAccount, func(), error) {
-	releaseProfile := s.accounts.AcquireProfile(acc.ProfileDir)
+	releaseProfile, err := s.accounts.AcquireProfile(ctx, acc.ProfileDir)
+	if err != nil {
+		lease.release()
+		return session.StoredAccount{}, nil, err
+	}
 	synced, err := s.syncSession(ctx, acc)
 	if err != nil {
 		releaseProfile()

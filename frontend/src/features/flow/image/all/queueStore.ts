@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { create } from 'zustand';
+import { collectByIdOnNextFrame } from '../../../../hooks';
 import { api, unwrap } from '../../../../services';
 import { FlowImageTaskStatus } from '../../../../types';
 import type { FlowImageTask } from '../../../../types';
@@ -93,9 +94,11 @@ export const useImageQueueStore = create<QueueState>((set) => ({
   loadError: null,
   load: () => {
     reload ??= (async () => {
+      queueFlowImageEvent.flush();
       touched.clear();
       try {
         const state = unwrap(await api.getFlowImageTasks());
+        queueFlowImageEvent.flush();
         set({
           tasks: mergeTasks(state.tasks ?? [], touched),
           warning: state.warning ?? '',
@@ -117,6 +120,14 @@ export const useImageQueueStore = create<QueueState>((set) => ({
   },
   dismissWarning: () => set({ warning: '' }),
 }));
+
+/**
+ * Coalesces Flow image queue events to at most one store update per animation
+ * frame, synchronized with snapshot reloads.
+ */
+export const queueFlowImageEvent = collectByIdOnNextFrame<FlowImageTask | null>((changes) =>
+  useImageQueueStore.getState().applyEvents(changes),
+);
 
 /** A queue task's run: tasks of one batch share its folder. */
 const taskRunItem: RunItemOf<FlowImageTask> = {

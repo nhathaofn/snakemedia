@@ -1,3 +1,4 @@
+import { Activity } from 'react';
 import type { ReactNode } from 'react';
 import { create } from 'zustand';
 import './Studio.css';
@@ -48,9 +49,9 @@ export function StudioLayout<T extends string>({
       <section className="studio-content" aria-label={`${label} workspace`}>
         {renderWorkspace
           ? modes.map((item) => (
-              <div className="studio-workspace-panel" key={item.value} hidden={mode !== item.value}>
-                {renderWorkspace(item.value)}
-              </div>
+              <Activity key={item.value} mode={mode === item.value ? 'visible' : 'hidden'}>
+                <div className="studio-workspace-panel">{renderWorkspace(item.value)}</div>
+              </Activity>
             ))
           : workspace}
       </section>

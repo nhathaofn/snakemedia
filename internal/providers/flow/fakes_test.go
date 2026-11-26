@@ -78,7 +78,7 @@ func (f *fakeAccounts) GetConnectedStoredAccounts() ([]session.StoredAccount, er
 	return out, nil
 }
 
-func (f *fakeAccounts) AcquireProfile(profileDir string) func() {
+func (f *fakeAccounts) AcquireProfile(_ context.Context, profileDir string) (func(), error) {
 	f.mu.Lock()
 	f.inUse[profileDir]++
 	f.mu.Unlock()
@@ -91,7 +91,7 @@ func (f *fakeAccounts) AcquireProfile(profileDir string) func() {
 			}
 			f.mu.Unlock()
 		})
-	}
+	}, nil
 }
 
 func (f *fakeAccounts) EnsureAccountHeadlessBrowser(context.Context, session.StoredAccount) (*browser.Browser, error) {

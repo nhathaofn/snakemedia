@@ -1,9 +1,9 @@
 import { thumbUrl } from '../../../../services';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { BookmarkPlus, X } from 'lucide-react';
 import { QueueFilterBar, QueueTable } from '../../../../components/batch';
 import { PreviousRunToggle } from '../../../../components/feedback';
-import { Button, Icon, Modal } from '../../../../components/ui';
+import { Button, Icon, Modal, confirmAction } from '../../../../components/ui';
 import { SaveToVaultDialog, type VaultImportSource } from '../../../muse/assets/SaveToVaultDialog';
 import { api } from '../../../../services/api';
 import { useAppStore } from '../../../../stores';
@@ -22,12 +22,10 @@ import {
 } from './queueStore';
 import type { TaskFilter } from './queueStore';
 import { applyToTasks, overCapacity, referenceTargets } from './references';
-import { useImageQueueLive } from './useImageQueueLive';
 import './AllWorkspace.css';
 
 /** The image queue (Ảnh → Hàng loạt) as the backend runs it, with its results. */
 export function AllWorkspace() {
-  useImageQueueLive();
   const { tasks, offered } = useVisibleImageTasks();
   const warning = useImageQueueStore((s) => s.warning);
   const loadError = useImageQueueStore((s) => s.loadError);
@@ -40,6 +38,7 @@ export function AllWorkspace() {
   const [vaultSources, setVaultSources] = useState<VaultImportSource[] | null>(null);
   const [gallery, setGallery] = useState<{ task: FlowImageTask; number: number } | null>(null);
   const [bankOpen, setBankOpen] = useState(false);
+  const applyingReferences = useRef(false);
 
   // A task's number is its prompt's place in its batch, as in its file names;
   // tasks queued before batches were numbered use their place in the queue.
@@ -82,7 +81,7 @@ export function AllWorkspace() {
         removable: tasks.filter((task) => task.status !== FlowImageTaskStatus.Running),
         allSelected: notRunning.length > 0 && notRunning.every((task) => selected.has(task.id)),
         // References go to the selected tasks, or to every task that can take them.
-        targets: referenceTargets(selectedTasks.length > 0 ? selectedTasks : tasks),
+        targets: referenceTargets(selectedTasks.length > 0 ? selectedTasks : shown),
       };
     }, [shown, tasks, selected]);
 
@@ -134,28 +133,46 @@ export function AllWorkspace() {
 
   const applyReferences = async (refs: FlowImageTaskReference[], errors: string[] = []) => {
     if (refs.length > 0) {
-      const tooMany = overCapacity(targets, refs, models);
-      if (tooMany) {
+      if (applyingReferences.current) return false;
+      applyingReferences.current = true;
+      try {
+        const tooMany = overCapacity(targets, refs, models);
+        if (tooMany) {
+          report(
+            'Không thể thêm ảnh cho tất cả prompt',
+            `Model của tác vụ ${numbers.get(tooMany.id)} không đủ chỗ cho ảnh tham chiếu đã chọn.`,
+          );
+          return false;
+        }
+        if (
+          targets.length > 0 &&
+          !(await confirmAction({
+            title: 'Áp dụng ảnh tham chiếu?',
+            message: `Thêm ảnh cho tối đa ${targets.length} tác vụ ${selectedTasks.length > 0 ? 'đã chọn' : 'trong bộ lọc hiện tại'} và vào form cho các prompt sắp thêm.`,
+            confirmLabel: 'Áp dụng',
+          }))
+        )
+          return false;
+
+        const updated = await applyToTasks(targets, refs);
+        useFlowImageStore.getState().addQueueReferences(refs);
+        addToast({
+          type: 'success',
+          title: 'Đã cập nhật ảnh tham chiếu',
+          message:
+            targets.length > 0
+              ? `Đã cập nhật ${updated}/${targets.length} tác vụ và form cho các prompt sắp thêm.`
+              : `Đã thêm ${refs.length} ảnh vào form cho các prompt sắp thêm.`,
+        });
+      } catch (error) {
         report(
-          'Không thể thêm ảnh cho tất cả prompt',
-          `Model của tác vụ ${numbers.get(tooMany.id)} không đủ chỗ cho ảnh tham chiếu đã chọn.`,
+          'Không thêm được ảnh tham chiếu',
+          error instanceof Error ? error.message : String(error),
         );
         return false;
+      } finally {
+        applyingReferences.current = false;
       }
-      useFlowImageStore.getState().addQueueReferences(refs);
-      const failed = await applyToTasks(targets, refs);
-      if (failed) {
-        report('Không thêm được ảnh tham chiếu', failed);
-        return false;
-      }
-      addToast({
-        type: 'success',
-        title: 'Đã thêm ảnh tham chiếu',
-        message:
-          targets.length > 0
-            ? `Đã áp dụng ${refs.length} ảnh cho ${targets.length} prompt chưa gửi yêu cầu.`
-            : `Đã thêm ${refs.length} ảnh cho các prompt sắp thêm.`,
-      });
     }
     if (errors.length > 0) {
       addToast({
@@ -268,7 +285,7 @@ export function AllWorkspace() {
         selectAll={
           <input
             type="checkbox"
-            aria-label="Chọn tất cả tác vụ"
+            aria-label="Chọn tất cả tác vụ trong bộ lọc"
             checked={allSelected}
             disabled={notRunning.length === 0}
             onChange={(event) =>
@@ -294,7 +311,9 @@ export function AllWorkspace() {
                   : 'Chưa có tác vụ'}
             </strong>
             {(loadError || tasks.length === 0) && (
-              <span>{loadError ?? 'Dán prompt vào ô ở cột bên trái rồi bấm "Thêm & chạy".'}</span>
+              <span>
+                {loadError ?? 'Dán prompt vào ô bên trái, nhấn Enter để thêm rồi bấm "Chạy".'}
+              </span>
             )}
           </>
         }

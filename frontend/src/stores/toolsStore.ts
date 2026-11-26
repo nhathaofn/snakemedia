@@ -27,14 +27,18 @@ export const useToolsStore = create<ToolsState>((set, get) => ({
   requests: [],
   progress: {},
   load: async () => {
-    const [list, activity] = await Promise.all([api.listTools(), api.getToolActivity()]);
-    set({ tools: unwrapList(list) });
-    if (activity.success && activity.data) {
-      const { requests, downloads } = activity.data;
-      set({
-        requests: requests ?? [],
-        progress: Object.fromEntries((downloads ?? []).map((p) => [p.tool, p])),
-      });
+    try {
+      const [list, activity] = await Promise.all([api.listTools(), api.getToolActivity()]);
+      set({ tools: unwrapList(list) });
+      if (activity.success && activity.data) {
+        const { requests, downloads } = activity.data;
+        set({
+          requests: requests ?? [],
+          progress: Object.fromEntries((downloads ?? []).map((p) => [p.tool, p])),
+        });
+      }
+    } catch {
+      // Keep last known tool state when startup/reload RPC fails transiently.
     }
   },
   ask: (request) =>

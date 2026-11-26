@@ -98,6 +98,7 @@ type GenerateImageRequest struct {
 	References  []ReferenceImage `json:"references,omitempty"`
 	ProjectID   string           `json:"projectId,omitempty"`
 	fingerprint string
+	queueOwned  bool
 	onSubmit    func(projectID string, clientIDs []string) error
 	onAccepted  func(images []GeneratedImageItem) error
 	// avoid are accounts that refused this prompt for unusual activity
@@ -245,7 +246,7 @@ func (s *Provider) GenerateImages(ctx context.Context, req GenerateImageRequest)
 	req.onSubmit = func(projectID string, clientIDs []string) error {
 		job := newGenerationJob(req.RequestID, generationJobImage, fingerprint, acc.ID)
 		job.Phase, job.ProjectID, job.ClientIDs = generationSubmitting, projectID, append([]string(nil), clientIDs...)
-		job.ImageTemplate = imageGenerationTemplate{Prompt: req.Prompt, ModelID: req.ModelID, ModelName: model.Name, AspectRatio: req.AspectRatio, Quality: req.Quality, ProjectMode: req.ProjectMode}
+		job.ImageTemplate = imageGenerationTemplate{Prompt: req.Prompt, ModelID: req.ModelID, ModelName: model.Name, AspectRatio: req.AspectRatio, Quality: req.Quality, ProjectMode: req.ProjectMode, QueueOwned: req.queueOwned}
 		return s.saveGenerationJob(job)
 	}
 	req.onAccepted = func(images []GeneratedImageItem) error {
@@ -350,7 +351,11 @@ func normalizeImageQuality(quality ImageQuality) (ImageQuality, error) {
 
 // UploadReferenceImage registers a local image to Google Flow using the RPC ID
 // discovered from the account's active Flow build.
-func (s *Provider) UploadReferenceImage(ctx context.Context, client *chrome.FlowClient, _ session.StoredAccount, imageBase64 string, mimeType string, fileName string, token string, projectID ...string) (string, error) {
+func (s *Provider) UploadReferenceImage(ctx context.Context, client *chrome.FlowClient, acc session.StoredAccount, imageBase64 string, mimeType string, fileName string, token string, projectID ...string) (string, error) {
+	return s.uploadReferenceImageFromBrowser(ctx, client, nil, acc, imageBase64, mimeType, fileName, token, projectID...)
+}
+
+func (s *Provider) uploadReferenceImageFromBrowser(ctx context.Context, client *chrome.FlowClient, browser *browser.Browser, _ session.StoredAccount, imageBase64 string, mimeType string, fileName string, token string, projectID ...string) (string, error) {
 	proj := ""
 	if len(projectID) > 0 {
 		proj = projectID[0]
@@ -368,7 +373,7 @@ func (s *Provider) UploadReferenceImage(ctx context.Context, client *chrome.Flow
 	if err != nil {
 		return "", fmt.Errorf("không đóng gói được envelope tải ảnh tham chiếu: %w", err)
 	}
-	body, err := client.Do(ctx, rpcID, fReq, time.Duration(s.cfg.Get().Flow.GenerationTimeoutSeconds)*time.Second)
+	body, err := s.sendBillable(ctx, client, browser, rpcID, fReq)
 	if bytes.Contains(body, []byte("PUBLIC_ERROR_UNUSUAL_ACTIVITY")) {
 		return "", unusualActivity("tải ảnh lên")
 	}
@@ -386,10 +391,13 @@ func (s *Provider) generateImagesFromAccount(ctx context.Context, acc session.St
 		return nil, errors.New("dịch vụ tài khoản chưa được khởi tạo")
 	}
 	methods := []string{chrome.MethodProjects, chrome.MethodCreateProject, chrome.MethodProjectContents, chrome.MethodMedia}
+	if len(req.References) > 0 {
+		methods = append(methods, chrome.MethodUploadImage)
+	}
 	if req.Quality != ImageQuality1K {
 		methods = append(methods, chrome.MethodUpsampleImage)
 	}
-	client, err := s.flowClient(ctx, acc, methods...)
+	client, err := s.projectPageClient(ctx, acc, methods...)
 	if err != nil {
 		return nil, err
 	}
@@ -488,19 +496,27 @@ func (s *Provider) generateImagesFromAccount(ctx context.Context, acc session.St
 
 func (s *Provider) materializeGeneratedImages(ctx context.Context, client *chrome.FlowClient, browser *browser.Browser, policy config.AccountConfig, projectID string, req GenerateImageRequest, images []GeneratedImageItem) []GeneratedImageItem {
 	for i := range images {
-		data, contentType, err := client.FetchMedia(ctx, images[i].URL, []string{"image/"}, s.cfg.Get().Flow.MaxImageBytes, time.Duration(s.cfg.Get().Flow.GenerationTimeoutSeconds)*time.Second)
-		if err == nil {
-			data, contentType = s.removeWatermark(images[i].ID, data, contentType)
-			images[i].LocalURL, err = s.media.Put(images[i].ID, contentType, ".png", data)
-		}
-		if err != nil {
-			images[i].Error = "Không tải được ảnh để hiển thị: " + err.Error()
-			logger.Get().Warn("cannot download generated image", "media", images[i].ID, "error", err)
+		if images[i].LocalURL != "" && images[i].Error == "" {
 			continue
 		}
 		if req.Quality == ImageQuality1K {
+			data, contentType, err := client.FetchMedia(ctx, images[i].URL, []string{"image/"}, s.cfg.Get().Flow.MaxImageBytes, time.Duration(s.cfg.Get().Flow.GenerationTimeoutSeconds)*time.Second)
+			if err == nil {
+				data, contentType = s.removeWatermark(images[i].ID, data, contentType)
+				images[i].LocalURL, err = s.media.Put(images[i].ID, contentType, ".png", data)
+			}
+			if err != nil {
+				images[i].Error = "Không tải được ảnh để hiển thị: " + err.Error()
+				logger.Get().Warn("cannot download generated image", "media", images[i].ID, "error", err)
+				continue
+			}
+			images[i].Error = ""
 			continue
 		}
+		// Higher resolutions (2K/4K) must never populate LocalURL with the 1K
+		// image: leaving LocalURL empty keeps imageJobPhase as generationAccepted
+		// so resuming/rechecking retries upsampling without billing a new image.
+		images[i].LocalURL = ""
 		if browser == nil {
 			images[i].Error = fmt.Sprintf("Không nâng được ảnh lên %s: Chrome chưa sẵn sàng.", req.Quality)
 			continue
@@ -511,18 +527,27 @@ func (s *Provider) materializeGeneratedImages(ctx context.Context, client *chrom
 			logger.Get().Warn("cannot mint image upsample token", "media", images[i].ID, "error", tokenErr)
 			continue
 		}
-		upscaledURL, err := s.upsampleGeneratedImage(ctx, client, projectID, images[i].ID, req.Quality, upscaleToken)
+		upscaledURL, err := s.upsampleGeneratedImage(ctx, client, browser, projectID, images[i].ID, req.Quality, upscaleToken)
 		if err != nil {
 			images[i].Error = fmt.Sprintf("Không nâng được ảnh lên %s: %v", req.Quality, err)
 			logger.Get().Warn("cannot upsample generated image", "media", images[i].ID, "quality", req.Quality, "error", err)
 			continue
 		}
 		images[i].LocalURL = upscaledURL
+		images[i].Error = ""
 	}
 	return images
 }
 
-func (s *Provider) upsampleGeneratedImage(ctx context.Context, client *chrome.FlowClient, projectID, mediaID string, quality ImageQuality, recaptchaToken string) (string, error) {
+// upsampleResponseLimit computes the batchexecute body ceiling for UpsampleImage,
+// which returns the full 2K/4K image inline as Base64 inside the JSON envelope.
+func upsampleResponseLimit(defaultLimit, maxImageBytes int64) int64 {
+	const envelopeOverhead = 2 << 20
+	needed := int64(base64.StdEncoding.EncodedLen(int(maxImageBytes))) + envelopeOverhead
+	return max(defaultLimit, needed)
+}
+
+func (s *Provider) upsampleGeneratedImage(ctx context.Context, client *chrome.FlowClient, browser *browser.Browser, projectID, mediaID string, quality ImageQuality, recaptchaToken string) (string, error) {
 	rpcID := client.Credentials().RPCs.ID(chrome.MethodUpsampleImage)
 	if rpcID == "" {
 		return "", errors.New("Flow RPC nâng độ phân giải chưa được khám phá từ build hiện tại")
@@ -535,7 +560,9 @@ func (s *Provider) upsampleGeneratedImage(ctx context.Context, client *chrome.Fl
 	if err != nil {
 		return "", fmt.Errorf("không đóng gói được envelope nâng độ phân giải: %w", err)
 	}
-	body, err := client.Do(ctx, rpcID, fReq, time.Duration(s.cfg.Get().Flow.GenerationTimeoutSeconds)*time.Second)
+	cfg := s.cfg.Get()
+	upsampleLimit := upsampleResponseLimit(cfg.Accounts.MaxResponseBytes, cfg.Flow.MaxImageBytes)
+	body, err := s.sendBillableWithLimit(ctx, client, browser, rpcID, fReq, upsampleLimit)
 	if bytes.Contains(body, []byte("PUBLIC_ERROR_UNUSUAL_ACTIVITY")) {
 		return "", unusualActivity("nâng độ phân giải")
 	}

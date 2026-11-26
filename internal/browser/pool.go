@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -44,6 +45,7 @@ type Pool struct {
 	root     string
 	browsers map[string]*Browser
 	routes   map[string]string
+	args     map[string][]string
 	inUse    map[string]int
 	launches map[string]*launchLock
 	// lastUsed is when work last got or held each browser; idle headless
@@ -65,7 +67,7 @@ type Pool struct {
 func NewPool(cfg *config.Manager, root string) *Pool {
 	return &Pool{
 		cfg: cfg, root: root,
-		browsers: make(map[string]*Browser), routes: make(map[string]string),
+		browsers: make(map[string]*Browser), routes: make(map[string]string), args: make(map[string][]string),
 		inUse: make(map[string]int), launches: make(map[string]*launchLock),
 		lastUsed: make(map[string]time.Time), closedCh: make(chan struct{}), now: time.Now,
 		start: StartBrowser, findChrome: FindChrome,
@@ -123,7 +125,7 @@ func (p *Pool) Get(ctx context.Context, profileDir string, want Want) (*Browser,
 		return nil, errPoolClosed
 	}
 	b := p.browsers[path]
-	sameRoute := p.routes[path] == want.Route
+	sameRoute := p.routes[path] == want.Route && slices.Equal(p.args[path], want.Args)
 	busy := p.inUse[path] > 0
 	p.lastUsed[path] = p.now()
 	p.mu.Unlock()
@@ -175,6 +177,7 @@ func (p *Pool) Get(ctx context.Context, profileDir string, want Want) (*Browser,
 	p.mu.Lock()
 	p.browsers[path] = b
 	p.routes[path] = want.Route
+	p.args[path] = slices.Clone(want.Args)
 	p.lastUsed[path] = p.now()
 	p.mu.Unlock()
 	if b.done != nil {
@@ -231,6 +234,8 @@ func (p *Pool) watchExit(path string, b *Browser) {
 	case <-p.closedCh:
 		return
 	}
+	unlock := p.lockLaunch(path)
+	defer unlock()
 	p.mu.Lock()
 	if p.browsers[path] != b {
 		p.mu.Unlock()
@@ -238,6 +243,7 @@ func (p *Pool) watchExit(path string, b *Browser) {
 	}
 	delete(p.browsers, path)
 	delete(p.routes, path)
+	delete(p.args, path)
 	onClosed := p.onClosed
 	p.mu.Unlock()
 	if onClosed != nil {
@@ -334,6 +340,7 @@ func (p *Pool) forget(path string, b *Browser) {
 	if p.browsers[path] == b {
 		delete(p.browsers, path)
 		delete(p.routes, path)
+		delete(p.args, path)
 	}
 	p.mu.Unlock()
 }
@@ -362,6 +369,7 @@ func (p *Pool) closeIdleLocked(path string) error {
 	b := p.browsers[path]
 	delete(p.browsers, path)
 	delete(p.routes, path)
+	delete(p.args, path)
 	p.mu.Unlock()
 	policy := p.cfg.Get().Accounts
 	if b == nil {

@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { confirmAction } from '../../../components/ui';
-import { api, unwrap } from '../../../services';
+import { api, unwrap, unwrapList } from '../../../services';
 import { useAppStore } from '../../../stores';
 import { MuseJobKind as Kind, MuseJobRequest, MuseStoryboard } from '../../../types';
 import type { MuseJob, MuseJobKind, MuseJobMode } from '../../../types';
@@ -150,7 +150,7 @@ export function useMuseSubmit(kind: MuseJobKind, mode: MuseJobMode) {
         const response = await api.submitMuseJobs(
           MuseJobRequest.createFrom({ ...values, submissionId: pending.current.id }),
         );
-        const created = unwrap(response);
+        const created = unwrapList(response);
         pending.current = null;
         created.forEach(setJob);
         return created.length > 0;

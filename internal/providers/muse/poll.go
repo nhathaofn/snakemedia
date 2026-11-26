@@ -115,7 +115,7 @@ func (p *Provider) pollWithReplies(ctx context.Context, job MuseJob, lease *acco
 			errorsInRow++
 			if errorsInRow == 2 && !refreshedInPoll && job.AccountID != "" {
 				refreshedInPoll = true
-				_, okRef, refErr := p.refreshAccountForRun(ctx, job.AccountID, job.Kind, page, lease, "poll_status")
+				_, okRef, refErr := p.refreshAccountForResume(ctx, job.AccountID, job.Kind, page, lease, "poll_status")
 				if !okRef && refErr != nil {
 					if errors.Is(refErr, errNotSignedIn) || errors.As(refErr, new(*accountRestrictedError)) {
 						return "", nil, false, refErr
@@ -173,6 +173,11 @@ func (p *Provider) pollWithReplies(ctx context.Context, job MuseJob, lease *acco
 				// Muse may still be making the file: check the chat again
 				// later rather than send a second generation.
 				return "", nil, false, fmt.Errorf("Quá %d phút Muse chưa làm xong và không dừng được phiên: %w", int(limit.Minutes()), err)
+			}
+			if isLong(job) {
+				// A long video may already have generated clips in this chat;
+				// never start a brand-new chat and pay for those clips again (ADR 0013).
+				return "", nil, false, &longIncompleteError{continues: job.Continues, detail: fmt.Sprintf("Quá %d phút Muse chưa làm xong", int(limit.Minutes()))}
 			}
 			return "", nil, false, &museError{msg: fmt.Sprintf("Quá %d phút Muse chưa làm xong.", int(limit.Minutes()))}
 		}
@@ -247,7 +252,7 @@ func (p *Provider) collectWithReplies(ctx context.Context, job MuseJob, accountI
 		var err error
 		replies, err = (*page).Result(ctx, job.SessionID)
 		if err != nil && ctx.Err() == nil {
-			if _, okRef, refErr := p.refreshAccountForRun(ctx, accountID, job.Kind, page, lease, "collect_result"); okRef {
+			if _, okRef, refErr := p.refreshAccountForResume(ctx, accountID, job.Kind, page, lease, "collect_result"); okRef {
 				replies, err = (*page).Result(ctx, job.SessionID)
 			} else if refErr != nil && (errors.Is(refErr, errNotSignedIn) || errors.As(refErr, new(*accountRestrictedError))) {
 				return refErr

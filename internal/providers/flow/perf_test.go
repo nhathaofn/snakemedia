@@ -7,7 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"SnakeMedia/internal/browser"
 	"SnakeMedia/internal/events"
+	"SnakeMedia/internal/media"
+	"SnakeMedia/internal/providers/flow/session"
 )
 
 func TestBulkHoldWritesOnceAndPublishesEachTask(t *testing.T) {
@@ -65,13 +68,13 @@ func TestWorkflowListingMatchesPerClientParse(t *testing.T) {
 }
 
 func TestCreditRefreshCoalesces(t *testing.T) {
-	s := &Provider{}
+	s := &Provider{queue: &imageQueue{}}
 	// A run in progress: later requests only mark one trailing rerun.
 	s.creditRefreshes = map[string]*creditRefresh{"a": {}}
 	for range 5 {
 		s.coalesceCreditRefresh(context.Background(), "a")
 	}
-	if s.creditRefreshes["a"].pending == nil || len(s.creditRefreshes) != 1 {
+	if !s.creditRefreshes["a"].pending || len(s.creditRefreshes) != 1 {
 		t.Fatalf("requests during a run fold into one pending rerun: %+v", s.creditRefreshes)
 	}
 	// Without accounts a refresh returns at once; the account is then freed.
@@ -88,5 +91,54 @@ func TestCreditRefreshCoalesces(t *testing.T) {
 			t.Fatal("a finished refresh frees the account")
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+type blockedCreditAccounts struct {
+	*fakeAccounts
+	started chan struct{}
+	exited  chan struct{}
+}
+
+func (f *blockedCreditAccounts) EnsureAccountHeadlessBrowser(ctx context.Context, _ session.StoredAccount) (*browser.Browser, error) {
+	close(f.started)
+	<-ctx.Done()
+	close(f.exited)
+	return nil, ctx.Err()
+}
+
+func TestFlowCloseCancelsAndJoinsCreditRefresh(t *testing.T) {
+	accounts := &blockedCreditAccounts{
+		fakeAccounts: testAccountService(t),
+		started:      make(chan struct{}),
+		exited:       make(chan struct{}),
+	}
+	account := seedFlowAccount(t, accounts.fakeAccounts, "refresh-test", true)
+	provider := New(accounts, accounts.cfgManager, media.NewStore(accounts.mediaDir))
+	provider.Start(context.Background(), nil)
+
+	original, cancel := context.WithCancel(context.Background())
+	cancel()
+	provider.coalesceCreditRefresh(original, account.ID)
+	select {
+	case <-accounts.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("credit refresh never started")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		provider.Close()
+		close(done)
+	}()
+	select {
+	case <-done:
+		select {
+		case <-accounts.exited:
+		default:
+			t.Fatal("provider closed before its credit refresh stopped")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("provider close kept waiting on its own credit refresh")
 	}
 }

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { EyeOff, FolderOpen, ImagePlus, Star, X } from 'lucide-react';
 import { Button, Icon, Modal } from '../../../components/ui';
-import { api, thumbUrl, unwrap } from '../../../services';
+import { api, thumbUrl, unwrapList } from '../../../services';
 import { useAppStore } from '../../../stores';
 import { MuseAsset, MuseAssetItem, MuseRefRole } from '../../../types';
 import type { MuseAssetType } from '../../../types';
@@ -96,7 +96,7 @@ export function AssetDialog({
 
   const pick = async () => {
     try {
-      const picked = unwrap(await api.pickMuseAssetImages());
+      const picked = unwrapList(await api.pickMuseAssetImages());
       const added = picked.map((p, idx) =>
         MuseAssetItem.createFrom({
           id: '',

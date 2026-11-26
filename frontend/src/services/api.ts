@@ -131,6 +131,8 @@ export const api = {
   listTools: () => invoke<Tool[]>('ListTools', Backend.ListTools),
   getToolActivity: () => invoke<ToolActivity>('GetToolActivity', Backend.GetToolActivity),
   installTool: (id: string) => invoke<Tool>('InstallTool', () => Backend.InstallTool(id)),
+  pickToolPath: (program: string) =>
+    invoke<string>('PickToolPath', () => Backend.PickToolPath(program)),
   postponeTool: (id: string) => invoke<boolean>('PostponeTool', () => Backend.PostponeTool(id)),
   removeTool: (id: string) => invoke<boolean>('RemoveTool', () => Backend.RemoveTool(id)),
   getConfig: () => invoke<AppConfig>('GetConfig', Backend.GetConfig),
@@ -288,12 +290,12 @@ export const api = {
     invoke<number>('RemoveMuseAssets', () => Backend.RemoveMuseAssets(ids)),
   updateMuseAssetsRole: (ids: string[], role: MuseAsset['role']) =>
     invoke<number>('UpdateMuseAssetsRole', () => Backend.UpdateMuseAssetsRole(ids, role)),
-  pickMuseAssetFolder: (recursive = false) =>
+  pickMuseAssetFolder: (recursive: boolean, requestId: string) =>
     invoke<MuseAssetFolderScan>('PickMuseAssetFolder', () =>
-      Backend.PickMuseAssetFolder(recursive),
+      Backend.PickMuseAssetFolder(recursive, requestId),
     ),
-  pickMuseAssetFiles: () =>
-    invoke<MuseAssetFolderScan>('PickMuseAssetFiles', Backend.PickMuseAssetFiles),
+  pickMuseAssetFiles: (requestId: string) =>
+    invoke<MuseAssetFolderScan>('PickMuseAssetFiles', () => Backend.PickMuseAssetFiles(requestId)),
   scanMuseAssetPaths: (paths: string[]) =>
     invoke<MuseAssetFolderScan>('ScanMuseAssetPaths', () => Backend.ScanMuseAssetPaths(paths)),
   importMuseAssetBatch: (req: MuseAssetBatchRequest) =>

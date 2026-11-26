@@ -1,11 +1,10 @@
-import { thumbUrl } from '../../../services';
 import { useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { ImagePlus, X } from 'lucide-react';
 import { AccountWarning } from '../../../components/accounts';
 import { Icon } from '../../../components/ui';
 import { useNow } from '../../../hooks';
-import { api, unwrap } from '../../../services';
+import { api, thumbUrl, unwrapList } from '../../../services';
 import { useAccountsStore } from '../../../stores';
 import { AccountProvider, MuseJobKind } from '../../../types';
 import type { MuseOptions, MuseReference } from '../../../types';
@@ -66,7 +65,7 @@ export function ReferencesField({
   const budgetBytes = options?.inlineBudgetBytes || 8 * 1024 * 1024;
   const pick = async () => {
     try {
-      const picked = unwrap(await api.pickMuseReferences());
+      const picked = unwrapList(await api.pickMuseReferences());
       const merged = [...references];
       for (const item of picked) {
         if (!merged.some((r) => r.localUrl === item.localUrl)) {

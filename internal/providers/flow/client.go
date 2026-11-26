@@ -31,14 +31,9 @@ func (s *Provider) flowClient(ctx context.Context, acc session.StoredAccount, me
 		if err != nil {
 			return nil, err
 		}
-		// Account-only descriptors may live in a different lazy bundle.
-		if registry.Credits == "" {
-			registry.Credits = creds.RPCs.Credits
-		}
-		if registry.Availability == "" {
-			registry.Availability = creds.RPCs.Availability
-		}
-		creds.RPCs = registry
+		// Partial discoveries (home vs project bundles) must never clobber
+		// RPC IDs already discovered for this Flow build.
+		creds.RPCs = registry.Merge(creds.RPCs)
 		if err := s.accounts.UpdateCredentials(acc.ID, creds); err != nil {
 			return nil, err
 		}
@@ -126,7 +121,11 @@ func (s *Provider) projectClient(ctx context.Context, acc session.StoredAccount,
 		return nil, err
 	}
 	for {
-		fresh, err := s.syncSession(ctx, acc)
+		fresh := acc
+		var err error
+		if s.syncSession != nil {
+			fresh, err = s.syncSession(ctx, acc)
+		}
 		if err == nil {
 			client, discoveryErr := s.flowClient(ctx, fresh, methods...)
 			if discoveryErr == nil {
@@ -211,4 +210,12 @@ func (s *Provider) catalogueClient(ctx context.Context, acc session.StoredAccoun
 func (s *Provider) pageLock(port int) *sync.RWMutex {
 	lock, _ := s.pageLocks.LoadOrStore(port, &sync.RWMutex{})
 	return lock.(*sync.RWMutex)
+}
+
+// mintLock serialises reCAPTCHA token minting per Chrome port so concurrent
+// requests cannot overlap global window.Object.assign patches in recaptcha.go.
+// Lock order: mintLock -> pageLock.RLock.
+func (s *Provider) mintLock(port int) *sync.Mutex {
+	lock, _ := s.mintLocks.LoadOrStore(port, &sync.Mutex{})
+	return lock.(*sync.Mutex)
 }

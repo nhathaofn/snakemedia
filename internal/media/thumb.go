@@ -3,7 +3,6 @@ package media
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"image"
@@ -60,7 +59,7 @@ func (s *Store) serveThumb(w http.ResponseWriter, r *http.Request, name string) 
 		}
 	}
 	w.Header().Set("Content-Type", "image/jpeg")
-	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.Header().Set("Cache-Control", "private, no-cache")
 	http.ServeFile(w, r, thumb)
 	return true
 }
@@ -87,7 +86,7 @@ func (s *Store) serveVaultThumb(w http.ResponseWriter, r *http.Request, relPath,
 		}
 	}
 	w.Header().Set("Content-Type", "image/jpeg")
-	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.Header().Set("Cache-Control", "private, no-cache")
 	http.ServeFile(w, r, thumb)
 	return true
 }
@@ -116,21 +115,6 @@ func makeThumb(src, dst string) (bool, error) {
 		return false, err
 	}
 	return true, utils.WriteFileAtomic(dst, data, 0o600)
-}
-
-// PreviewDataURL decodes src, scales its longest side down to maxSide when
-// larger, and returns a JPEG data URL for lightweight previews without storing
-// a copy in the media folder. Returns "" when the file cannot be decoded.
-func PreviewDataURL(src string, maxSide, quality int) string {
-	img, err := decodeImage(src)
-	if err != nil {
-		return ""
-	}
-	data, err := encodeScaledJPEG(img, maxSide, quality)
-	if err != nil {
-		return ""
-	}
-	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data)
 }
 
 func encodeScaledJPEG(img image.Image, maxSide, quality int) ([]byte, error) {

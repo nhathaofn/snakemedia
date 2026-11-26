@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	goruntime "runtime"
 	"strings"
+	"sync"
 
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -49,6 +52,12 @@ type App struct {
 	dispatcher          *events.Dispatcher
 	requests            *services.RequestRegistry
 	updates             *services.UpdateService
+	// Native-picker approvals keep a compromised webview from passing arbitrary
+	// OS paths into config, Vault migration, batch asset import, or tool exec.
+	approvedMu          sync.Mutex
+	approvedVaultDirs   map[string]struct{}
+	approvedImportPaths map[string]struct{}
+	approvedToolPaths   map[string]map[string]struct{}
 	// startupNotice is shown once the window is up (config reset to defaults).
 	startupNotice string
 }
@@ -269,6 +278,35 @@ func (a *App) RemoveTool(id string) models.Response[bool] {
 	return models.SuccessResponse(true)
 }
 
+// PickToolPath opens a native file picker for a manifest-declared external
+// program and approves the selected executable for UpdateConfig.
+func (a *App) PickToolPath(program string) models.Response[string] {
+	program = strings.TrimSpace(program)
+	if a.tools == nil || !a.tools.HasProgram(program) {
+		return logged("PickToolPath", models.ErrorResponse[string]("Công cụ không hợp lệ.", models.CodeInvalidArgument))
+	}
+	opts := runtime.OpenDialogOptions{
+		Title: "Chọn tệp thực thi " + program,
+	}
+	if goruntime.GOOS == "windows" {
+		opts.Filters = []runtime.FileFilter{{DisplayName: "Tệp thực thi (*.exe)", Pattern: "*.exe"}}
+	}
+	picked, err := runtime.OpenFileDialog(a.ctx, opts)
+	if err != nil {
+		return logged("PickToolPath", models.ErrorResponse[string]("Không mở được hộp thoại chọn tệp: "+err.Error(), models.CodeInternal))
+	}
+	picked = strings.TrimSpace(picked)
+	if picked == "" {
+		return models.SuccessResponse("")
+	}
+	info, err := os.Stat(picked)
+	if err != nil || !info.Mode().IsRegular() {
+		return logged("PickToolPath", models.ErrorResponse[string]("Tệp thực thi đã chọn không tồn tại hoặc không hợp lệ.", models.CodeInvalidArgument))
+	}
+	a.approveToolPath(program, picked)
+	return models.SuccessResponse(picked)
+}
+
 // GetSystemInfo exposes host runtime information.
 func (a *App) GetSystemInfo() models.Response[services.SystemInfo] {
 	return a.system.GetSystemInfo(a.ctx)
@@ -281,8 +319,36 @@ func (a *App) GetConfig() models.Response[config.AppConfig] {
 
 // UpdateConfig validates and persists configuration, then notifies listeners.
 func (a *App) UpdateConfig(newCfg config.AppConfig) models.Response[config.AppConfig] {
+	cur := a.cfg.Get()
+	// Server-managed directory paths are only changed via dedicated native
+	// dialog RPCs (ChooseBatchOutputDirectory, SetMuseAssetVaultDirectory),
+	// never through raw webview config payloads.
+	newCfg.Flow.BatchOutputDir = cur.Flow.BatchOutputDir
+	newCfg.Muse.OutputDir = cur.Muse.OutputDir
+	newCfg.Muse.AssetVaultDir = cur.Muse.AssetVaultDir
+
+	sanitizedTools := make(map[string]string, len(newCfg.Tools.Paths))
+	for prog, rawPath := range newCfg.Tools.Paths {
+		path := strings.TrimSpace(rawPath)
+		if path == "" {
+			continue
+		}
+		if a.tools != nil && !a.tools.HasProgram(prog) {
+			res := models.ErrorResponse[config.AppConfig]("Công cụ không hợp lệ: "+prog, models.CodeInvalidArgument)
+			res.Data = cur
+			return logged("UpdateConfig", res)
+		}
+		if !sameApprovedPath(path, cur.Tools.Paths[prog]) && !a.isApprovedToolPath(prog, path) {
+			res := models.ErrorResponse[config.AppConfig]("Đường dẫn công cụ phải được chọn qua hộp thoại của ứng dụng.", models.CodeInvalidArgument)
+			res.Data = cur
+			return logged("UpdateConfig", res)
+		}
+		sanitizedTools[prog] = path
+	}
+	newCfg.Tools.Paths = sanitizedTools
+
 	res := a.settings.UpdateConfig(a.ctx, newCfg)
-	if res.Success {
+	if res.Success && a.dispatcher != nil {
 		a.dispatcher.Emit(events.EventConfigUpdated, res.Data)
 	}
 	return res
@@ -451,8 +517,12 @@ func (a *App) ChooseBatchOutputDirectory(provider accounts.Provider) models.Resp
 	} else {
 		cfg.Muse.OutputDir = dir
 	}
-	if _, err := a.cfg.Update(cfg); err != nil {
+	updated, err := a.cfg.Update(cfg)
+	if err != nil {
 		return models.ErrorResponse[media.DirectoryResult]("Không lưu được thư mục đã chọn: "+err.Error(), models.CodeInternal)
+	}
+	if a.dispatcher != nil {
+		a.dispatcher.Emit(events.EventConfigUpdated, updated)
 	}
 	return models.SuccessResponse(media.DirectoryResult{Path: dir})
 }
@@ -789,7 +859,9 @@ func (a *App) UpdateMuseAssetsRole(ids []string, role muse.MuseRefRole) models.R
 
 // PickMuseAssetFolder asks the user for a folder of asset images and scans it
 // in natural filename order for batch import.
-func (a *App) PickMuseAssetFolder(recursive bool) models.Response[muse.MuseAssetFolderScan] {
+func (a *App) PickMuseAssetFolder(recursive bool, requestID string) models.Response[muse.MuseAssetFolderScan] {
+	ctx, done := a.requests.Start(a.ctx, requestID)
+	defer done()
 	if err := a.muse.AssetImportReady(); err != nil {
 		return models.ErrorResponse[muse.MuseAssetFolderScan](err.Error(), models.CodeUnavailable)
 	}
@@ -802,12 +874,18 @@ func (a *App) PickMuseAssetFolder(recursive bool) models.Response[muse.MuseAsset
 	if dir == "" {
 		return models.SuccessResponse(muse.MuseAssetFolderScan{Canceled: true, Images: []muse.MuseFolderImage{}})
 	}
-	return logged("PickMuseAssetFolder", a.muse.ScanAssetFolder(dir, recursive))
+	res := logged("PickMuseAssetFolder", a.muse.ScanAssetFolder(ctx, dir, recursive))
+	if res.Success {
+		a.approveScanImages(res.Data.Images)
+	}
+	return res
 }
 
 // PickMuseAssetFiles lets the user pick multiple external image files to
 // inspect and batch-import into the Asset Vault.
-func (a *App) PickMuseAssetFiles() models.Response[muse.MuseAssetFolderScan] {
+func (a *App) PickMuseAssetFiles(requestID string) models.Response[muse.MuseAssetFolderScan] {
+	ctx, done := a.requests.Start(a.ctx, requestID)
+	defer done()
 	if err := a.muse.AssetImportReady(); err != nil {
 		return models.ErrorResponse[muse.MuseAssetFolderScan](err.Error(), models.CodeUnavailable)
 	}
@@ -823,16 +901,31 @@ func (a *App) PickMuseAssetFiles() models.Response[muse.MuseAssetFolderScan] {
 	if len(paths) == 0 {
 		return models.SuccessResponse(muse.MuseAssetFolderScan{Canceled: true, Images: []muse.MuseFolderImage{}})
 	}
-	return logged("PickMuseAssetFiles", a.muse.ScanAssetPaths(paths))
+	res := logged("PickMuseAssetFiles", a.muse.ScanAssetPaths(ctx, paths))
+	if res.Success {
+		a.approveScanImages(res.Data.Images)
+	}
+	return res
 }
 
-// ScanMuseAssetPaths inspects explicit OS file paths (e.g. from drag-and-drop).
+// ScanMuseAssetPaths inspects explicit OS file paths previously approved by a
+// native picker or OS drop event; arbitrary webview-supplied paths are refused.
 func (a *App) ScanMuseAssetPaths(paths []string) models.Response[muse.MuseAssetFolderScan] {
-	return logged("ScanMuseAssetPaths", a.muse.ScanAssetPaths(paths))
+	for _, path := range paths {
+		if !a.isApprovedImportPath(path) {
+			return logged("ScanMuseAssetPaths", models.ErrorResponse[muse.MuseAssetFolderScan]("Đường dẫn ảnh phải được chọn qua hộp thoại của ứng dụng.", models.CodeInvalidArgument))
+		}
+	}
+	return logged("ScanMuseAssetPaths", a.muse.ScanAssetPaths(a.ctx, paths))
 }
 
 // ImportMuseAssetBatch imports multiple assets/items into the Vault in one write.
 func (a *App) ImportMuseAssetBatch(req muse.MuseAssetBatchRequest) models.Response[muse.MuseAssetBatchResult] {
+	for _, item := range req.Items {
+		if src := strings.TrimSpace(item.SourcePath); src != "" && !a.isApprovedImportPath(src) {
+			return logged("ImportMuseAssetBatch", models.ErrorResponse[muse.MuseAssetBatchResult]("Đường dẫn tệp nhập phải được chọn qua hộp thoại của ứng dụng.", models.CodeInvalidArgument))
+		}
+	}
 	return logged("ImportMuseAssetBatch", a.muse.ImportAssetBatch(req))
 }
 
@@ -859,13 +952,27 @@ func (a *App) PickMuseAssetVaultDirectoryPath() models.Response[string] {
 	if err != nil {
 		return models.ErrorResponse[string]("Không mở được hộp thoại chọn thư mục: "+err.Error(), models.CodeInternal)
 	}
+	if strings.TrimSpace(dir) != "" {
+		a.approveVaultDir(dir)
+	}
 	return models.SuccessResponse(dir)
 }
 
 // SetMuseAssetVaultDirectory updates Muse's Asset Vault directory (empty = default)
 // and optionally copies existing Vault files to the new folder before removing old copies.
 func (a *App) SetMuseAssetVaultDirectory(dir string, migrate bool) models.Response[string] {
-	return logged("SetMuseAssetVaultDirectory", a.muse.SetAssetVaultDirectory(dir, migrate))
+	trimmed := strings.TrimSpace(dir)
+	if trimmed != "" {
+		curDir := a.cfg.Get().Muse.AssetVaultDir
+		if !sameApprovedPath(trimmed, curDir) && !a.isApprovedVaultDir(trimmed) {
+			return logged("SetMuseAssetVaultDirectory", models.ErrorResponse[string]("Thư mục kho tư liệu phải được chọn qua hộp thoại của ứng dụng.", models.CodeInvalidArgument))
+		}
+	}
+	res := logged("SetMuseAssetVaultDirectory", a.muse.SetAssetVaultDirectory(dir, migrate))
+	if res.Success && a.dispatcher != nil {
+		a.dispatcher.Emit(events.EventConfigUpdated, a.cfg.Get())
+	}
+	return res
 }
 
 // OpenMuseAssetVaultFolder opens the active Muse Asset Vault folder in Explorer.
@@ -925,4 +1032,104 @@ func (a *App) CleanMuseChats() models.Response[[]muse.MuseCleanResult] {
 // RemoveMuseLibraryItems forgets library items; their files stay on disk.
 func (a *App) RemoveMuseLibraryItems(ids []string) models.Response[int] {
 	return logged("RemoveMuseLibraryItems", a.muse.RemoveLibraryItems(ids))
+}
+
+func approvalKey(path string) (string, bool) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", false
+	}
+	abs, err := filepath.Abs(trimmed)
+	if err != nil {
+		return "", false
+	}
+	clean := filepath.Clean(abs)
+	if goruntime.GOOS == "windows" {
+		clean = strings.ToLower(clean)
+	}
+	return clean, true
+}
+
+func sameApprovedPath(a, b string) bool {
+	ka, okA := approvalKey(a)
+	kb, okB := approvalKey(b)
+	return okA && okB && ka == kb
+}
+
+func (a *App) approveVaultDir(dir string) {
+	key, ok := approvalKey(dir)
+	if !ok {
+		return
+	}
+	a.approvedMu.Lock()
+	if a.approvedVaultDirs == nil {
+		a.approvedVaultDirs = make(map[string]struct{})
+	}
+	a.approvedVaultDirs[key] = struct{}{}
+	a.approvedMu.Unlock()
+}
+
+func (a *App) isApprovedVaultDir(dir string) bool {
+	key, ok := approvalKey(dir)
+	if !ok {
+		return false
+	}
+	a.approvedMu.Lock()
+	_, found := a.approvedVaultDirs[key]
+	a.approvedMu.Unlock()
+	return found
+}
+
+func (a *App) approveScanImages(images []muse.MuseFolderImage) {
+	if len(images) == 0 {
+		return
+	}
+	a.approvedMu.Lock()
+	if a.approvedImportPaths == nil {
+		a.approvedImportPaths = make(map[string]struct{}, len(images))
+	}
+	for _, img := range images {
+		if key, ok := approvalKey(img.Path); ok {
+			a.approvedImportPaths[key] = struct{}{}
+		}
+	}
+	a.approvedMu.Unlock()
+}
+
+func (a *App) isApprovedImportPath(path string) bool {
+	key, ok := approvalKey(path)
+	if !ok {
+		return false
+	}
+	a.approvedMu.Lock()
+	_, found := a.approvedImportPaths[key]
+	a.approvedMu.Unlock()
+	return found
+}
+
+func (a *App) approveToolPath(program, path string) {
+	key, ok := approvalKey(path)
+	if !ok || program == "" {
+		return
+	}
+	a.approvedMu.Lock()
+	if a.approvedToolPaths == nil {
+		a.approvedToolPaths = make(map[string]map[string]struct{})
+	}
+	if a.approvedToolPaths[program] == nil {
+		a.approvedToolPaths[program] = make(map[string]struct{})
+	}
+	a.approvedToolPaths[program][key] = struct{}{}
+	a.approvedMu.Unlock()
+}
+
+func (a *App) isApprovedToolPath(program, path string) bool {
+	key, ok := approvalKey(path)
+	if !ok || program == "" {
+		return false
+	}
+	a.approvedMu.Lock()
+	_, found := a.approvedToolPaths[program][key]
+	a.approvedMu.Unlock()
+	return found
 }

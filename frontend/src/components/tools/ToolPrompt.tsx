@@ -16,16 +16,17 @@ export function ToolPrompt() {
   const install = useToolsStore((s) => s.install);
   const postpone = useToolsStore((s) => s.postpone);
   const addToast = useAppStore((s) => s.addToast);
-  const [error, setError] = useState<string | null>(null);
+  const [failed, setFailed] = useState<{ toolId: string; message: string } | null>(null);
 
   if (!request) return null;
   const { tool, feature } = request;
+  const error = failed?.toolId === tool.id ? failed.message : null;
   const downloading = progress !== undefined;
 
   const download = async () => {
-    setError(null);
-    const failed = await install(tool.id);
-    if (failed) setError(failed);
+    setFailed(null);
+    const err = await install(tool.id);
+    if (err) setFailed({ toolId: tool.id, message: err });
     else addToast({ type: 'success', message: `Đã tải ${tool.name}.` });
   };
 

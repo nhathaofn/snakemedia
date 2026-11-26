@@ -129,13 +129,17 @@ func classifyAwayTab(info awayTabInfo) (accountRestriction, string) {
 		}
 	}
 	for _, marker := range []string{
-		"banned", "suspended", "disabled", "terminated", "deactivated",
-		"blocked", "restricted", "couldn't find your", "account deleted",
+		"banned", "suspended", "terminated", "deactivated",
+		"account disabled", "account is disabled", "account has been disabled", "/disabled", "user disabled",
+		"account blocked", "account is blocked", "account has been blocked", "/blocked", "you have been blocked", "access blocked",
+		"account restricted", "account is restricted", "account has been restricted", "/restricted",
+		"couldn't find your", "account deleted",
 		"waitlist", "waiting list", "join the waitlist", "early access",
 		"verify your account", "verify your identity", "verification required",
 		"account verification", "phone verification", "identity verification",
-		"khóa", "vô hiệu", "bị cấm", "xác minh tài khoản", "danh sách chờ", "bị bắt xác minh",
-		"access denied", "403",
+		"bị khóa", "tài khoản khóa", "vô hiệu hóa", "tài khoản bị vô hiệu", "bị cấm",
+		"xác minh tài khoản", "danh sách chờ", "bị bắt xác minh",
+		"access denied", "403 forbidden", "error 403", "http 403", "status 403",
 	} {
 		if strings.Contains(joined, marker) {
 			return restrictDeadAccount, fmt.Sprintf("chuyển hướng sang %s (%s)", displayURL, firstNonEmpty(info.Title, marker))
@@ -193,12 +197,44 @@ func classifyRestrictionForKind(kind MuseJobKind, reason string, diag *SendDiagn
 		return cKind, detail
 	}
 	if kind == MuseJobVideo {
-		allLower := strings.ToLower(strings.TrimSpace(reason + " " + diagText(diag) + " " + reply))
-		if matchesRegionRestriction(allLower) || matchesVideoCapabilityRestriction(allLower) {
-			return restrictVideoDisabled, firstNonEmpty(truncate(strings.TrimSpace(reply), 200), truncate(strings.TrimSpace(reason), 180))
+		sysLower := strings.ToLower(strings.TrimSpace(reason + " " + diagText(diag)))
+		replyLower := strings.ToLower(strings.TrimSpace(reply))
+		if matchesRegionRestriction(sysLower) || matchesVideoCapabilityRestriction(sysLower) {
+			return restrictVideoDisabled, firstNonEmpty(truncate(strings.TrimSpace(reason), 180), truncate(strings.TrimSpace(diagText(diag)), 180))
+		}
+		if matchesRegionRestriction(replyLower) || matchesExplicitVideoCapabilityReply(replyLower) {
+			return restrictVideoDisabled, truncate(strings.TrimSpace(reply), 200)
 		}
 	}
 	return restrictNone, ""
+}
+
+// matchesExplicitVideoCapabilityReply inspects free-form LLM assistant replies
+// using only unambiguous account/plan video capability phrases so ordinary
+// prompt-policy refusals ("video of this character is not allowed") or scene
+// commentary cannot permanently disable video on a healthy account (ADR 0012).
+func matchesExplicitVideoCapabilityReply(lower string) bool {
+	if lower == "" {
+		return false
+	}
+	for _, phrase := range []string{
+		"only generate images", "only create images", "can only generate images", "can only create images",
+		"image generation only", "images only", "chỉ tạo được ảnh", "chỉ hỗ trợ tạo ảnh",
+		"video_disabled", "video_banned", "feature_disabled",
+		"video generation is not enabled", "video creation is not enabled",
+		"video generation isn't enabled", "video creation isn't enabled",
+		"video generation is not supported", "video creation is not supported",
+		"video generation isn't supported", "video creation isn't supported",
+		"video feature is disabled", "video feature is unavailable",
+		"upgrade to create video", "upgrade to generate video",
+		"requires a paid plan to generate video", "requires a paid plan to create video",
+		"nâng cấp gói để tạo video", "tính năng tạo video tạm khóa", "tính năng tạo video chưa được bật",
+	} {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 func diagText(diag *SendDiagnostics) string {

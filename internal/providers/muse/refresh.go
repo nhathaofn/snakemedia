@@ -40,11 +40,12 @@ type accountLease struct {
 	recycle  func() error // test seam for RecycleHeadless failure
 }
 
-func acquireAccountLease(accts *accounts.Service, id string) *accountLease {
-	if accts == nil || id == "" {
-		return &accountLease{}
+func acquireAccountLease(ctx context.Context, accts *accounts.Service, id string) (*accountLease, error) {
+	release, err := accts.AcquireWork(ctx, id)
+	if err != nil {
+		return nil, err
 	}
-	return &accountLease{accounts: accts, id: id, release: accts.Acquire(id)}
+	return &accountLease{accounts: accts, id: id, release: release}, nil
 }
 
 func (l *accountLease) Release() {
@@ -57,7 +58,7 @@ func (l *accountLease) Release() {
 // RecycleHeadless releases this goroutine's lease briefly so CloseHeadlessIfIdle
 // can shut down an idle headless Chrome (and still refuses safely if another
 // thread holds a lease on the same account), then re-acquires immediately.
-func (l *accountLease) RecycleHeadless() error {
+func (l *accountLease) RecycleHeadless(ctx context.Context) error {
 	if l != nil && l.recycle != nil {
 		return l.recycle()
 	}
@@ -66,8 +67,9 @@ func (l *accountLease) RecycleHeadless() error {
 	}
 	l.Release()
 	err := l.accounts.CloseHeadlessIfIdle(l.id)
-	l.release = l.accounts.Acquire(l.id)
-	return err
+	release, acquireErr := l.accounts.AcquireWork(ctx, l.id)
+	l.release = release
+	return errors.Join(err, acquireErr)
 }
 
 func (p *Provider) sessionVerified(accountID string, port int) bool {
@@ -160,6 +162,18 @@ func (p *Provider) clearAccountBackoff(accountID string) {
 // Sibling threads hitting the same failure concurrently share one refresh under
 // loginSlot and adopt the refreshed outcome.
 func (p *Provider) refreshAccountForRun(ctx context.Context, accountID string, jobKind MuseJobKind, currentPage *Page, lease *accountLease, reason string) (accounts.Record, bool, error) {
+	return p.refreshAccount(ctx, accountID, jobKind, currentPage, lease, reason, false)
+}
+
+// refreshAccountForResume refreshes accountID for an already-sent or tracked
+// job (SessionID != "" or Sending+PreSendTracked). Account quota/video limits
+// are still recorded for future new jobs, but never abort reading back the
+// existing chat; dead/banned accounts stay bound to the chat (never requeued).
+func (p *Provider) refreshAccountForResume(ctx context.Context, accountID string, jobKind MuseJobKind, currentPage *Page, lease *accountLease, reason string) (accounts.Record, bool, error) {
+	return p.refreshAccount(ctx, accountID, jobKind, currentPage, lease, reason, true)
+}
+
+func (p *Provider) refreshAccount(ctx context.Context, accountID string, jobKind MuseJobKind, currentPage *Page, lease *accountLease, reason string, forResume bool) (accounts.Record, bool, error) {
 	if accountID == "" || accountID == "api" || p.accounts == nil {
 		return accounts.Record{}, false, nil
 	}
@@ -180,10 +194,25 @@ func (p *Provider) refreshAccountForRun(ctx context.Context, accountID string, j
 			acc = latest
 		}
 		if out.err != nil {
+			if forResume {
+				var restricted *accountRestrictedError
+				if errors.As(out.err, &restricted) && restricted.dead {
+					return acc, false, &stayInChatError{err: out.err}
+				}
+				if errors.Is(out.err, errNotSignedIn) {
+					return acc, false, out.err
+				}
+				if acc.Status == accounts.StatusSignedIn {
+					if err := p.rebindRefreshedPage(ctx, acc, currentPage); err != nil {
+						return acc, false, &notSentError{err: err}
+					}
+					return acc, true, nil
+				}
+			}
 			return acc, false, out.err
 		}
 		cfg := p.cfg.Get().Muse
-		if usableForJob(museView(acc), jobKind, cfg, p.now()) {
+		if (forResume && acc.Status == accounts.StatusSignedIn) || usableForJob(museView(acc), jobKind, cfg, p.now()) {
 			if err := p.rebindRefreshedPage(ctx, acc, currentPage); err != nil {
 				return acc, false, &notSentError{err: err}
 			}
@@ -260,7 +289,7 @@ func (p *Provider) refreshAccountForRun(ctx context.Context, accountID string, j
 			}
 			page = nil
 			p.dropBrowserState(accountID)
-			if rErr := lease.RecycleHeadless(); rErr == nil {
+			if rErr := lease.RecycleHeadless(ctx); rErr == nil {
 				if freshPage, openErr := p.openRefreshedPage(ctx, acc); openErr == nil {
 					page = freshPage
 					if currentPage != nil {
@@ -297,6 +326,9 @@ func (p *Provider) refreshAccountForRun(ctx context.Context, accountID string, j
 				acc = fresh
 			}
 			p.recordRefreshOutcome(accountID, epoch, acc, loginErr)
+			if forResume {
+				return acc, false, &stayInChatError{err: loginErr}
+			}
 			return acc, false, loginErr
 		case errors.Is(loginErr, errNotSignedIn):
 			p.markRecycleBrowser(accountID)
@@ -358,6 +390,9 @@ func (p *Provider) refreshAccountForRun(ctx context.Context, accountID string, j
 				acc = fresh
 			}
 			p.recordRefreshOutcome(accountID, epoch, acc, errDead)
+			if forResume {
+				return acc, false, &stayInChatError{err: errDead}
+			}
 			return acc, false, errDead
 		case restrictDailyVideo24h:
 			p.pauseDailyVideoLimit(accountID, detail)
@@ -367,14 +402,16 @@ func (p *Provider) refreshAccountForRun(ctx context.Context, accountID string, j
 				acc = fresh
 			}
 			p.recordRefreshOutcome(accountID, epoch, acc, errLimit)
-			return acc, false, errLimit
+			if !forResume {
+				return acc, false, errLimit
+			}
 		case restrictVideoDisabled:
 			p.disableVideoForAccount(accountID, detail)
 			fresh, _ := p.accounts.Record(accountID)
 			if fresh.ID != "" {
 				acc = fresh
 			}
-			if jobKind == MuseJobVideo {
+			if jobKind == MuseJobVideo && !forResume {
 				errVid := &accountRestrictedError{dead: false, reason: detail}
 				p.recordRefreshOutcome(accountID, epoch, acc, errVid)
 				return acc, false, errVid
@@ -414,11 +451,17 @@ func (p *Provider) refreshAccountForRun(ctx context.Context, accountID string, j
 	if !pausedUntil(view, cfg, p.now()).IsZero() {
 		errOut := p.unusableErrorForAccount(acc, jobKind, cfg)
 		p.recordRefreshOutcome(accountID, epoch, acc, errOut)
+		if forResume {
+			return acc, true, nil
+		}
 		return acc, false, errOut
 	}
 	if acc.SkipVideoCheck && jobKind == MuseJobVideo {
 		errVid := &accountRestrictedError{dead: false, reason: "tài khoản chỉ tạo ảnh"}
 		p.recordRefreshOutcome(accountID, epoch, acc, nil)
+		if forResume {
+			return acc, true, nil
+		}
 		return acc, false, errVid
 	}
 
@@ -597,6 +640,10 @@ func (p *Provider) scheduleStateAccountRefresh(rec accounts.Record, reason strin
 		p.mu.Unlock()
 		return
 	}
+	if p.acct.stateRefreshSlots == nil {
+		p.acct.stateRefreshSlots = make(chan struct{}, maxConcurrentStateRefreshes)
+	}
+	slots := p.acct.stateRefreshSlots
 	p.acct.stateRefreshSeen[rec.ID] = fp
 	p.acct.stateRefreshBusy[rec.ID] = true
 	p.wg.Add(1)
@@ -612,6 +659,17 @@ func (p *Provider) scheduleStateAccountRefresh(rec accounts.Record, reason strin
 			p.closeIdleBrowserIfDone(rec.ID)
 			p.trigger()
 		}()
+		select {
+		case slots <- struct{}{}:
+			defer func() { <-slots }()
+		case <-ctx.Done():
+			p.mu.Lock()
+			if p.acct.stateRefreshSeen != nil && p.acct.stateRefreshSeen[rec.ID] == fp {
+				delete(p.acct.stateRefreshSeen, rec.ID)
+			}
+			p.mu.Unlock()
+			return
+		}
 		if p.accounts.InUse(rec.ID) {
 			p.mu.Lock()
 			if p.acct.stateRefreshSeen != nil && p.acct.stateRefreshSeen[rec.ID] == fp {
@@ -620,8 +678,6 @@ func (p *Provider) scheduleStateAccountRefresh(rec accounts.Record, reason strin
 			p.mu.Unlock()
 			return
 		}
-		lease := acquireAccountLease(p.accounts, rec.ID)
-		defer lease.Release()
 		timeout := 45 * time.Second
 		if p.cfg != nil {
 			if ready := time.Duration(p.cfg.Get().Accounts.PageReadySeconds) * time.Second; ready > 0 {
@@ -630,6 +686,11 @@ func (p *Provider) scheduleStateAccountRefresh(rec accounts.Record, reason strin
 		}
 		refCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
+		lease, err := acquireAccountLease(refCtx, p.accounts, rec.ID)
+		if err != nil {
+			return
+		}
+		defer lease.Release()
 		var page Page
 		defer func() { closePage(page) }()
 		_, recovered, refErr := p.refreshAccountForRun(refCtx, rec.ID, "", &page, lease, reason)

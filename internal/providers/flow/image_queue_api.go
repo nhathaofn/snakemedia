@@ -274,6 +274,18 @@ func (s *Provider) CancelImageTask(id string) models.Response[ImageTask] {
 	if err != nil {
 		return queueFail[ImageTask](err, models.CodeNotFound)
 	}
+	// Close TOCTOU window: if pump() claimed the task between our first check
+	// and journal.Update (so Status was already Running), cancel it now.
+	if updated.Status == ImageTaskRunning {
+		q.mu.Lock()
+		cancel, running = q.running[id]
+		q.mu.Unlock()
+		if running {
+			cancel()
+		}
+		t, _ := q.journal.Get(id)
+		return models.SuccessResponse(t)
+	}
 	q.publish(updated)
 	return models.SuccessResponse(updated)
 }
@@ -388,17 +400,25 @@ func (s *Provider) AddImageTaskReferences(ids []string, refs []ImageTaskReferenc
 	if err != nil {
 		return queueFail[int](err, models.CodeInvalidArgument)
 	}
-	n, _ := q.updateSelected(ids, func(t *ImageTask) bool {
+	n, err := q.updateSelected(ids, func(t *ImageTask) bool {
 		if t.Status == ImageTaskRunning || t.Status == ImageTaskSucceeded || t.RequestID != "" {
 			return false
 		}
+		refs := slices.Clone(t.References)
 		for _, ref := range checked {
-			if !slices.ContainsFunc(t.References, func(r ImageTaskReference) bool { return r.LocalURL == ref.LocalURL }) {
-				t.References = append(t.References, ref)
+			if !slices.ContainsFunc(refs, func(r ImageTaskReference) bool { return r.LocalURL == ref.LocalURL }) {
+				refs = append(refs, ref)
 			}
 		}
+		if len(refs) == len(t.References) {
+			return false
+		}
+		t.References = refs
 		return true
 	})
+	if err != nil {
+		return queueFail[int](err, models.CodeInternal)
+	}
 	return models.SuccessResponse(n)
 }
 

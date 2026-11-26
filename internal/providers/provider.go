@@ -124,7 +124,7 @@ func (s *Set) Start(ctx context.Context, emit func(events.Event, any)) {
 // the account browsers it may be waiting on close right after.
 const closeWait = 10 * time.Second
 
-// Close closes every provider with background work, in plugin order, for at
+// Close starts all provider shutdowns and waits for at
 // most closeWait in all.
 func (s *Set) Close() {
 	if s.stop != nil {
@@ -134,22 +134,31 @@ func (s *Set) Close() {
 	if wait <= 0 {
 		wait = closeWait
 	}
-	deadline := time.After(wait)
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
+	finished := make(chan string, len(s.built))
+	pending := make(map[string]bool)
 	for _, p := range s.built {
 		l, ok := p.(Lifecycle)
 		if !ok {
 			continue
 		}
-		done := make(chan struct{})
+		id := p.ID()
+		pending[id] = true
 		go func() {
-			defer close(done)
+			defer func() { finished <- id }()
 			defer logger.Recover("đóng " + p.Name())
 			l.Close()
 		}()
+	}
+	for len(pending) > 0 {
 		select {
-		case <-done:
-		case <-deadline:
-			logger.Get().Warn("provider did not close in time, leaving it to end with the app", "provider", p.ID(), "wait", wait)
+		case id := <-finished:
+			delete(pending, id)
+		case <-deadline.C:
+			for id := range pending {
+				logger.Get().Warn("provider did not close in time", "provider", id, "wait", wait)
+			}
 			return
 		}
 	}

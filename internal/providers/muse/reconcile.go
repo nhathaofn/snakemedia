@@ -27,7 +27,14 @@ const (
 
 // reconcileInterruptedSend resolves a job whose app process stopped while
 // Sending was true using the PreSendSessions snapshot saved before sending.
+// Holds sendSlot so no sibling queued job on the same account can create a new
+// chat concurrently and risk being adopted during reconciliation.
 func (p *Provider) reconcileInterruptedSend(ctx context.Context, job MuseJob, acc accounts.Record, lease *accountLease, page Page) (MuseJob, Page, error) {
+	release, err := p.sendSlot(ctx, acc.ID)
+	if err != nil {
+		return job, page, err
+	}
+	defer release()
 	p.updateJob(job.ID, func(j *MuseJob) {
 		if j.Status == MuseJobProcessing {
 			j.Step = "Kiểm tra lại lệnh gửi trước khi tắt app"
@@ -90,7 +97,7 @@ func (p *Provider) reconcileAfterSend(ctx context.Context, job MuseJob, acc acco
 	if resetTab {
 		if err := p.resetTabForReconcile(recCtx, acc, &page); err != nil {
 			if errors.Is(err, errNotSignedIn) {
-				if _, ok, refErr := p.refreshAccountForRun(recCtx, acc.ID, job.Kind, &page, lease, "reconcile_login"); !ok {
+				if _, ok, refErr := p.refreshAccountForResume(recCtx, acc.ID, job.Kind, &page, lease, "reconcile_login"); !ok {
 					if refErr != nil {
 						return "", page, reconcileUnknown, refErr
 					}
@@ -106,6 +113,14 @@ func (p *Provider) reconcileAfterSend(ctx context.Context, job MuseJob, acc acco
 	for _, id := range beforeIDs {
 		if id != "" {
 			beforeSet[id] = true
+		}
+	}
+	// Never adopt a session ID already owned by another job on this account.
+	if p.jobs != nil {
+		for _, other := range p.jobs.list() {
+			if other.ID != job.ID && other.AccountID == acc.ID && other.SessionID != "" {
+				beforeSet[other.SessionID] = true
+			}
 		}
 	}
 
@@ -126,7 +141,7 @@ func (p *Provider) reconcileAfterSend(ctx context.Context, job MuseJob, acc acco
 			lastErr = err
 			if !reopened && recCtx.Err() == nil {
 				reopened = true
-				_, okRef, refErr := p.refreshAccountForRun(recCtx, acc.ID, job.Kind, &page, lease, "reconcile_sessions")
+				_, okRef, refErr := p.refreshAccountForResume(recCtx, acc.ID, job.Kind, &page, lease, "reconcile_sessions")
 				if okRef {
 					continue
 				}

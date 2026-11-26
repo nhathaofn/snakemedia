@@ -59,6 +59,7 @@ type imageGenerationTemplate struct {
 	// ProjectMode tells which studio (Single or All) sent the job; journals
 	// written before it existed came from Single.
 	ProjectMode ImageProjectMode `json:"projectMode,omitempty"`
+	QueueOwned  bool             `json:"queueOwned,omitempty"`
 }
 
 func requestFingerprint(value any) (string, error) {
@@ -329,22 +330,37 @@ func (s *Provider) pendingGenerationJobs(kind string) ([]generationJob, error) {
 
 // expireGenerationJob deletes a finished journal or closes an abandoned one.
 // A job being followed right now is left for the next listing.
-func (s *Provider) expireGenerationJob(job generationJob, terminal bool) {
+func (s *Provider) expireGenerationJob(job generationJob, _ bool) {
 	unlock, ok := s.tryJobLock(job.ID)
 	if !ok {
 		return
 	}
 	defer unlock()
+	// Re-verify mtime and state under the job lock so a concurrent resume or
+	// completion cannot be clobbered by a stale listing snapshot.
+	path, pathErr := s.statePath("generation-jobs", job.ID)
+	if pathErr != nil {
+		return
+	}
+	info, statErr := os.Stat(path)
+	if statErr != nil || time.Since(info.ModTime()) <= s.jobRetention() {
+		return
+	}
+	current, loadErr := s.loadGenerationJob(job.ID)
+	if loadErr != nil {
+		return
+	}
+	terminal := current.Phase == generationComplete || current.Phase == generationRejected
 	var err error
 	if terminal {
-		err = s.removeState("generation-jobs", job.ID)
-		s.journals.forget("generation-jobs", job.ID)
+		err = s.removeState("generation-jobs", current.ID)
+		s.journals.forget("generation-jobs", current.ID)
 	} else {
-		job.Phase, job.Message = generationRejected, "Flow không xác nhận job trong thời gian lưu giữ; đã ngừng theo dõi."
-		err = s.saveGenerationJob(job)
+		current.Phase, current.Message = generationRejected, "Flow không xác nhận job trong thời gian lưu giữ; đã ngừng theo dõi."
+		err = s.saveGenerationJob(current)
 	}
 	if err != nil {
-		logger.Get().Warn("cannot expire generation job", "job", job.ID, "error", err)
+		logger.Get().Warn("cannot expire generation job", "job", current.ID, "error", err)
 	}
 }
 

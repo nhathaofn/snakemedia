@@ -185,7 +185,7 @@ func resetForQueue(j *MuseJob) {
 // (the send's answer was lost) the job's last send. Journals written before
 // SendUnknown existed are recognised by their error.
 func (j MuseJob) mayBePaid() bool {
-	return j.SessionID != "" || j.SendUnknown || j.Error == errSendUnknown.Error()
+	return j.SessionID != "" || j.Sending || j.SendUnknown || j.Error == errSendUnknown.Error()
 }
 
 // screenKind is the screen a job belongs to: a storyboard's image job is
@@ -221,9 +221,12 @@ func newJobStore(path string, maxJobs func() int) *jobStore {
 		Limit:     maxJobs,
 		Normalize: normalizeJob,
 		Transient: onlyStepChanged,
-		KeepID: func(j MuseJob) bool {
+		RetireKey: func(j MuseJob) string {
 			id, err := uuid.Parse(j.ID)
-			return err == nil && id.Version() == 5 && (j.mayBePaid() || j.Sending || j.Status == MuseJobSucceeded)
+			if err == nil && id.Version() == 5 && (j.mayBePaid() || j.Sending || j.Status == MuseJobSucceeded) {
+				return j.ID
+			}
+			return ""
 		},
 	})}
 }

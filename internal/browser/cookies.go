@@ -20,6 +20,7 @@ type Cookie struct {
 	Path     string  `json:"path"`
 	Secure   bool    `json:"secure"`
 	HTTPOnly bool    `json:"httpOnly"`
+	SameSite string  `json:"sameSite,omitempty"`
 	Expires  float64 `json:"expires,omitempty"`
 }
 
@@ -70,6 +71,7 @@ func parseJSONCookies(text, defaultDomain string) ([]Cookie, error) {
 		Path           string   `json:"path"`
 		Secure         *bool    `json:"secure"`
 		HTTPOnly       bool     `json:"httpOnly"`
+		SameSite       string   `json:"sameSite"`
 		ExpirationDate *float64 `json:"expirationDate"`
 		Expires        *float64 `json:"expires"`
 	}
@@ -101,7 +103,15 @@ func parseJSONCookies(text, defaultDomain string) ([]Cookie, error) {
 		if c.Value == nil {
 			continue
 		}
-		cookie := Cookie{Name: c.Name, Value: *c.Value, Domain: c.Domain, Path: c.Path, Secure: c.Secure == nil || *c.Secure, HTTPOnly: c.HTTPOnly}
+		cookie := Cookie{
+			Name:     c.Name,
+			Value:    *c.Value,
+			Domain:   c.Domain,
+			Path:     c.Path,
+			Secure:   c.Secure == nil || *c.Secure,
+			HTTPOnly: c.HTTPOnly,
+			SameSite: normalizeSameSite(c.SameSite),
+		}
 		if cookie.Domain == "" {
 			cookie.Domain = defaultDomain
 		}
@@ -248,6 +258,12 @@ func InjectCookies(ctx context.Context, port int, policy config.AccountConfig, c
 					cookie["secure"] = true
 				}
 			}
+			if ss := normalizeSameSite(c.SameSite); ss != "" {
+				cookie["sameSite"] = ss
+				if ss == "None" {
+					cookie["secure"] = true
+				}
+			}
 			if c.Expires > 0 {
 				cookie["expires"] = c.Expires
 			}
@@ -256,6 +272,19 @@ func InjectCookies(ctx context.Context, port int, policy config.AccountConfig, c
 		return conn.Call(ctx, "Network.setCookies", map[string]any{"cookies": params}, nil)
 	}
 	return errors.New("Chrome của tài khoản chưa có tab để nạp cookie.")
+}
+
+func normalizeSameSite(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "strict":
+		return "Strict"
+	case "lax":
+		return "Lax"
+	case "none", "no_restriction":
+		return "None"
+	default:
+		return ""
+	}
 }
 
 // ReadCookies reads cookies matching accept from a running browser via CDP.

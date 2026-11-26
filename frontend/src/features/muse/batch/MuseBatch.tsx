@@ -9,7 +9,7 @@ import {
   RunDock,
 } from '../../../components/batch';
 import { Button, Icon, IconAction, confirmAction } from '../../../components/ui';
-import { api, unwrap } from '../../../services';
+import { api, unwrap, unwrapList } from '../../../services';
 import { useAccountsStore, useAppStore } from '../../../stores';
 import {
   AccountProvider,
@@ -95,7 +95,7 @@ export function MuseBatchPanel({ kind }: { kind: MuseJobKind }) {
     if (previewBusy || prompts.length === 0) return;
     setPreviewBusy(true);
     try {
-      const items = unwrap(
+      const items = unwrapList(
         await api.previewMuseMessages(
           MuseJobRequest.createFrom({
             kind,
@@ -367,6 +367,16 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
     [counts],
   );
 
+  const openSaveToVault = useCallback((targetJob: MuseJob) => {
+    setVaultSources(
+      targetJob.files.map((url) => ({
+        localUrl: url,
+        suggestedPrompt: targetJob.prompt,
+        suggestedName: targetJob.label,
+      })),
+    );
+  }, []);
+
   const toggle = useMemo(
     () => (id: string) =>
       setSelectedIds((prev) => {
@@ -618,18 +628,7 @@ export function MuseQueueWorkspace({ kind }: { kind: MuseJobKind }) {
             actions={jobActions}
             onToggle={toggle}
             onPreview={openPreview}
-            onSaveToVault={
-              kind === MuseJobKind.Image
-                ? (targetJob) =>
-                    setVaultSources(
-                      targetJob.files.map((url) => ({
-                        localUrl: url,
-                        suggestedPrompt: targetJob.prompt,
-                        suggestedName: targetJob.label,
-                      })),
-                    )
-                : undefined
-            }
+            onSaveToVault={kind === MuseJobKind.Image ? openSaveToVault : undefined}
           />
         )}
       />
